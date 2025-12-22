@@ -1,0 +1,70 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Backups
+backups/
+
+# KRITISCH: ALLE Datenbanken (NICHT in Git!)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+data/db/
+data/sph.db
+
+# KRITISCH: ALLE ChromaDB / Vector Store Daten (NICHT in Git!)
+data/db/chroma/
+.chroma/
+chroma.sqlite3
+
+# KRITISCH: ALLE RAG Content (NICHT in Git!)
+data/rag/
+!data/rag/.gitkeep
+
+# KRITISCH: Alle Dokumente (NICHT in Git!)
+*.pdf
+*.PDF
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.png
+*.PNG
+*.jpg
+*.jpeg
+*.gif
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.production.template
+
+# Streamlit
+.streamlit/
+!.streamlit/config.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temp
+tmp/
+temp/
