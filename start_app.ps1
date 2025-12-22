@@ -1,0 +1,40 @@
+﻿# Start-Skript für SlitProjektHub
+# Startet Backend (FastAPI) und Frontend (Streamlit) gleichzeitig
+
+Write-Host "=== SlitProjektHub wird gestartet ===" -ForegroundColor Cyan
+Write-Host ""
+
+# Python-Pfad aus der virtuellen Umgebung
+$venvPath = "C:/Users/santinel/Documents/Apps/SlitProjektHub/.venv/Scripts"
+$pythonExe = "$venvPath/python.exe"
+$streamlitExe = "$venvPath/streamlit.exe"
+
+# Überprüfe, ob die virtuelle Umgebung existiert
+if (-not (Test-Path $pythonExe)) {
+    Write-Host "FEHLER: Virtuelle Umgebung nicht gefunden!" -ForegroundColor Red
+    Write-Host "Bitte führen Sie zuerst 'python -m venv .venv' aus." -ForegroundColor Yellow
+    exit 1
+}
+
+# Backend starten (FastAPI)
+Write-Host "Backend wird gestartet..." -ForegroundColor Green
+Start-Process pwsh -ArgumentList "-NoExit", "-Command", "cd '$PSScriptRoot\backend'; & '$pythonExe' main.py"
+
+# Kurze Pause, damit Backend Zeit hat zu starten
+Start-Sleep -Seconds 2
+
+# Frontend starten (Streamlit)
+Write-Host "Frontend wird gestartet..." -ForegroundColor Green
+Start-Process pwsh -ArgumentList "-NoExit", "-Command", "cd '$PSScriptRoot'; & '$streamlitExe' run app"
+
+Write-Host ""
+Write-Host "=== Anwendungen wurden gestartet ===" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Backend (FastAPI):" -ForegroundColor Yellow
+Write-Host "  - API: http://localhost:8000" -ForegroundColor White
+Write-Host "  - Docs: http://localhost:8000/docs" -ForegroundColor White
+Write-Host ""
+Write-Host "Frontend (Streamlit):" -ForegroundColor Yellow
+Write-Host "  - App: http://localhost:8501" -ForegroundColor White
+Write-Host ""
+Write-Host "Zum Beenden: Schließen Sie die beiden PowerShell-Fenster" -ForegroundColor Gray

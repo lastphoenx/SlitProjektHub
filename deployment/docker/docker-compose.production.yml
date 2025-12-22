@@ -1,0 +1,89 @@
+﻿version: '3.8'
+
+services:
+  # Main Application
+  projekthub:
+    build: .
+    container_name: slit-projekthub
+    ports:
+      - "127.0.0.1:8501:8501"  # Nur localhost (Reverse Proxy greift zu)
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    environment:
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_MAXUPLOADSIZE=200
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    networks:
+      - projekthub-net
+    depends_on:
+      - authelia
+    labels:
+      # Traefik Labels für automatisches Routing
+      - "traefik.enable=true"
+      - "traefik.http.routers.projekthub.rule=Host(`projekthub.mainedomain.com`)"
+      - "traefik.http.routers.projekthub.entrypoints=websecure"
+      - "traefik.http.routers.projekthub.tls.certresolver=letsencrypt"
+      - "traefik.http.services.projekthub.loadbalancer.server.port=8501"
+      # Authelia Middleware für 2FA
+      - "traefik.http.routers.projekthub.middlewares=authelia@docker"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Authelia (2FA & Authentication)
+  authelia:
+    image: authelia/authelia:latest
+    container_name: authelia
+    volumes:
+      - ./authelia:/config
+    environment:
+      - TZ=Europe/Zurich
+    networks:
+      - projekthub-net
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.authelia.rule=Host(`auth.mainedomain.com`)"
+      - "traefik.http.routers.authelia.entrypoints=websecure"
+      - "traefik.http.routers.authelia.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/verify?rd=https://auth.mainedomain.com"
+      - "traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email"
+
+  # Optional: Traefik Reverse Proxy (if not already running)
+  # Uncomment if you don't have a reverse proxy yet
+  # traefik:
+  #   image: traefik:v2.10
+  #   container_name: traefik
+  #   command:
+  #     - "--api.dashboard=true"
+  #     - "--providers.docker=true"
+  #     - "--providers.docker.exposedbydefault=false"
+  #     - "--entrypoints.web.address=:80"
+  #     - "--entrypoints.websecure.address=:443"
+  #     - "--certificatesresolvers.letsencrypt.acme.email=your-email@mainedomain.com"
+  #     - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+  #     - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #     - ./traefik/letsencrypt:/letsencrypt
+  #   networks:
+  #     - projekthub-net
+  #   restart: unless-stopped
+
+networks:
+  projekthub-net:
+    driver: bridge
+    # If using external Traefik/Proxy, use external network:
+    # external: true

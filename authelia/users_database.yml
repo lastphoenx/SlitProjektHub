@@ -1,0 +1,29 @@
+﻿---
+# Authelia Users Database
+# To generate password hash: docker run authelia/authelia:latest authelia crypto hash generate argon2 --password 'your-password'
+
+users:
+  # User 1: Admin
+  admin:
+    displayname: "Administrator"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$BpLnH2c99yU1NRBWJpzKGA$Xxssfg2+gzwFPEqsNFTBVRPUOW0pCBILBQVMZ9KG9Ys"  # Password: admin123 (CHANGE THIS!)
+    email: admin@mainedomain.com
+    groups:
+      - admins
+      - dev
+
+  # User 2: Standard User
+  user1:
+    displayname: "User One"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$BpLnH2c99yU1NRBWJpzKGA$Xxssfg2+gzwFPEqsNFTBVRPUOW0pCBILBQVMZ9KG9Ys"  # Password: user123 (CHANGE THIS!)
+    email: user1@mainedomain.com
+    groups:
+      - users
+
+  # User 3: Another User
+  user2:
+    displayname: "User Two"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$BpLnH2c99yU1NRBWJpzKGA$Xxssfg2+gzwFPEqsNFTBVRPUOW0pCBILBQVMZ9KG9Ys"  # Password: user123 (CHANGE THIS!)
+    email: user2@mainedomain.com
+    groups:
+      - users
