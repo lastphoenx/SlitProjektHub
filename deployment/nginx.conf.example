@@ -1,0 +1,136 @@
+# ============================================
+# Nginx Configuration für ProjektHub
+# Mit Authelia (2FA) und Let's Encrypt
+# Place in: /etc/nginx/sites-available/projekthub
+# ============================================
+
+upstream streamlit {
+    server 127.0.0.1:8501;
+    keepalive 32;
+}
+
+upstream authelia {
+    server 127.0.0.1:9091;
+}
+
+# Forward auth configuration
+set $authelia_http "http://127.0.0.1:9091";
+set $authelia_version "v1";
+
+# ============================================
+# HTTPS Server (Main)
+# ============================================
+server {
+    listen 443 ssl http2;
+    server_name projekthub.mainedomain.com;
+
+    # SSL Certificates (Let's Encrypt)
+    ssl_certificate /etc/letsencrypt/live/mainedomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mainedomain.com/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/live/mainedomain.com/chain.pem;
+
+    # SSL Configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:50m;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+
+    # Security Headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # Authelia location (internal auth check)
+    location /authelia/api/verify {
+        internal;
+        proxy_pass http://authelia/api/verify?rd=https://auth.mainedomain.com;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        
+        # Headers from original request
+        proxy_set_header X-Original-URL $scheme://$http_host$request_uri;
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-Remote-Addr $remote_addr;
+        proxy_set_header X-Original-Remote-User $remote_user;
+        proxy_set_header X-Original-Remote-Groups $remote_groups;
+        proxy_set_header X-Original-Remote-Name $remote_name;
+        proxy_set_header X-Original-Remote-Email $remote_email;
+    }
+
+    # Main Application
+    location / {
+        auth_request /authelia/api/verify;
+        auth_request_set $user $upstream_http_remote_user;
+        auth_request_set $groups $upstream_http_remote_groups;
+        auth_request_set $name $upstream_http_remote_name;
+        auth_request_set $email $upstream_http_remote_email;
+
+        # Pass authenticated user info to Streamlit
+        proxy_pass http://streamlit;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Remote-User $user;
+        proxy_set_header X-Remote-Groups $groups;
+        proxy_set_header X-Remote-Name $name;
+        proxy_set_header X-Remote-Email $email;
+
+        # Streamlit WebSocket
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Timeouts
+        proxy_connect_timeout 60;
+        proxy_send_timeout 60;
+        proxy_read_timeout 60;
+    }
+
+    # Backend API
+    location /api/ {
+        auth_request /authelia/api/verify;
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# ============================================
+# Authelia Server
+# ============================================
+server {
+    listen 443 ssl http2;
+    server_name auth.mainedomain.com;
+
+    ssl_certificate /etc/letsencrypt/live/mainedomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mainedomain.com/privkey.pem;
+
+    # Same SSL settings as above
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://authelia/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# ============================================
+# HTTP Redirect (force HTTPS)
+# ============================================
+server {
+    listen 80;
+    server_name projekthub.mainedomain.com auth.mainedomain.com;
+    return 301 https://$server_name$request_uri;
+}

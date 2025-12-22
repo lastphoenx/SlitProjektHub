@@ -1,0 +1,17 @@
+streamlit>=1.38
+streamlit-aggrid>=0.3.4
+sqlmodel>=0.0.22
+pydantic>=2.8
+SQLAlchemy>=2.0
+python-dotenv>=1.0
+pyyaml>=6.0
+openai>=1.51
+anthropic>=0.39
+mistralai>=1.2
+streamlit-elements==0.1.*
+chromadb>=0.3.21
+PyPDF2>=3.0
+pdfplumber>=0.10
+ocrmypdf>=14.0
+pdf2image>=1.16
+pillow>=10.0

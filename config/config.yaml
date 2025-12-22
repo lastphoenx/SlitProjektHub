@@ -1,0 +1,21 @@
+app_name: "SlitProjektHub"
+paths:
+  base_dir: "."
+  data_dir: "data"
+  db_dir: "data/db"
+  rag_dir: "data/rag"
+  backups_dir: "backups"
+database:
+  url: "sqlite:///data/db/slitproj.db"
+ui:
+  title: "SlitProjektHub"
+  sidebar_title: "Navigation"
+
+llm_defaults:
+  provider: "anthropic"
+  model: "sonnet"
+  temperature: 0.7
+  rag_top_k: 5
+  rag_chunk_size: 1000
+  rag_similarity_threshold: 0.5
+  rag_enabled: true
