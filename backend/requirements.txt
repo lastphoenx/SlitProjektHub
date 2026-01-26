@@ -1,8 +1,8 @@
-﻿# Backend-spezifische Dependencies
+# Backend-spezifische Dependencies
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic>=2.10.3
-python-multipart==0.0.18
+python-multipart==0.0.22
 
 # Bereits in main requirements.txt vorhanden:
 # sqlmodel
