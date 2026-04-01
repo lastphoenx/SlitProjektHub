@@ -1333,7 +1333,13 @@ elif current_tab == 2:
                                     role_key=role_obj.key,
                                     responsibilities=role_obj.responsibilities,
                                     min_per_resp=min_tasks,
-                                    max_per_resp=max_tasks
+                                    max_per_resp=max_tasks,
+                                    model_name=st.session_state.get("global_llm_model"),
+                                    temperature=st.session_state.get("global_llm_temperature", 0.7),
+                                    rag_enabled=st.session_state.get("global_rag_enabled", True),
+                                    rag_top_k=st.session_state.get("global_llm_rag_top_k", 5),
+                                    rag_similarity_threshold=st.session_state.get("global_rag_similarity_threshold", 0.5),
+                                    rag_chunk_size=st.session_state.get("global_rag_chunk_size", 1000)
                                 )
                                 
                                 if tasks:

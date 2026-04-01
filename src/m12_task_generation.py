@@ -10,7 +10,13 @@ def generate_tasks_from_role(
     role_key: str,
     responsibilities: str,
     min_per_resp: int = 3,
-    max_per_resp: int = 7
+    max_per_resp: int = 7,
+    model_name: str | None = None,
+    temperature: float = 0.7,
+    rag_enabled: bool = False,
+    rag_top_k: int = 5,
+    rag_similarity_threshold: float = 0.5,
+    rag_chunk_size: int = 1000
 ) -> list[dict]:
     """Generate tasks from a role's responsibilities.
     
@@ -21,6 +27,12 @@ def generate_tasks_from_role(
         responsibilities: Bulletpoint list of responsibilities
         min_per_resp: Minimum tasks per responsibility
         max_per_resp: Maximum tasks per responsibility
+        model_name: Optional model from global settings
+        temperature: Temperature from global settings
+        rag_enabled: Whether RAG is enabled
+        rag_top_k: Number of RAG contexts
+        rag_similarity_threshold: RAG similarity threshold
+        rag_chunk_size: RAG chunk size
         
     Returns:
         List of task dicts with:
@@ -45,6 +57,26 @@ def generate_tasks_from_role(
     # Generate batch ID for this generation run
     batch_id = str(uuid.uuid4())
     
+    # Optional RAG context
+    rag_context = ""
+    if rag_enabled:
+        try:
+            from .m09_rag import retrieve_relevant_chunks_hybrid, deduplicate_results, build_rag_context_from_search
+            query = f"Rolle: {role_title}\n" + "\n".join(resp_items)
+            rag_results = retrieve_relevant_chunks_hybrid(
+                query,
+                project_key=None,
+                limit=max(1, int(rag_top_k)),
+                threshold=max(0.0, min(1.0, float(rag_similarity_threshold)))
+            )
+            rag_results = deduplicate_results(rag_results)
+            rag_context = build_rag_context_from_search(rag_results)
+            max_rag_chars = max(600, int(rag_chunk_size) * max(1, int(rag_top_k)))
+            if len(rag_context) > max_rag_chars:
+                rag_context = rag_context[:max_rag_chars].rstrip() + "\n..."
+        except Exception:
+            rag_context = ""
+    
     # Build prompt
     prompt = f"""Du bist ein Experte für Aufgaben-Dekomposition im Unternehmenskontext.
 
@@ -53,6 +85,7 @@ ROLLE: {role_title}
 VERANTWORTLICHKEITEN:
 {chr(10).join(f'{i+1}. {r}' for i, r in enumerate(resp_items))}
 
+{f'RELEVANTER KONTEXT (RAG):{chr(10)}{rag_context}{chr(10)}' if rag_context else ''}
 AUFGABE:
 Generiere für JEDE der {len(resp_items)} Verantwortlichkeiten zwischen {min_per_resp} und {max_per_resp} konkrete, operationale Aufgaben.
 
@@ -60,9 +93,22 @@ ANFORDERUNGEN:
 - Aufgaben müssen spezifisch und umsetzbar sein
 - Keine Duplikate
 - Klare Abgrenzung zwischen Aufgaben
-- Titel: Max 80 Zeichen, präzise und aussagekräftig
+- Für jede Verantwortlichkeit MUSS jede Aufgabe einen anderen Fokus haben (Planung, Umsetzung, Koordination, Qualität, Reporting)
+- Titel darf NICHT identisch oder fast identisch zur Verantwortlichkeit sein
+- Titel beginnt mit einem starken Verb (z.B. Analysiere, Erstelle, Koordiniere, Prüfe, Dokumentiere)
+- Titel: 45-80 Zeichen, präzise und aussagekräftig
 - Kürzel: Max 14 Zeichen, eindeutig (z.B. "LIQ-PLAN", "ZAHLV-CAMT")
 - Beschreibung: 2-3 Sätze: Was ist die Aufgabe? Warum ist sie wichtig?
+
+BEISPIELE FÜR GUTE TITEL (nur Stil):
+- "Erstelle quartalsweise Risikoanalyse für Lieferantenabhängigkeiten"
+- "Koordiniere Security-Review mit Architektur- und DevOps-Team"
+- "Definiere KPI-Dashboard für Incident-Response-Reifegrad"
+
+QUALITÄTS-CHECK:
+- Verwerfe Aufgaben mit sehr ähnlichem Titel innerhalb derselben Verantwortlichkeit
+- Verwerfe generische Platzhalter wie "Aufgabe 1", "Umsetzung", "Management"
+- Stelle sicher, dass jede Aufgabe ein eigenes Ergebnis impliziert
 
 AUSGABE-FORMAT:
 Für jede Verantwortlichkeit:
@@ -103,8 +149,9 @@ Wichtig: Halte dich strikt an das Format mit VERANTWORTLICHKEIT:, AUFGABE:, TITE
         else:
             raise ValueError(f"Unknown provider: {provider}")
         
-        # Call LLM
-        model = _get_model_for_provider(provider)
+        # Call LLM with global settings + fallback mechanism
+        model = _get_model_for_provider(provider, model_name)
+        temp = max(0.0, min(2.0, float(temperature)))
         
         if provider == "openai":
             response = client.chat.completions.create(
@@ -113,20 +160,22 @@ Wichtig: Halte dich strikt an das Format mit VERANTWORTLICHKEIT:, AUFGABE:, TITE
                     {"role": "system", "content": "Du bist ein Experte für organisatorische Aufgabenstrukturierung."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
+                temperature=temp,
                 max_tokens=4000
             )
             raw_text = response.choices[0].message.content
         elif provider == "anthropic":
-            response = client.messages.create(
-                model=model,
+            # Use fallback mechanism from m08_llm
+            from .m08_llm import _anthropic_try_models
+            raw_text = _anthropic_try_models(
+                system="Du bist ein Experte für organisatorische Aufgabenstrukturierung.",
+                user=prompt,
                 max_tokens=4000,
-                temperature=0.7,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
+                temperature=temp,
+                model=model
             )
-            raw_text = response.content[0].text
+            if not raw_text:
+                raise Exception("Anthropic LLM call failed with all fallbacks")
         elif provider == "mistral":
             response = client.chat.complete(
                 model=model,
@@ -134,7 +183,7 @@ Wichtig: Halte dich strikt an das Format mit VERANTWORTLICHKEIT:, AUFGABE:, TITE
                     {"role": "system", "content": "Du bist ein Experte für organisatorische Aufgabenstrukturierung."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
+                temperature=temp,
                 max_tokens=4000
             )
             raw_text = response.choices[0].message.content
@@ -152,11 +201,20 @@ Wichtig: Halte dich strikt an das Format mit VERANTWORTLICHKEIT:, AUFGABE:, TITE
         return _create_fallback_tasks(resp_items, role_key, batch_id)
 
 
-def _get_model_for_provider(provider: str) -> str:
-    """Get model name for provider."""
+def _get_model_for_provider(provider: str, model_name: str | None = None) -> str:
+    """Get model name from global settings or fallback to default."""
+    if model_name:
+        try:
+            from .m08_llm import get_model_id
+            resolved = get_model_id(provider, model_name)
+            if resolved:
+                return resolved
+        except Exception:
+            pass
+    
     models = {
         "openai": "gpt-4o-mini",
-        "anthropic": "claude-3-5-sonnet-20241022",
+        "anthropic": "claude-sonnet-4-6",
         "mistral": "mistral-large-latest"
     }
     return models.get(provider, "gpt-4o-mini")

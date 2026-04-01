@@ -269,16 +269,35 @@ def render_global_llm_settings():
             key="sidebar_provider_select",
             help="Gilt für alle Seiten"
         )
-        
-        # Speichere nur bei echter Änderung
+
         provider_changed = st.session_state["global_llm_provider"] != provider
         if provider_changed:
             st.session_state["global_llm_provider"] = provider
-            st.session_state["_provider_test_cache"] = None
             st.session_state["_provider_test_result"] = None
             _save_settings_to_disk()
-        
-        # Status-Indikator für Provider mit echtem Verbindungstest (nur bei echtem Wechsel)
+
+        # Modell-Select VOR Status-Anzeige, damit model_changed bekannt ist
+        available_models = get_available_models(provider)
+        if available_models:
+            # Sicherstellen dass gespeichertes Modell für neuen Provider gültig ist
+            saved_model = st.session_state.get("global_llm_model", "")
+            model_index = available_models.index(saved_model) if saved_model in available_models else 0
+            model = st.selectbox(
+                "Modell",
+                options=available_models,
+                index=model_index,
+                key="sidebar_model_select",
+                help="Gilt für alle Seiten"
+            )
+            model_changed = st.session_state["global_llm_model"] != model
+            if model_changed:
+                st.session_state["global_llm_model"] = model
+                st.session_state["_provider_test_result"] = None  # Re-Test erzwingen
+                _save_settings_to_disk()
+        else:
+            model_changed = False
+
+        # Status-Indikator: Test nur bei Provider-Wechsel (nicht bei bloßem Modell-Wechsel)
         if provider_changed and have_key(provider):
             with st.spinner(f"🔗 {provider.upper()} wird geprüft..."):
                 connected, error_msg = test_connection(provider, timeout=10.0)
@@ -287,27 +306,18 @@ def render_global_llm_settings():
                 st.success(f"✓ {provider.upper()} verbunden", icon="✅")
             else:
                 st.error(f"✗ {provider.upper()} fehlgeschlagen: {error_msg[:80]}", icon="❌")
+        elif model_changed and have_key(provider):
+            # Modell gewechselt: Key ist bekannt-gültig, kein Volltest nötig
+            st.session_state["_provider_test_result"] = (True, "")
+            st.success(f"✓ {provider.upper()} · Modell gespeichert", icon="✅")
         elif have_key(provider):
             cached_result = st.session_state.get("_provider_test_result")
-            if cached_result and not cached_result[0]:
+            if cached_result is not None and not cached_result[0]:
                 st.error(f"✗ {provider.upper()} fehlgeschlagen: {cached_result[1][:80]}", icon="❌")
             else:
                 st.info(f"✓ {provider.upper()} konfiguriert", icon="ℹ️")
         else:
             st.error(f"✗ {provider.upper()} nicht konfiguriert", icon="❌")
-        
-        available_models = get_available_models(provider)
-        if available_models:
-            model = st.selectbox(
-                "Modell",
-                options=available_models,
-                index=available_models.index(st.session_state.get("global_llm_model")) if st.session_state.get("global_llm_model") in available_models else 0,
-                key="sidebar_model_select",
-                help="Gilt für alle Seiten"
-            )
-            if st.session_state["global_llm_model"] != model:
-                st.session_state["global_llm_model"] = model
-                _save_settings_to_disk()
         
         temperature = st.slider(
             "Temperatur",

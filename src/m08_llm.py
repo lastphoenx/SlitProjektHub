@@ -8,19 +8,32 @@ import re
 
 # ==================== MODEL CONFIGURATION ====================
 
-ANTHROPIC_MODEL_DEFAULT = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")
+ANTHROPIC_MODEL_DEFAULT = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 AVAILABLE_MODELS = {
     "anthropic": {
-        "haiku": "claude-3-5-haiku-20241022",
-        "sonnet": "claude-3-5-sonnet-20241022",
-        "opus": "claude-3-opus-20240229",
+        "opus-4.6":   "claude-opus-4-6",
+        "sonnet-4.6": "claude-sonnet-4-6",
+        "haiku-4.5":  "claude-haiku-4-5-20251001",
+        "sonnet":     "claude-sonnet-4-6",
+        "opus":       "claude-opus-4-6",
+        "haiku":      "claude-3-5-haiku-20241022",
+        "opus-3":     "claude-3-opus-20240229",
+        "sonnet-3.5": "claude-3-5-sonnet-20241022",
+        "haiku-3.5":  "claude-3-5-haiku-20241022",
     },
     "openai": {
-        "gpt-3.5-turbo": "gpt-3.5-turbo",
-        "gpt-4-turbo": "gpt-4-turbo",
-        "gpt-4o-mini": "gpt-4o-mini",
+        "gpt-5.4-thinking": "gpt-5.4-thinking",
+        "gpt-5.3-instant": "gpt-5.3-instant",
+        "gpt-5.2": "gpt-5.2",
+        "gpt-5.0": "gpt-5.0",
+        "o4-mini": "o4-mini",
+        "o3-mini": "o3-mini",
+        "o1": "o1",
+        "o1-mini": "o1-mini",
         "gpt-4o": "gpt-4o",
+        "gpt-4o-mini": "gpt-4o-mini",
+        "gpt-4-turbo": "gpt-4-turbo",
     },
     "mistral": {
         "small": "mistral-small-latest",
@@ -29,7 +42,7 @@ AVAILABLE_MODELS = {
 }
 
 DEFAULT_MODELS = {
-    "anthropic": "claude-3-5-haiku-20241022",
+    "anthropic": "claude-sonnet-4-6",
     "openai": "gpt-4o-mini",
     "mistral": "mistral-large-latest",
 }
@@ -50,16 +63,24 @@ def _resolve_anthropic_model(requested: str | None) -> str:
     """Legacy function - maps aliases to model IDs."""
     alias = (requested or "").strip().lower()
     mapping = {
-        "claude-3-5-sonnet-latest": "claude-3-5-sonnet-20241022",
-        "sonnet-latest":             "claude-3-5-sonnet-20241022",
-        "sonnet":                    "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-latest":   "claude-3-5-haiku-20241022",
-        "haiku-latest":              "claude-3-5-haiku-20241022",
-        "haiku":                     "claude-3-5-haiku-20241022",
-        "claude-3-opus-latest":      "claude-3-opus-20240229",
-        "opus-latest":               "claude-3-opus-20240229",
-        "opus":                      "claude-3-opus-20240229",
-        "":                          ANTHROPIC_MODEL_DEFAULT,
+        "sonnet-4.6":                 "claude-sonnet-4-6",
+        "claude-sonnet-4.6-latest":   "claude-sonnet-4-6",
+        "sonnet-latest":              "claude-sonnet-4-6",
+        "sonnet":                     "claude-sonnet-4-6",
+        "opus-4.6":                   "claude-opus-4-6",
+        "claude-opus-4.6-latest":     "claude-opus-4-6",
+        "opus-latest":                "claude-opus-4-6",
+        "opus":                       "claude-opus-4-6",
+        "haiku-4.5":                  "claude-haiku-4-5-20251001",
+        "claude-haiku-4.5-latest":    "claude-haiku-4-5-20251001",
+        "claude-3-5-sonnet-latest":   "claude-3-5-sonnet-20241022",
+        "sonnet-3.5":                 "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-latest":    "claude-3-5-haiku-20241022",
+        "haiku-latest":               "claude-3-5-haiku-20241022",
+        "haiku":                      "claude-3-5-haiku-20241022",
+        "claude-3-opus-latest":       "claude-3-opus-20240229",
+        "opus-3":                     "claude-3-opus-20240229",
+        "":                           ANTHROPIC_MODEL_DEFAULT,
     }
     return mapping.get(alias, ANTHROPIC_MODEL_DEFAULT)
 
@@ -95,10 +116,10 @@ def _anthropic_try_models(system: str, user: str, *, max_tokens: int, temperatur
             candidates.append(c)
     
     hard_fallbacks = [
-        "claude-3-5-haiku-20241022",
-        "claude-3-5-haiku-20240620",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
         "claude-3-5-sonnet-20241022",
-        "claude-3-5-sonnet-20240620",
+        "claude-3-5-haiku-20241022",
         "claude-3-opus-20240229",
     ]
     for c in hard_fallbacks:
@@ -151,10 +172,10 @@ def _anthropic_try_models_with_messages(system: str, messages: list[dict], *, ma
             candidates.append(c)
     
     hard_fallbacks = [
-        "claude-3-5-haiku-20241022",
-        "claude-3-5-haiku-20240620",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
         "claude-3-5-sonnet-20241022",
-        "claude-3-5-sonnet-20240620",
+        "claude-3-5-haiku-20241022",
         "claude-3-opus-20240229",
     ]
     for c in hard_fallbacks:
@@ -252,7 +273,7 @@ def test_connection(provider: str, timeout: float = 10.0) -> tuple[bool, str]:
             
             client = anthropic.Anthropic(api_key=key)
             msg = client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model="claude-haiku-4-5-20251001",
                 messages=[{"role": "user", "content": "ok"}],
                 max_tokens=5,
             )
@@ -274,7 +295,7 @@ def test_connection(provider: str, timeout: float = 10.0) -> tuple[bool, str]:
             from openai import OpenAI
             client = OpenAI(timeout=timeout)
             resp = client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=10,
             )
