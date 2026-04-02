@@ -93,6 +93,23 @@ def extract_text_from_pdf(file_path: Path) -> str:
     return ""
 
 
+def extract_text_from_docx(file_path: Path) -> str:
+    """Extrahiert Text aus einer Word (.docx) Datei."""
+    if not file_path.exists():
+        return ""
+    
+    if not DocxDocument:
+        return ""  # python-docx nicht installiert
+    
+    try:
+        doc = DocxDocument(file_path)
+        text = "\n".join([paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip()])
+        return text
+    except Exception as e:
+        print(f"docx extraction failed for {file_path}: {e}")
+        return ""
+
+
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
     """
     Teilt Text in überlappende Chunks auf.

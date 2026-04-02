@@ -2325,7 +2325,7 @@ elif current_tab == 4:
                     "Dateiname": d.filename,
                     "Klassifizierung": d.classification,
                     "Chunks": d.chunk_count,
-                    "Ø Chunk-Size": d.chunk_size_used if d.chunk_size_used else (
+                    "Ø Chunk-Size": str(d.chunk_size_used) if d.chunk_size_used else (
                         f"~{d.file_size // d.chunk_count:,}" if d.chunk_count > 0 and d.file_size else "—"
                     ),
                     "Größe (KB)": d.file_size // 1024 if d.file_size else 0,
