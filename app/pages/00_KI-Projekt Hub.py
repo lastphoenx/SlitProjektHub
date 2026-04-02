@@ -110,9 +110,18 @@ Erste Anlaufstelle um KI-Provider zu testen und zu vergleichen:
 ### 3️⃣ **Stammdaten** (🧹 Seite)
 Verwaltung aller Master-Daten:
 - **Rollen**: Definieren Sie Projekt-Rollen (z.B. "DevOps", "Frontend", "Security")
+  - Erstellen Sie Aufgaben automatisch mit KI
+  - Verknüpfen Sie Pflichtenheft-Dokumente mit Rollen
 - **Projekte**: Erstellen Sie Projekte mit Briefen und Anforderungen
+  - Ordnen Sie Dokumente zu (werden in Chat & Batch-QA verwendet)
 - **Kontexte**: Dokumentieren Sie Anforderungen und Einschränkungen
 - **Tasks**: Verwalten Sie Aufgaben und Überprüfungen
+- **Dokumente**: Upload mit 8 Klassifikationen
+  - **Pflichtenheft (Projekt/Rolle)**: Anforderungskataloge
+  - **FAQ/Fragen-Katalog**: CSV-Upload für Batch-QA (Spalten: Nr, Lieferant, Frage)
+  - **Standard/Richtlinie, API-Doku, Tutorials** etc.
+  - **Chunk-Größe**: 200-5000 Zeichen pro Upload konfigurierbar
+  - **RAG-Integration**: Dokumente werden automatisch für kontextbasierte Antworten verwendet
 
 ### 4️⃣ **Chat** (💬 Seite) - Hauptmenü
 Die Kern-Funktionalität:
@@ -120,6 +129,7 @@ Die Kern-Funktionalität:
 - Wählen Sie einen **KI-Provider** (OpenAI, Anthropic, Mistral)
 - Wählen Sie ein **Modell** und eine **Temperatur**
 - Der Chat wird automatisch mit Projekt-Brief, Rollen und Dokumentation angereichert
+- **RAG-Integration**: Verwendet automatisch alle dem Projekt zugeordneten Dokumente
 - **Markieren Sie Nachrichten**:
   - 💡 Idee
   - ✅ Entscheidung (wird gespeichert & durchsuchbar)
@@ -127,16 +137,74 @@ Die Kern-Funktionalität:
   - ❓ Annahme
   - ℹ️ Info/Fakt
 
+### 5️⃣ **Fragen-Batch** (🔄 Seite)
+Batch-Verarbeitung von Fragen mit KI:
+- **CSV-Upload**: Fragen im CSV-Format (Spalten: Nr, Lieferant, Frage)
+  - Validierung der CSV-Struktur
+  - Wählbarer Delimiter (; , Tab |)
+- **3 Rollen-Modi**:
+  - **Sammelrolle**: Eine fusionierte Antwort aus allen Perspektiven
+  - **Einzelne Rollen**: Separate Antwort-Spalte pro Rolle (Antwort_RoleName)
+  - **Eine Rolle**: Antwort aus einer spezifischen Perspektive
+- **RAG pro Frage**: Jede Frage durchsucht automatisch projekt-zugeordnete Dokumente
+- **Editable Results**: Antworten nachträglich bearbeiten
+- **Download**: CSV/Excel mit allen Fragen und Antworten
+- **Anwendungsfall**: 480 Lieferantenfragen aus SIMAP-Ausschreibung beantworten
+
 ---
 
-## 🎯 Beispiel-Workflow
+## 🔍 RAG-Architektur (Retrieval-Augmented Generation)
 
+Der KI-Projekt Hub verwendet eine **intelligente Dokumenten-Architektur**:
+
+### Dokumenten-Scoping:
+- **Task-Generierung**: Nutzt **NUR rollen-spezifische** Dokumente
+  - Typ: "Pflichtenheft (Rolle)" mit Rollen-Zuordnung
+  - Filter: `role_key` → Nur dieser Rolle zugewiesene Dokumente
+  
+- **Chat & Batch-QA**: Nutzt **NUR projekt-zugeordnete** Dokumente
+  - Alle Klassifikationen (Pflichtenheft Projekt, FAQ, Standards, API-Doku, etc.)
+  - Filter: `project_key` → Nur diesem Projekt zugewiesene Dokumente
+
+### Chunk-Größe & Suchverfahren:
+- **Konfigurierbar**: 200-5000 Zeichen pro Upload (Standard: 1000)
+- **Hybrid-Suche**: Semantische Vektorsuche + Keyword-Matching
+- **ChromaDB**: Vektordatenbank für effiziente Ähnlichkeitssuche
+
+### Klassifikationen:
+Jedes Dokument wird einer Kategorie zugeordnet:
+1. **Pflichtenheft (Projekt)**: Projekt-weite Anforderungen
+2. **Pflichtenheft (Rolle)**: Rollen-spezifische Verantwortlichkeiten
+3. **FAQ/Fragen-Katalog**: CSV mit Nr, Lieferant, Frage
+4. **Standard/Richtlinie**: Compliance, Best Practices
+5. **API-Dokumentation**: Technische Schnittstellen
+6. **Tutorial/Anleitung**: How-To Guides
+7. **Anforderung/Feature**: Feature-Spezifikationen
+8. **Sonstiges**: Weitere relevante Dokumentation
+
+---
+
+## 🎯 Beispiel-Workflows
+
+### Workflow 1: Projekt mit KI entwickeln
 1. **Projekt anlegen** → Gehen Sie zu **Stammdaten**, erstellen Sie ein Projekt mit Anforderungen
 2. **Rollen definieren** → Definieren Sie die Fachbereiche in **Stammdaten**
-3. **Chat starten** → Öffnen Sie **Chat**, wählen Sie Projekt & Provider
-4. **Mit KI entwickeln** → Stellen Sie Fragen im Projekt-Kontext
-5. **Entscheidungen dokumentieren** → Markieren Sie wichtige Nachrichten als "Entscheidung"
-6. **Später nachschlagen** → Entscheidungen sind über Volltextsuche erreichbar
+3. **Dokumente hochladen** → Upload Pflichtenheft, Standards (Chunk-Größe: 1000-1500)
+4. **Chat starten** → Öffnen Sie **Chat**, wählen Sie Projekt & Provider
+5. **Mit KI entwickeln** → Stellen Sie Fragen im Projekt-Kontext (RAG nutzt automatisch Projekt-Dokumente)
+6. **Entscheidungen dokumentieren** → Markieren Sie wichtige Nachrichten als "Entscheidung"
+7. **Später nachschlagen** → Entscheidungen sind über Volltextsuche erreichbar
+
+### Workflow 2: 480 Lieferantenfragen beantworten (Batch-QA)
+1. **Projekt vorbereiten** → **Stammdaten**: Projekt erstellen, Rollen definieren
+2. **Pflichtenheft hochladen** → CSV-Dokument mit Typ "FAQ/Fragen-Katalog" (Spalten: Nr, Lieferant, Frage)
+3. **Projekt-Dokumente zuordnen** → **Stammdaten** → Projekte → Dokumente zuweisen
+4. **Batch-QA öffnen** → **Fragen-Batch** Seite
+5. **CSV auswählen** → Wählen Sie das hochgeladene CSV-Dokument
+6. **Rollen-Modus wählen** → "Einzelne Rollen" für Perspektiven-Vergleich
+7. **Batch starten** → KI beantwortet alle 480 Fragen mit RAG-Kontext
+8. **Antworten bearbeiten** → Korrigieren Sie Antworten im Editor
+9. **Download** → Excel/CSV mit allen Antworten exportieren
 
 ---
 

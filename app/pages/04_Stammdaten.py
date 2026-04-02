@@ -1199,6 +1199,12 @@ elif current_tab == 1:
 elif current_tab == 2:
     st.subheader("🤖 Aufgaben aus Rolle generieren")
     
+    st.info(
+        "ℹ️ **RAG-Nutzung**: Task-Gen durchsucht **NUR** Dokumente mit Klassifizierung 'Pflichtenheft (Rolle)', "
+        "die dieser Rolle zugeordnet sind (via 'Zugehörige Rollen' beim Upload). "
+        "Allgemeine Projekt-Dokumente werden NICHT verwendet."
+    )
+    
     from src.m07_roles import list_roles_df
     from src.m12_task_generation import generate_tasks_from_role
     from src.m08_llm import providers_available
@@ -1713,6 +1719,11 @@ elif current_tab == 5:
     st.subheader("🗂️ Projekte - Management")
     st.markdown("**Verwaltung von Projekten mit Rollen, Aufgaben und Kontexten**")
     
+    st.info(
+        "ℹ️ **Dokument-Zuordnung**: Nur Dokumente, die einem Projekt zugeordnet sind, werden in Chat und Batch-QA verwendet. "
+        "Ordnen Sie Dokumente im Tab 'Dokumente' zu → 'Zu Projekt zuordnen'."
+    )
+    
     st.session_state.setdefault("project_mgmt_edit_mode", False)
     st.session_state.setdefault("project_mgmt_selected_key", None)
     st.session_state.setdefault("project_mgmt_search_query", "")
@@ -2115,6 +2126,19 @@ elif current_tab == 4:
     st.subheader("📄 Dokumente - RAG Management")
     st.markdown("**Verwalte Dokumente für RAG-Kontext in Projekten**")
     
+    with st.expander("ℹ️ Wie funktioniert die Dokument-Nutzung?", expanded=False):
+        st.markdown("""
+        **Klassifizierung bestimmt Nutzung:**
+        
+        - **🎭 Pflichtenheft (Rolle)**: Wird bei **Task-Generierung** verwendet → Rollen zuordnen beim Upload
+        - **📁 Pflichtenheft (Projekt)**: Wird in **Chat & Batch-QA** verwendet → Projekt zuordnen nach Upload
+        - **📋 Andere**: Verfügbar in **Chat & Batch-QA** → Projekt zuordnen nach Upload
+        
+        **Chunk-Größe**: Bestimmt wie Text zerlegt wird (Standard: 1000 Zeichen). Größere Chunks = mehr Kontext, kleinere = präziser.
+        
+        **RAG-Suche**: Findet automatisch relevante Abschnitte via Embedding (Ähnlichkeitssuche) und fügt sie als Kontext in Prompts ein.
+        """)
+    
     st.session_state.setdefault("doc_upload_mode", False)
     st.session_state.setdefault("doc_filter_classification", "")
     
@@ -2142,6 +2166,20 @@ elif current_tab == 4:
             options=DOCUMENT_CLASSIFICATIONS,
             key="doc_classification_select"
         )
+        
+        # Info-Hinweis zu Klassifizierungen
+        if classification == "Pflichtenheft (Rolle)":
+            st.info(
+                "📋 **Pflichtenheft (Rolle)**: Wird bei Task-Generierung verwendet. "
+                "Wählen Sie unten die zugehörigen Rollen aus."
+            )
+        elif classification == "Pflichtenheft (Projekt)":
+            st.info(
+                "📁 **Pflichtenheft (Projekt)**: Verfügbar in Chat und Batch-QA für alle Projekt-Mitglieder. "
+                "Wird NICHT bei Task-Generierung verwendet."
+            )
+        elif classification in ["Anforderung/Feature", "Standard/Richtlinie", "FAQ/Fragen-Katalog"]:
+            st.caption("💡 Dieses Dokument wird in Chat und Batch-QA verwendet (wenn dem Projekt zugeordnet).")
         
         # Chunk-Größe (editierbar)
         default_chunk_size = st.session_state.get("global_rag_chunk_size", 1000)

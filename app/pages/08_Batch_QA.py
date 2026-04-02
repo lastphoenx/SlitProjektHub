@@ -38,6 +38,12 @@ with st.sidebar:
 st.title("🔄 Fragen-Batch-Beantworter")
 st.markdown("**Beantworte große Mengen strukturierter Fragen (aus CSV) automatisch mit KI + RAG**")
 
+st.info(
+    "ℹ️ **Wie funktioniert RAG hier?** Für jede Frage werden relevante Abschnitte aus den **Projekt-zugeordneten Dokumenten** "
+    "gesucht (via Embedding-Suche) und als Kontext in den Prompt eingefügt. Die KI kann so spezifische Antworten "
+    "basierend auf Ihrem Pflichtenheft generieren."
+)
+
 # Session State initialisierung
 st.session_state.setdefault("batch_project_key", None)
 st.session_state.setdefault("batch_csv_doc_id", None)
