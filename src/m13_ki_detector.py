@@ -209,23 +209,28 @@ def analyze_vendor_questions(
     lengths = [len(q) for q in questions]
     avg_length = sum(lengths) / n
 
+    # --- Kleine Stichproben dämpfen ---
+    # Bei n < 10 sind Ratio-Signale statistisch unzuverlässig (1 Frage = 100% Struct.Refs ist bedeutungslos).
+    # Der Faktor skaliert alle ratio-basierten Signale linear: n=1 → 0.1, n=5 → 0.5, n=10+ → 1.0
+    sample_weight = min(n, 10) / 10
+
     # --- Feature 1: Strukturreferenzen (Kapitel X.Y) ---
-    structural_refs_ratio = sum(min(_count_structural_refs(q), 1) for q in questions) / n
+    structural_refs_ratio = sum(min(_count_structural_refs(q), 1) for q in questions) / n * sample_weight
 
     # --- Feature 2: KI-Floskeln (Handlungsaufforderungen) ---
-    ki_phrases_ratio = sum(min(_count_ki_phrases(q), 1) for q in questions) / n
+    ki_phrases_ratio = sum(min(_count_ki_phrases(q), 1) for q in questions) / n * sample_weight
 
     # --- Feature 3: Übergangsphrasing ("Darüber hinaus", "Des Weiteren") ---
-    transition_phrases_ratio = sum(min(_count_transition_phrases(q), 1) for q in questions) / n
+    transition_phrases_ratio = sum(min(_count_transition_phrases(q), 1) for q in questions) / n * sample_weight
 
     # --- Feature 4: Uniforme Satzeinstiege ---
-    uniform_openers_ratio = sum(1 for q in questions if _has_uniform_opener(q)) / n
+    uniform_openers_ratio = sum(1 for q in questions if _has_uniform_opener(q)) / n * sample_weight
 
     # --- Feature 5: Bullet-Unterlisten innerhalb von Fragen ---
-    bullet_sublists_ratio = sum(1 for q in questions if _has_bullet_sublist(q)) / n
+    bullet_sublists_ratio = sum(1 for q in questions if _has_bullet_sublist(q)) / n * sample_weight
 
     # --- Feature 6: Erschöpfende Aufzählungen ("A, B, C und D") ---
-    exhaustive_enum_ratio = sum(1 for q in questions if _has_exhaustive_enumeration(q)) / n
+    exhaustive_enum_ratio = sum(1 for q in questions if _has_exhaustive_enumeration(q)) / n * sample_weight
 
     # --- Feature 7: Informelle Marker (negativ-Signal: senkt Score) ---
     informal_count = sum(1 for q in questions if _has_informal_markers(q))
@@ -234,27 +239,44 @@ def analyze_vendor_questions(
     informal_penalty = min(informal_markers_ratio / 0.2, 1.0)  # 0–1
 
     # --- Feature 8: Burstiness (Satzlängen-Uniformität über alle Fragen) ---
+    # Hat eigene Mindestschwelle (≥5 Fragen / ≥8 Sätze), kein extra sample_weight nötig
     sentence_burstiness_score = _sentence_burstiness(questions)
 
     # --- Feature 9: Fragelängen-Uniformität ---
+    # Nicht sinnvoll bei < 5 Fragen (n=1 → cv=0 → score=1.0 ist immer ein false positive)
     length_cv = _coefficient_of_variation([float(l) for l in lengths])
-    length_uniformity_score = max(0.0, min(1.0, 1.0 - (length_cv / 0.6)))
+    length_uniformity_score = max(0.0, min(1.0, 1.0 - (length_cv / 0.6))) if n >= 5 else 0.0
 
     # --- Feature 10: Volumen-Signal ---
     vol_signal = _volume_signal(n, total_vendors, total_questions or n * total_vendors)
 
-    # --- Gewichteter KI-Score (mit Abzug für informelle Marker) ---
+    # --- Gewichteter KI-Score ---
+    # Gewichte angepasst: struct↓ (legitime Beschaffungstexte referenzieren naturgemäss Kapitel),
+    # ki_phrases↑ (stärkstes Einzelsignal), vol↑, openers↑
     raw_score = (
-        0.20 * structural_refs_ratio
-        + 0.15 * ki_phrases_ratio
+        0.15 * structural_refs_ratio    # war 0.20 – struct.refs auch in manuellen Texten häufig
+        + 0.20 * ki_phrases_ratio       # war 0.15 – stärkstes KI-Signal
         + 0.10 * transition_phrases_ratio
-        + 0.10 * uniform_openers_ratio
-        + 0.12 * bullet_sublists_ratio
-        + 0.10 * exhaustive_enum_ratio
+        + 0.12 * uniform_openers_ratio  # war 0.10
+        + 0.10 * bullet_sublists_ratio  # war 0.12
+        + 0.08 * exhaustive_enum_ratio  # war 0.10
         + 0.08 * sentence_burstiness_score
         + 0.05 * length_uniformity_score
-        + 0.10 * vol_signal
+        + 0.12 * vol_signal             # war 0.10 – Volumen ist starkes Indiz
     )
+    # Summe = 1.00
+
+    # --- Kombinationsbonus: Volumen + mehrere Signale gleichzeitig ---
+    # Viele Fragen mit mehreren gleichzeitigen (aber je einzeln moderaten) KI-Merkmalen
+    # sind ein stärkeres Indiz als die Summe der Einzelsignale vermuten lässt.
+    _active_signals = sum(1 for v in [
+        structural_refs_ratio, ki_phrases_ratio, transition_phrases_ratio,
+        uniform_openers_ratio, bullet_sublists_ratio, exhaustive_enum_ratio,
+        sentence_burstiness_score,
+    ] if v > 0.05)
+    if n >= 15 and vol_signal >= 0.50 and _active_signals >= 2:
+        raw_score += 0.15
+
     # Informelle Marker reduzieren den Score (max. -20%)
     ki_score = round(min(1.0, max(0.0, raw_score * (1.0 - 0.20 * informal_penalty))), 3)
 
@@ -295,17 +317,32 @@ def analyze_vendor_questions(
 # ---------------------------------------------------------------------------
 
 _AI_SYSTEM_PROMPT = """You are an expert in detecting AI-generated text in public procurement question sets.
-Analyze the provided sample of vendor questions and assess whether they were AI-generated.
+Analyze the sample and give an HONEST, calibrated assessment. Avoid defaulting to high scores.
 
-Typical signs of AI-generated procurement questions:
-- Systematic chapter references ("Gemäss Kapitel X.Y des Pflichtenhefts...")
-- Uniformly structured phrasing with no personal voice
-- Repeated sentence openers (Bitte beschreiben Sie / Wie stellen Sie sicher / Welche Massnahmen...)
-- Very consistent question length and complexity
-- Transition markers: "Darüber hinaus", "Des Weiteren", "Im Weiteren", "Basierend auf"
-- No typos, no colloquial language
-- No specific company or person references
-- Unusually high total question count
+CRITICAL CONTEXT: Professional procurement questions are inherently formal and structured.
+Do NOT flag questions as AI-generated just because they use technical terms, chapter references,
+or formal sentence structure — these are EXPECTED and NORMAL in procurement.
+
+Signs that INCREASE likelihood of AI generation:
+- Nearly IDENTICAL sentence openers repeated across ALL questions (robotically uniform)
+- Exhaustive comma-separated lists covering every possible aspect ("A, B, C, D und E")
+- Transition phrases that read like GPT continuations ("Darüber hinaus", "Des Weiteren", "Im Weiteren", "Basierend auf")
+- Zero variation in sentence length and zero personal voice across many questions
+- Questions that paraphrase the RFP requirements back word-for-word as questions
+- Unusually high total question count (>40) with near-identical length and complexity
+
+Signs that DECREASE likelihood of AI generation (human indicators):
+- Typos, abbreviations, or clipped phrasing
+- Company-specific, person-specific, or product-specific references
+- Colloquial, informal or conversational language mixed in
+- Highly varied sentence length, rhythm, and style
+- Questions that presuppose internal knowledge or prior conversations
+- Deliberately provocative or niche questions off the standard procurement template
+
+CALIBRATION: A score of 85% means you are highly certain. Reserve 70%+ for cases with multiple
+clear AI signals. If the sample is ambiguous or too small, reflect that with a lower score and
+confidence "niedrig" or "mittel". It is perfectly valid to output a score of 10-30% for
+vendors whose questions look genuinely human.
 
 IMPORTANT: Respond ONLY with a JSON object. No preamble, no explanation, no markdown fences.
 Start your response with { and end with }.

@@ -245,52 +245,136 @@ Kein Werkzeug ist perfekt – der Score ist ein Hinweis, kein Beweis.
 
     # --- Optionale KI-Tiefenanalyse ---
     st.markdown("#### 🧠 KI-gestützte Tiefenanalyse (optional)")
-    st.caption("Schickt eine Stichprobe der Fragen eines Anbieters an OpenAI/Anthropic für eine zweite Meinung. OpenAI verwendet immer gpt-4o-mini.")
+    st.caption("Schickt eine Stichprobe der Fragen an OpenAI/Anthropic für eine zweite Meinung. OpenAI verwendet immer gpt-4o-mini.")
 
     vendor_list = [v for v, _ in ki_result["ranking"]]
-    selected_ai_vendor = st.selectbox(
-        "Anbieter für Tiefenanalyse wählen",
-        options=vendor_list,
-        key="ki_ai_vendor_select"
+
+    ai_mode = st.radio(
+        "Analyse-Modus",
+        options=["single", "all"],
+        format_func=lambda x: "👤 Einzelner Anbieter" if x == "single" else "👥 Alle Anbieter",
+        horizontal=True,
+        key="ki_ai_mode"
     )
 
-    if st.button("🔬 KI-Tiefenanalyse starten", key="ki_ai_analyze_btn"):
-        all_vendor_qs = [
-            str(chunk.get("Frage", "")).strip()
-            for chunk in ki_questions
-            if str(chunk.get("Lieferant", "")).strip() == selected_ai_vendor
-            and str(chunk.get("Frage", "")).strip()
-        ]
-        with st.spinner(f"Analysiere {selected_ai_vendor} mit {st.session_state.get('global_llm_provider', 'LLM')}…"):
-            ai_result = analyze_vendor_with_ai(
-                questions=all_vendor_qs,
-                vendor=selected_ai_vendor,
-                provider=st.session_state.get("global_llm_provider"),
-                model=st.session_state.get("global_llm_model"),
-                temperature=0.2,
-            )
-        st.session_state["ki_ai_results"][selected_ai_vendor] = ai_result
+    if ai_mode == "single":
+        selected_ai_vendor = st.selectbox(
+            "Anbieter für Tiefenanalyse wählen",
+            options=vendor_list,
+            key="ki_ai_vendor_select"
+        )
 
-    if selected_ai_vendor in st.session_state["ki_ai_results"]:
-        ai_res = st.session_state["ki_ai_results"][selected_ai_vendor]
-        if "error" in ai_res:
-            st.error(f"Fehler bei AI-Analyse: {ai_res['error']}")
-        else:
-            ai_score = ai_res.get("ki_score", "?")
-            confidence = ai_res.get("confidence", "?")
-            fazit = ai_res.get("fazit", "")
-            merkmale = ai_res.get("hauptmerkmale", [])
-            heur_score = ki_result["vendors"][selected_ai_vendor]["ki_score"]
+        if st.button("🔬 KI-Tiefenanalyse starten", key="ki_ai_analyze_btn"):
+            all_vendor_qs = [
+                str(chunk.get("Frage", "")).strip()
+                for chunk in ki_questions
+                if str(chunk.get("Lieferant", "")).strip() == selected_ai_vendor
+                and str(chunk.get("Frage", "")).strip()
+            ]
+            with st.spinner(f"Analysiere {selected_ai_vendor} mit {st.session_state.get('global_llm_provider', 'LLM')}…"):
+                ai_result = analyze_vendor_with_ai(
+                    questions=all_vendor_qs,
+                    vendor=selected_ai_vendor,
+                    provider=st.session_state.get("global_llm_provider"),
+                    model=st.session_state.get("global_llm_model"),
+                    temperature=0.2,
+                )
+            st.session_state["ki_ai_results"][selected_ai_vendor] = ai_result
 
-            col_x, col_y = st.columns(2)
-            col_x.metric("KI-Score (Heuristik)", f"{heur_score:.0%}")
-            col_y.metric("KI-Score (AI-Urteil)", f"{ai_score}%", help=f"Konfidenz: {confidence}")
-            if fazit:
-                st.info(f"**Fazit (AI):** {fazit}")
-            if merkmale:
-                st.markdown("**Erkannte Hauptmerkmale:**")
-                for m in merkmale:
-                    st.markdown(f"- {m}")
+        if selected_ai_vendor in st.session_state["ki_ai_results"]:
+            ai_res = st.session_state["ki_ai_results"][selected_ai_vendor]
+            if "error" in ai_res:
+                st.error(f"Fehler bei AI-Analyse: {ai_res['error']}")
+            else:
+                ai_score = ai_res.get("ki_score", "?")
+                confidence = ai_res.get("confidence", "?")
+                fazit = ai_res.get("fazit", "")
+                merkmale = ai_res.get("hauptmerkmale", [])
+                heur_score = ki_result["vendors"][selected_ai_vendor]["ki_score"]
+
+                col_x, col_y = st.columns(2)
+                col_x.metric("KI-Score (Heuristik)", f"{heur_score:.0%}")
+                col_y.metric("KI-Score (AI-Urteil)", f"{ai_score}%", help=f"Konfidenz: {confidence}")
+                if fazit:
+                    st.info(f"**Fazit (AI):** {fazit}")
+                if merkmale:
+                    st.markdown("**Erkannte Hauptmerkmale:**")
+                    for m in merkmale:
+                        st.markdown(f"- {m}")
+
+    else:  # all vendors
+        already_done = [v for v in vendor_list if v in st.session_state["ki_ai_results"]]
+        if already_done:
+            st.caption(f"✅ Bereits analysiert: {len(already_done)}/{len(vendor_list)} Anbieter")
+
+        if st.button("🔬 Alle Anbieter analysieren", key="ki_ai_all_btn"):
+            all_progress = st.progress(0)
+            all_status = st.empty()
+            provider = st.session_state.get("global_llm_provider")
+            model = st.session_state.get("global_llm_model")
+            for i, vendor in enumerate(vendor_list):
+                all_status.text(f"Analysiere {vendor} ({i+1}/{len(vendor_list)})…")
+                vendor_qs = [
+                    str(chunk.get("Frage", "")).strip()
+                    for chunk in ki_questions
+                    if str(chunk.get("Lieferant", "")).strip() == vendor
+                    and str(chunk.get("Frage", "")).strip()
+                ]
+                ai_result = analyze_vendor_with_ai(
+                    questions=vendor_qs,
+                    vendor=vendor,
+                    provider=provider,
+                    model=model,
+                    temperature=0.2,
+                )
+                st.session_state["ki_ai_results"][vendor] = ai_result
+                all_progress.progress((i + 1) / len(vendor_list))
+            all_status.text("✅ Alle Anbieter analysiert!")
+
+        # Kombinierte Tabelle: Heuristik vs AI
+        if st.session_state["ki_ai_results"]:
+            _MERKMAL_THRESHOLDS = [
+                ("structural_refs_ratio",    0.15, "Struct.Refs"),
+                ("ki_phrases_ratio",         0.10, "KI-Floskeln"),
+                ("bullet_sublists_ratio",    0.15, "Bullets"),
+                ("exhaustive_enum_ratio",    0.20, "Aufzähl."),
+                ("transition_phrases_ratio", 0.15, "Übergänge"),
+                ("uniform_openers_ratio",    0.30, "Einstiege"),
+                ("sentence_burstiness_score",0.40, "Burstiness"),
+                ("volume_signal",            0.50, "Volumen"),
+            ]
+            combined_rows = []
+            for vendor in vendor_list:
+                heur = ki_result["vendors"].get(vendor, {})
+                ai_res = st.session_state["ki_ai_results"].get(vendor)
+                triggered = [label for key, thresh, label in _MERKMAL_THRESHOLDS if heur.get(key, 0) >= thresh]
+                row = {
+                    "Lieferant": vendor,
+                    "Heuristik-%": f"{heur.get('ki_score', 0):.0%}",
+                    "Heuristik-Urteil": f"{heur.get('verdict_emoji', '')} {heur.get('verdict', '')}",
+                    "Auffällige Merkmale": ", ".join(triggered) if triggered else "—",
+                }
+                if ai_res and "error" not in ai_res:
+                    ai_score_val = ai_res.get("ki_score", 0) or 0
+                    if ai_score_val >= 70:
+                        ai_urteil = "🤖 KI-generiert"
+                    elif ai_score_val >= 45:
+                        ai_urteil = "⚠️ Verdächtig"
+                    elif ai_score_val >= 25:
+                        ai_urteil = "🔍 Teilweise KI"
+                    else:
+                        ai_urteil = "✅ Manuell"
+                    row["AI-%"] = f"{ai_score_val}%"
+                    row["AI-Urteil"] = ai_urteil
+                    row["Konfidenz"] = ai_res.get("confidence", "?")
+                    row["Fazit (AI)"] = ai_res.get("fazit", "")
+                else:
+                    row["AI-%"] = "—"
+                    row["AI-Urteil"] = "—"
+                    row["Konfidenz"] = "—"
+                    row["Fazit (AI)"] = ai_res.get("error", "") if ai_res else "nicht analysiert"
+                combined_rows.append(row)
+            st.dataframe(pd.DataFrame(combined_rows), width="stretch", hide_index=True)
 
 # ============ SCHRITT 3: ROLLEN WÄHLEN ============
 st.markdown("---")
@@ -381,6 +465,28 @@ if role_mode in ["individual", "single"] and not selected_roles:
 if role_mode == "none":
     st.info("ℹ️ **Ohne Rollen-Kontext**: Fragen werden generisch beantwortet (keine rollenspezifische Perspektive)")
 
+# --- Checkpoint-Info & Löschen-Button (ausserhalb des Batch-Buttons) ---
+_cp_path_preview = ROOT / "data" / f"batch_checkpoint_{selected_project}_{selected_csv_id}.json"
+if _cp_path_preview.exists():
+    try:
+        _cp_data = json.loads(_cp_path_preview.read_text(encoding="utf-8"))
+        _cp_meta = _cp_data.get("__meta__", {})
+        _cp_results = _cp_data.get("results", _cp_data) if isinstance(_cp_data, dict) else _cp_data
+        _cp_n = len(_cp_results) if isinstance(_cp_results, list) else 0
+        _cp_model = _cp_meta.get("model", "?") if _cp_meta else "?"
+        _cp_proj = _cp_meta.get("project", "?") if _cp_meta else "?"
+        _cp_roles = _cp_meta.get("roles", []) if _cp_meta else []
+        st.warning(
+            f"♻️ **Checkpoint vorhanden**: {_cp_n} Fragen gespeichert "
+            f"(Modell: `{_cp_model}`, Rollen: {', '.join(_cp_roles) or '—'})"
+        )
+        if st.button("🗑️ Checkpoint löschen", key="delete_checkpoint_btn"):
+            _cp_path_preview.unlink(missing_ok=True)
+            st.success("Checkpoint gelöscht.")
+            st.rerun()
+    except Exception:
+        pass
+
 if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch"):
     
     # Lade CSV-Chunks aus DB
@@ -408,18 +514,60 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
         st.error("❌ CSV enthält keine gültigen Daten")
         st.stop()
     
+    # Checkpoint-Datei
+    checkpoint_path = ROOT / "data" / f"batch_checkpoint_{selected_project}_{selected_csv_id}.json"
+    # Metadaten der aktuellen Einstellungen für Validierung
+    _current_provider = st.session_state.get("global_llm_provider", "")
+    _current_model = st.session_state.get("global_llm_model", "")
+    _current_roles = sorted(selected_roles or [])
+    _current_meta = {
+        "project": selected_project,
+        "csv_id": str(selected_csv_id),
+        "provider": _current_provider,
+        "model": _current_model,
+        "role_mode": role_mode,
+        "roles": _current_roles,
+    }
+    results = []
+    resume_from = 0
+    if checkpoint_path.exists():
+        try:
+            _saved_raw = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            # Format: {"__meta__": {...}, "results": [...]}
+            if isinstance(_saved_raw, dict) and "results" in _saved_raw:
+                _saved_meta = _saved_raw.get("__meta__", {})
+                _saved_results = _saved_raw["results"]
+                # Validierung: Einstellungen müssen übereinstimmen
+                _meta_ok = (
+                    _saved_meta.get("project") == selected_project
+                    and str(_saved_meta.get("csv_id")) == str(selected_csv_id)
+                    and _saved_meta.get("provider") == _current_provider
+                    and _saved_meta.get("model") == _current_model
+                    and _saved_meta.get("role_mode") == role_mode
+                    and sorted(_saved_meta.get("roles", [])) == _current_roles
+                )
+                if _meta_ok and isinstance(_saved_results, list) and len(_saved_results) > 0:
+                    results = _saved_results
+                    resume_from = len(results)
+                    st.info(f"♻️ **Checkpoint passt** – setze bei Frage {resume_from + 1} von {len(questions)} fort.")
+                elif not _meta_ok:
+                    st.warning("⚠️ Checkpoint übersprungen – Einstellungen haben sich geändert (anderes Modell, Rollen o.ä.)")
+            elif isinstance(_saved_raw, list) and len(_saved_raw) > 0:
+                # Altes Format (ohne Metadaten) – ignorieren, da Validierung nicht möglich
+                st.warning("⚠️ Alter Checkpoint ohne Metadaten ignoriert. Starte von vorne.")
+        except Exception:
+            pass
+
     st.info(f"📊 Verarbeite **{len(questions)} Fragen**...")
     
     # Progress Bar
-    progress_bar = st.progress(0)
+    progress_bar = st.progress(resume_from / len(questions) if questions else 0)
     status_text = st.empty()
     
     # Live-Vorschau Container
     st.markdown("---")
     st.markdown("### 📊 Zwischenstand (Live-Vorschau)")
     live_preview_container = st.empty()
-    
-    results = []
     
     # System Prompt vorbereiten
     style_instructions = {
@@ -433,7 +581,12 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
         project_context_text = f"\n\nPROJEKT: {proj_obj.title}\nBESCHREIBUNG: {proj_obj.description or 'Keine Beschreibung'}"
     
     # Batch-Loop
+    _llm_model_buf: list = []        # [model_id, fallback_warning] – wird pro Aufruf befüllt
+    _fallback_warned = False         # Warnung nur einmal anzeigen
+    fallback_warning_container = st.empty()
     for idx, question_data in enumerate(questions):
+        if idx < resume_from:
+            continue
         question_text = question_data.get("Frage", "")
         nr = question_data.get("Nr", idx+1)
         lieferant = question_data.get("Lieferant", "")
@@ -482,7 +635,8 @@ AUFGABE: Beantworte die folgende Frage präzise und vollständig basierend auf d
                     messages=[{"role": "user", "content": user_prompt}],
                     max_tokens=2000,
                     temperature=st.session_state.get("global_llm_temperature", 0.7),
-                    model=st.session_state.get("global_llm_model")
+                    model=st.session_state.get("global_llm_model"),
+                    _used_model=_llm_model_buf,
                 )
                 answer = response if response else "[Keine Antwort generiert]"
             except Exception as e:
@@ -521,7 +675,8 @@ AUFGABE: Beantworte die folgende Frage vollständig, indem du die Perspektiven A
                     messages=[{"role": "user", "content": user_prompt}],
                     max_tokens=2000,
                     temperature=st.session_state.get("global_llm_temperature", 0.7),
-                    model=st.session_state.get("global_llm_model")
+                    model=st.session_state.get("global_llm_model"),
+                    _used_model=_llm_model_buf,
                 )
                 answer = response if response else "[Keine Antwort generiert]"
             except Exception as e:
@@ -561,7 +716,8 @@ AUFGABE: Beantworte die folgende Frage AUS DER PERSPEKTIVE deiner Rolle. Fokussi
                         messages=[{"role": "user", "content": user_prompt}],
                         max_tokens=2000,
                         temperature=st.session_state.get("global_llm_temperature", 0.7),
-                        model=st.session_state.get("global_llm_model")
+                        model=st.session_state.get("global_llm_model"),
+                        _used_model=_llm_model_buf,
                     )
                     answer = response if response else "[Keine Antwort generiert]"
                 except Exception as e:
@@ -575,22 +731,52 @@ AUFGABE: Beantworte die folgende Frage AUS DER PERSPEKTIVE deiner Rolle. Fokussi
         
         results.append(result_row)
         progress_bar.progress((idx + 1) / len(questions))
+
+        # Fallback-Warnung einmalig anzeigen
+        if not _fallback_warned and len(_llm_model_buf) >= 2 and _llm_model_buf[1]:
+            fallback_warning_container.warning(
+                f"{_llm_model_buf[1]}  \n"
+                f"Alle weiteren Fragen werden ebenfalls mit **gpt-4o-mini** beantwortet."
+            )
+            _fallback_warned = True
         
-        # Live-Vorschau: Zeige die letzten 10 Ergebnisse
-        if len(results) > 0:
-            preview_df = pd.DataFrame(results[-10:])  # Letzte 10
-            with live_preview_container.container():
-                st.caption(f"Letzte {min(len(results), 10)} von {len(results)} bearbeiteten Fragen:")
-                st.dataframe(
-                    preview_df,
-                    width="stretch",
-                    height=400,
-                    hide_index=True
+        # Checkpoint nach jeder Frage schreiben (Absturzsicherung) — inkl. Metadaten
+        try:
+            checkpoint_path.write_text(
+                json.dumps({"__meta__": _current_meta, "results": results}, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        except Exception:
+            pass
+        
+        # Live-Vorschau: lese aus Checkpoint-JSON und zeige letzte Antworten im Klartext
+        try:
+            _cp_raw = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            preview_data = _cp_raw["results"] if isinstance(_cp_raw, dict) and "results" in _cp_raw else _cp_raw
+        except Exception:
+            preview_data = results
+        with live_preview_container.container():
+            st.caption(f"**{len(preview_data)} von {len(questions)} Fragen bearbeitet** – letzte 5 Antworten:")
+            for entry in reversed(preview_data[-5:]):
+                _nr = entry.get("Nr", "?")
+                _lief = entry.get("Lieferant", "")
+                _frage = entry.get("Frage", "")
+                _frage_short = (_frage[:90] + "…") if len(_frage) > 90 else _frage
+                _antwort = next(
+                    (v for k, v in entry.items() if k.startswith("Antwort")),
+                    "—"
                 )
+                with st.expander(f"Nr. {_nr} | {_lief} — {_frage_short}"):
+                    st.write(_antwort)
     
     status_text.text("✅ Batch abgeschlossen!")
     live_preview_container.empty()  # Leere Live-Vorschau nach Abschluss
     st.session_state["batch_results"] = results
+    # Checkpoint löschen nach erfolgreichem Abschluss
+    try:
+        checkpoint_path.unlink(missing_ok=True)
+    except Exception:
+        pass
     st.success(f"🎉 **{len(results)} Fragen erfolgreich beantwortet!**")
 
 # ============ SCHRITT 6: ERGEBNISSE ANZEIGEN ============

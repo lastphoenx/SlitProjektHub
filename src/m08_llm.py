@@ -23,17 +23,25 @@ AVAILABLE_MODELS = {
         "haiku-3.5":  "claude-3-5-haiku-20241022",
     },
     "openai": {
-        "gpt-5.4-thinking": "gpt-5.4-thinking",
-        "gpt-5.3-instant": "gpt-5.3-instant",
-        "gpt-5.2": "gpt-5.2",
-        "gpt-5.0": "gpt-5.0",
-        "o4-mini": "o4-mini",
-        "o3-mini": "o3-mini",
-        "o1": "o1",
-        "o1-mini": "o1-mini",
-        "gpt-4o": "gpt-4o",
-        "gpt-4o-mini": "gpt-4o-mini",
-        "gpt-4-turbo": "gpt-4-turbo",
+        # GPT-5.x Frontier (Stand April 2026, Quelle: developers.openai.com/api/docs/models)
+        # ChatGPT-UI-Namen: "Thinking 5.4" → gpt-5.4, "Instant 5.3" → gpt-5.3-instant
+        "gpt-5.4":          "gpt-5.4",          # Thinking 5.4 – Flagship, komplex/agentic
+        "gpt-5.3-instant":  "gpt-5.3-instant",  # Instant 5.3 – alltäglich, schnell
+        "gpt-5.4-mini":     "gpt-5.4-mini",     # Stärkstes Mini; coding, subagents
+        "gpt-5.4-nano":     "gpt-5.4-nano",     # Günstigstes GPT-5.4; high-volume
+        "gpt-5.2":          "gpt-5.2",          # Vorheriges Frontier (5.2)
+        "gpt-5.0":          "gpt-5.0",          # Älteres GPT-5 (5.0)
+        "gpt-5-mini":       "gpt-5-mini",       # Günstig ($0.25/MTok)
+        # o-Series Reasoning
+        "o4-mini":          "o4-mini",
+        "o3":               "o3",
+        "o3-mini":          "o3-mini",
+        "o1":               "o1",
+        "o1-mini":          "o1-mini",
+        # GPT-4 Legacy
+        "gpt-4o":           "gpt-4o",
+        "gpt-4o-mini":      "gpt-4o-mini",
+        "gpt-4-turbo":      "gpt-4-turbo",
     },
     "mistral": {
         "small": "mistral-small-latest",
@@ -197,10 +205,10 @@ def _anthropic_try_models_with_messages(system: str, messages: list[dict], *, ma
     return None
 
 
-def try_models_with_messages(provider: str, system: str, messages: list[dict], *, max_tokens: int, temperature: float, model: str | None = None) -> str | None:
+def try_models_with_messages(provider: str, system: str, messages: list[dict], *, max_tokens: int, temperature: float, model: str | None = None, _used_model: list | None = None) -> str | None:
     """
     Provider-agnostische Chat-Funktion mit Model & Temperature Support.
-    
+
     Args:
         provider: "openai", "anthropic", "mistral"
         system: System prompt
@@ -208,24 +216,49 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
         max_tokens: Max output tokens
         temperature: 0.0 (deterministic) to 1.0+ (creative)
         model: Model name (e.g. "gpt-4o", "sonnet", "large"). If None, uses default.
-    
+        _used_model: Optionale Liste – wenn übergeben, wird [model_id, fallback_warning] eingetragen.
+                     Beispiel: buf = []; result = try_models_with_messages(..., _used_model=buf)
+                     Danach: buf[0] = tatsächlich genutztes Modell, buf[1] = Warnung oder ""
+
     Returns: Response text or None on error
     """
     if provider == "openai" and have_key("openai"):
+        from openai import OpenAI
+        client = OpenAI()
+        model_id = get_model_id("openai", model) or "gpt-4o-mini"
+        # o-series und alle gpt-5.x verwenden max_completion_tokens statt max_tokens
+        _COMPLETION_TOKENS_MODELS = ("o1", "o3", "o3-mini", "o4", "o4-mini", "gpt-5")
+        use_completion_tokens = any(model_id.startswith(p) for p in _COMPLETION_TOKENS_MODELS)
+        all_messages = [{"role": "system", "content": system}] + messages
+        kwargs: dict = dict(model=model_id, messages=all_messages, temperature=temperature)
+        if use_completion_tokens:
+            kwargs["max_completion_tokens"] = max_tokens
+        else:
+            kwargs["max_tokens"] = max_tokens
         try:
-            from openai import OpenAI
-            client = OpenAI()
-            model_id = get_model_id("openai", model) or "gpt-4o-mini"
-            all_messages = [{"role": "system", "content": system}] + messages
-            resp = client.chat.completions.create(
-                model=model_id,
-                messages=all_messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+            resp = client.chat.completions.create(**kwargs)
+            if _used_model is not None:
+                _used_model.clear()
+                _used_model += [model_id, ""]
             return resp.choices[0].message.content.strip()
-        except Exception:
-            pass
+        except Exception as e:
+            err_str = str(e)
+            # Fallback auf gpt-4o-mini wenn Modell nicht gefunden oder Parameter unbekannt
+            if model_id != "gpt-4o-mini" and ("model_not_found" in err_str or "unsupported_parameter" in err_str or "does not exist" in err_str):
+                try:
+                    resp = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=all_messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+                    if _used_model is not None:
+                        _used_model.clear()
+                        _used_model += ["gpt-4o-mini", f"⚠️ Fallback: '{model_id}' nicht verfügbar → gpt-4o-mini verwendet"]
+                    return resp.choices[0].message.content.strip()
+                except Exception as e2:
+                    raise LLMError(f"OpenAI (gpt-4o-mini Fallback): {e2}") from e2
+            raise LLMError(f"OpenAI ({model_id}): {e}") from e
     
     if provider == "anthropic" and have_key("anthropic"):
         model_id = get_model_id("anthropic", model) or DEFAULT_MODELS["anthropic"]
@@ -244,9 +277,11 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
                 temperature=temperature,
             )
             return resp.choices[0].message.content.strip()
-        except Exception:
-            pass
+        except Exception as e:
+            raise LLMError(f"Mistral ({model_id}): {e}") from e
     
+    if not have_key(provider or ""):
+        raise LLMError(f"Kein API-Key für Provider '{provider}' konfiguriert")
     return None
 
 class LLMError(Exception): ...

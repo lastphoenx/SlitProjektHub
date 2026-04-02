@@ -1,6 +1,6 @@
 ﻿# Projekt-Struktur Dokumentation
 
-> Stand: 2025-12-22 nach Umstrukturierung
+> Stand: 2026-04-02
 
 ## ✅ Finale Struktur (Sicher & Funktionsfähig)
 
@@ -159,5 +159,66 @@ git add README.md
 
 ---
 
-**Letzte Änderung:** 2025-12-22
+**Letzte Änderung:** 2026-04-02
 **Status:** ✅ Funktionsfähig getestet
+
+---
+
+## 🤖 KI-Erkennung & Batch-QA (Stand 2026-04-02)
+
+### Neue Module
+
+| Datei | Beschreibung |
+|---|---|
+| `src/m13_ki_detector.py` | KI-Erkennung für Ausschreibungsfragen (10 Heuristik-Signale + optionale AI-Tiefenanalyse) |
+| `app/pages/08_Batch_QA.py` | Fragen-Batch-Beantworter mit KI-Erkennung, Checkpoint/Resume, Live-Vorschau |
+
+### KI-Erkennung (`m13_ki_detector.py`)
+
+**Stufe 1 – Heuristik (ohne API, kostenlos):**
+- 10 gewichtete Signale: Strukturreferenzen, KI-Floskeln, Übergangsphrasing, uniforme Einstiege, Bullets, erschöpfende Aufzählungen, Burstiness, Längenuniformität, Volumen-Signal, Informal-Malus
+- Kleine Stichproben (n < 10) werden gedämpft, um False Positives zu vermeiden
+- Kombinationsbonus: n ≥ 15 + hohe Fragenanzahl + mehrere Signale → +15%
+
+**Stufe 2 – AI-Tiefenanalyse (optional, OpenAI/Anthropic):**
+- Einzelner Anbieter oder alle Anbieter auf einmal
+- Kalibrierter System-Prompt mit expliziten menschlichen Gegenmerkmalen
+- Kombinierte Tabelle: Heuristik-Score vs. AI-Score vs. Auffällige Merkmale
+
+### Batch-QA (`08_Batch_QA.py`)
+
+**Checkpoint/Resume:**
+- Checkpoint-Datei: `data/batch_checkpoint_{projekt}_{csv_id}.json`
+- Format: `{"__meta__": {provider, model, roles, ...}, "results": [...]}`
+- Validierung beim Laden: Checkpoint wird nur verwendet wenn Provider, Modell, Rollen-Modus und Rollen identisch sind
+- Lösch-Button sichtbar wenn Checkpoint vorhanden
+
+**Live-Vorschau:**
+- Liest aus Checkpoint-JSON (nicht aus Memory)
+- Letzte 5 Antworten als aufklappbare Expander mit vollständigem Antworttext
+
+**Fallback-Warnung:**
+- Wenn ein OpenAI-Modell nicht verfügbar ist (404 / Tier-Problem), wird automatisch auf `gpt-4o-mini` zurückgefallen
+- Sichtbare Warnung im UI mit Angabe welches Modell verwendet wurde
+
+### OpenAI-Modelle (`src/m08_llm.py`)
+
+Verfügbare Modelle (Stand April 2026, Quelle: developers.openai.com/api/docs/models):
+
+| UI-Name | Model-ID | Hinweis |
+|---|---|---|
+| Thinking 5.4 | `gpt-5.4` | Flagship, `max_completion_tokens` |
+| Instant 5.3 | `gpt-5.3-instant` | Schnell/alltäglich |
+| — | `gpt-5.4-mini` | Mini-Flagship |
+| — | `gpt-5.4-nano` | Günstigstes GPT-5.4 |
+| — | `gpt-5.2` | Vorheriges Frontier |
+| — | `gpt-5.0` | Älteres GPT-5 |
+| — | `gpt-5-mini` | Günstig |
+| — | `o4-mini`, `o3`, `o3-mini`, `o1`, `o1-mini` | Reasoning-Modelle |
+| — | `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo` | Legacy/stabil |
+
+Alle `gpt-5.*` und `o*`-Modelle verwenden `max_completion_tokens` (nicht `max_tokens`).
+
+### `start_app.ps1`
+
+Beendet vor dem Start automatisch alle laufenden Prozesse auf Port 8000 (Backend) und 8501 (Frontend), um Port-Konflikte bei Neustarts zu vermeiden.
