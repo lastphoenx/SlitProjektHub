@@ -244,6 +244,11 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
     progress_bar = st.progress(0)
     status_text = st.empty()
     
+    # Live-Vorschau Container
+    st.markdown("---")
+    st.markdown("### 📊 Zwischenstand (Live-Vorschau)")
+    live_preview_container = st.empty()
+    
     results = []
     
     # System Prompt vorbereiten
@@ -400,8 +405,21 @@ AUFGABE: Beantworte die folgende Frage AUS DER PERSPEKTIVE deiner Rolle. Fokussi
         
         results.append(result_row)
         progress_bar.progress((idx + 1) / len(questions))
+        
+        # Live-Vorschau: Zeige die letzten 10 Ergebnisse
+        if len(results) > 0:
+            preview_df = pd.DataFrame(results[-10:])  # Letzte 10
+            with live_preview_container.container():
+                st.caption(f"Letzte {min(len(results), 10)} von {len(results)} bearbeiteten Fragen:")
+                st.dataframe(
+                    preview_df,
+                    width="stretch",
+                    height=400,
+                    hide_index=True
+                )
     
     status_text.text("✅ Batch abgeschlossen!")
+    live_preview_container.empty()  # Leere Live-Vorschau nach Abschluss
     st.session_state["batch_results"] = results
     st.success(f"🎉 **{len(results)} Fragen erfolgreich beantwortet!**")
 
