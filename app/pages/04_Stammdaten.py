@@ -430,7 +430,7 @@ if current_tab == 0:
                         )
                     },
                     hide_index=True,
-                    use_container_width=True,
+                    width="stretch",
                     height=350,
                     on_select="rerun",
                     selection_mode="single-row",
@@ -453,12 +453,12 @@ if current_tab == 0:
                         # Button-Bereich für Aktionen
                         col_act1, col_act2 = st.columns(2)
                         with col_act1:
-                            if st.button("👁 Vorschau", key="action_preview", type="primary", use_container_width=True):
+                            if st.button("👁 Vorschau", key="action_preview", type="primary", width="stretch"):
                                 st.session_state["exp_preview_expanded"] = True
                                 st.toast(f"✅ Rolle ausgewählt: {title}")
                                 st.rerun()
                         with col_act2:
-                            if st.button("✏️ Bearbeiten", key="action_edit", use_container_width=True):
+                            if st.button("✏️ Bearbeiten", key="action_edit", width="stretch"):
                                 st.session_state["lab_selected_role"] = key
                                 st.session_state["exp_last_loaded_role_key"] = ""
                                 st.session_state["exp_form_expanded"] = True
@@ -1047,7 +1047,7 @@ elif current_tab == 1:
                             )
                         },
                         hide_index=True,
-                        use_container_width=True,
+                        width="stretch",
                         height=350,
                         on_select="rerun",
                         selection_mode="single-row",
@@ -1473,6 +1473,30 @@ elif current_tab == 3:
     st.subheader("📚 Kontexte - Management")
     st.markdown("**Verwaltung von Kontext-Dokumenten für Projekte**")
     
+    # Info-Box: Was sind Kontexte?
+    with st.expander("ℹ️ Was sind Kontexte und wie werden sie verwendet?", expanded=False):
+        st.markdown("""
+        **Kontexte** sind wiederverwendbare Wissens-Bausteine für Ihre Projekte:
+        
+        **📝 Was sind Kontexte?**
+        - Markdown-Dokumente mit strukturiertem Wissen
+        - Z.B. Anforderungen, Einschränkungen, Business-Regeln, Rahmenbedingungen
+        - Können mehreren Projekten zugeordnet werden
+        
+        **🔧 Wie funktionieren Kontexte?**
+        1. **Erstellen**: Kontext mit Titel, Kürzel und Inhalt (Markdown) anlegen
+        2. **Zuordnen**: In **Projekte-Tab** → Kontexte dem Projekt zuweisen
+        3. **Verwendung**: KI erhält automatisch Kontext-Inhalte beim Chat
+        
+        **🎯 Anwendungsbeispiele:**
+        - **"DSGVO-Anforderungen"**: Datenschutz-Richtlinien für alle Projekte
+        - **"Barrierefreiheit"**: WCAG 2.1 AA Standards
+        - **"Corporate Design"**: Marken-Guidelines
+        - **"Security-Policy"**: Sicherheits-Anforderungen
+        
+        **💡 Tipp**: Kontexte sind projekt-übergreifend → einmal erstellen, mehrfach verwenden!
+        """)
+    
     st.session_state.setdefault("context_mgmt_edit_mode", False)
     st.session_state.setdefault("context_mgmt_selected_key", None)
     st.session_state.setdefault("context_mgmt_search_query", "")
@@ -1549,7 +1573,7 @@ elif current_tab == 3:
                         )
                     },
                     hide_index=True,
-                    use_container_width=True,
+                    width="stretch",
                     height=350,
                     on_select="rerun",
                     selection_mode="single-row",
@@ -1804,7 +1828,7 @@ elif current_tab == 5:
                         )
                     },
                     hide_index=True,
-                    use_container_width=True,
+                    width="stretch",
                     height=350,
                     on_select="rerun",
                     selection_mode="single-row",

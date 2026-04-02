@@ -325,7 +325,7 @@ if selected_project and selected_provider:
                 
                 col1, col2 = st.columns([3, 1])
                 with col2:
-                    send_button = st.form_submit_button("📤 Absenden", type="primary", use_container_width=True)
+                    send_button = st.form_submit_button("📤 Absenden", type="primary", width="stretch")
             
             if send_button and user_input:
                 # Speichere Input temporär

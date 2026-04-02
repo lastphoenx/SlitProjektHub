@@ -218,11 +218,11 @@ if chat_prov:
 
     col_send, col_clear, col_clear_all = st.columns([1, 2, 2])
     with col_send:
-        send_btn = st.button("📨 Senden", type="primary", use_container_width=True)
+        send_btn = st.button("📨 Senden", type="primary", width="stretch")
     with col_clear:
-        clear_btn = st.button(f"🗑️ Verlauf {chat_prov.upper()}", use_container_width=True)
+        clear_btn = st.button(f"🗑️ Verlauf {chat_prov.upper()}", width="stretch")
     with col_clear_all:
-        clear_all_btn = st.button("🗑️ Alle Verläufe löschen", use_container_width=True)
+        clear_all_btn = st.button("🗑️ Alle Verläufe löschen", width="stretch")
 
     if send_btn:
         if not chat_prompt.strip():
