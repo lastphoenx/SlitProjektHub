@@ -107,13 +107,17 @@ def _sentence_burstiness(questions: list[str]) -> float:
     Misst Burstiness auf Satzebene über alle Fragen hinweg.
     Niedrig = alle Sätze gleich lang = KI-typisch.
     Gibt einen Score 0–1 zurück: 0 = hoch variabel (menschlich), 1 = sehr uniform (KI-typisch).
+    Benötigt mind. 5 Fragen und 8 Sätze — sonst ist das Signal zu rauschig.
     """
+    if len(questions) < 5:
+        return 0.0  # Zu wenig Fragen für belastbare Aussage
+
     all_sentences = []
     for q in questions:
         sentences = [s.strip() for s in _SENTENCE_SPLIT.split(q) if s.strip()]
         all_sentences.extend(sentences)
 
-    if len(all_sentences) < 3:
+    if len(all_sentences) < 8:
         return 0.0  # Zu wenig Sätze für Aussage
 
     lengths = [len(s) for s in all_sentences]
@@ -201,8 +205,8 @@ def analyze_vendor_questions(
         + 0.15 * transition_phrases_ratio
         + 0.15 * uniform_openers_ratio
         + 0.10 * sentence_burstiness_score
-        + 0.10 * length_uniformity_score
-        + 0.05 * vol_signal
+        + 0.05 * length_uniformity_score
+        + 0.10 * vol_signal
     )
     ki_score = round(min(ki_score, 1.0), 3)
 

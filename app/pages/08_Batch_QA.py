@@ -128,6 +128,18 @@ st.markdown("---")
 st.markdown("### 🤖 KI-Erkennung (optional)")
 st.caption("Analysiert die Fragen auf typische Merkmale KI-generierter Texte – pro Anbieter und gesamt")
 
+# Session State für KI-Analyse (persistiert über Reruns)
+st.session_state.setdefault("ki_analysis_result", None)
+st.session_state.setdefault("ki_analysis_csv_id", None)
+st.session_state.setdefault("ki_raw_questions", [])
+st.session_state.setdefault("ki_ai_results", {})
+
+# Analyse-Ergebnis zurücksetzen wenn andere CSV gewählt
+if st.session_state["ki_analysis_csv_id"] != selected_csv_id:
+    st.session_state["ki_analysis_result"] = None
+    st.session_state["ki_raw_questions"] = []
+    st.session_state["ki_ai_results"] = {}
+
 if st.button("🔍 Fragen analysieren", help="Analysiert alle Fragen aus der CSV auf KI-Muster (ohne API-Aufrufe)"):
     with get_session() as session:
         ki_chunks_raw = session.exec(
@@ -148,58 +160,66 @@ if st.button("🔍 Fragen analysieren", help="Analysiert alle Fragen aus der CSV
     else:
         with st.spinner("Analysiere…"):
             ki_result = analyze_all_vendors(ki_questions)
+        st.session_state["ki_analysis_result"] = ki_result
+        st.session_state["ki_raw_questions"] = ki_questions
+        st.session_state["ki_analysis_csv_id"] = selected_csv_id
+        st.session_state["ki_ai_results"] = {}  # AI-Ergebnisse zurücksetzen bei neuer Analyse
 
-        total_q = ki_result["total_questions"]
-        total_v = ki_result["total_vendors"]
-        overall = ki_result["overall_ki_score"]
-        ki_v_count = ki_result["ki_vendors_count"]
-        ki_v_ratio = ki_result["ki_vendors_ratio"]
+# Ergebnis anzeigen (auch nach Rerun durch zweiten Button)
+if st.session_state["ki_analysis_result"] is not None:
+    ki_result = st.session_state["ki_analysis_result"]
+    ki_questions = st.session_state["ki_raw_questions"]
 
-        # Gesamtfazit
-        if overall >= 0.70:
-            overall_verdict = "🤖 Sehr hoher KI-Index – wahrscheinlich grossflächiger ChatGPT-Einsatz"
-            overall_color = "error"
-        elif overall >= 0.45:
-            overall_verdict = "⚠️ Erhöhter KI-Index – teilweiser KI-Einsatz wahrscheinlich"
-            overall_color = "warning"
-        elif overall >= 0.25:
-            overall_verdict = "🔍 Moderater KI-Index – vereinzelte Hinweise"
-            overall_color = "info"
-        else:
-            overall_verdict = "✅ Niedriger KI-Index – Fragen wirken überwiegend manuell verfasst"
-            overall_color = "success"
+    total_q = ki_result["total_questions"]
+    total_v = ki_result["total_vendors"]
+    overall = ki_result["overall_ki_score"]
+    ki_v_count = ki_result["ki_vendors_count"]
 
-        col_a, col_b, col_c, col_d = st.columns(4)
-        col_a.metric("Fragen total", total_q)
-        col_b.metric("Anbieter", total_v)
-        col_c.metric("Gesamt-KI-Index", f"{overall:.0%}")
-        col_d.metric("Anbieter mit KI-Verdacht", f"{ki_v_count} / {total_v}")
+    # Gesamtfazit
+    if overall >= 0.70:
+        overall_verdict = "🤖 Sehr hoher KI-Index – wahrscheinlich grossflächiger ChatGPT-Einsatz"
+        overall_color = "error"
+    elif overall >= 0.45:
+        overall_verdict = "⚠️ Erhöhter KI-Index – teilweiser KI-Einsatz wahrscheinlich"
+        overall_color = "warning"
+    elif overall >= 0.25:
+        overall_verdict = "🔍 Moderater KI-Index – vereinzelte Hinweise"
+        overall_color = "info"
+    else:
+        overall_verdict = "✅ Niedriger KI-Index – Fragen wirken überwiegend manuell verfasst"
+        overall_color = "success"
 
-        getattr(st, overall_color)(overall_verdict)
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric("Fragen total", total_q)
+    col_b.metric("Anbieter", total_v)
+    col_c.metric("Gesamt-KI-Index", f"{overall:.0%}")
+    col_d.metric("Anbieter mit KI-Verdacht", f"{ki_v_count} / {total_v}")
 
-        # Ranking-Tabelle
-        rows = []
-        for vendor, res in ki_result["ranking"]:
-            rows.append({
-                "Lieferant": vendor,
-                "Fragen": res["count"],
-                "KI-Score": f"{res['ki_score']:.0%}",
-                "Strukturrefs": f"{res['structural_refs_ratio']:.0%}",
-                "KI-Floskeln": f"{res['ki_phrases_ratio']:.0%}",
-                "Übergänge": f"{res['transition_phrases_ratio']:.0%}",
-                "Uniforme Einstiege": f"{res['uniform_openers_ratio']:.0%}",
-                "Burstiness ↓": f"{res['sentence_burstiness_score']:.0%}",
-                "Volumen ↑": f"{res['volume_signal']:.0%}",
-                "Ø Länge": f"{res['avg_length']:.0f} Z.",
-                "Urteil": f"{res['verdict_emoji']} {res['verdict']}",
-            })
+    getattr(st, overall_color)(overall_verdict)
 
-        ranking_df = pd.DataFrame(rows)
-        st.dataframe(ranking_df, width="stretch", hide_index=True)
+    # Ranking-Tabelle
+    rows = []
+    for vendor, res in ki_result["ranking"]:
+        rows.append({
+            "Lieferant": vendor,
+            "Fragen": res["count"],
+            "KI-Score": f"{res['ki_score']:.0%}",
+            "Strukturrefs": f"{res['structural_refs_ratio']:.0%}",
+            "KI-Floskeln": f"{res['ki_phrases_ratio']:.0%}",
+            "Übergänge": f"{res['transition_phrases_ratio']:.0%}",
+            "Uniforme Einstiege": f"{res['uniform_openers_ratio']:.0%}",
+            "Burstiness ↓": f"{res['sentence_burstiness_score']:.0%}",
+            "Volumen ↑": f"{res['volume_signal']:.0%}",
+            "Ø Länge": f"{res['avg_length']:.0f} Z.",
+            "Urteil": f"{res['verdict_emoji']} {res['verdict']}",
+        })
 
-        with st.expander("ℹ️ Wie wird der KI-Score berechnet?"):
-            st.markdown(
-                """
+    ranking_df = pd.DataFrame(rows)
+    st.dataframe(ranking_df, width="stretch", hide_index=True)
+
+    with st.expander("ℹ️ Wie wird der KI-Score berechnet?"):
+        st.markdown(
+            """
 Der KI-Score ist ein gewichteter Heuristik-Index (0–100%) basierend auf sieben textbasierten Merkmalen:
 
 | Merkmal | Gewicht | Erklärung |
@@ -208,67 +228,63 @@ Der KI-Score ist ein gewichteter Heuristik-Index (0–100%) basierend auf sieben
 | **KI-Floskeln** | 20% | "Bitte beschreiben Sie…", "Wie stellen Sie sicher…" |
 | **Übergänge** | 15% | "Darüber hinaus", "Des Weiteren", "Im Hinblick auf…" |
 | **Uniforme Einstiege** | 15% | Gleichartige Satzeinstiege über alle Fragen |
-| **Burstiness ↓** | 10% | Gleichmässige Satzlängen innerhalb der Fragen |
-| **Längenuniformität** | 10% | Uniforme Fragelänge (niedriger CV) |
-| **Volumen ↑** | 5% | Überdurchschnittlich viele Fragen |
+| **Burstiness ↓** | 10% | Gleichmässige Satzlängen (nur ab 5 Fragen / 8 Sätzen) |
+| **Volumen ↑** | 10% | Überdurchschnittlich viele Fragen |
+| **Längenuniformität** | 5% | Uniforme Fragelänge (niedriger CV) |
 
 Ein Score ≥ 70% gilt als **sehr wahrscheinlich KI-generiert**, ≥ 45% als **verdächtig**.
 Kein Werkzeug ist perfekt – der Score ist ein Hinweis, kein Beweis.
-                """
-            )
-
-        # --- Optionale KI-Tiefenanalyse ---
-        st.markdown("#### 🧠 KI-gestützte Tiefenanalyse (optional)")
-        st.caption("Schickt eine Stichprobe der Fragen eines Anbieters an OpenAI/Anthropic für eine zweite Meinung.")
-
-        st.session_state.setdefault("ki_ai_results", {})
-
-        vendor_list = [v for v, _ in ki_result["ranking"]]
-        selected_ai_vendor = st.selectbox(
-            "Anbieter für Tiefenanalyse wählen",
-            options=vendor_list,
-            key="ki_ai_vendor_select"
+            """
         )
 
-        if st.button("🔬 KI-Tiefenanalyse starten", key="ki_ai_analyze_btn"):
-            vendor_questions = ki_result["vendors"][selected_ai_vendor]
-            all_vendor_qs = []
-            for chunk in ki_questions:
-                if str(chunk.get("Lieferant", "")).strip() == selected_ai_vendor:
-                    q = str(chunk.get("Frage", "")).strip()
-                    if q:
-                        all_vendor_qs.append(q)
+    # --- Optionale KI-Tiefenanalyse ---
+    st.markdown("#### 🧠 KI-gestützte Tiefenanalyse (optional)")
+    st.caption("Schickt eine Stichprobe der Fragen eines Anbieters an OpenAI/Anthropic für eine zweite Meinung.")
 
-            with st.spinner(f"Analysiere {selected_ai_vendor} mit {st.session_state.get('global_llm_provider', 'LLM')}…"):
-                ai_result = analyze_vendor_with_ai(
-                    questions=all_vendor_qs,
-                    vendor=selected_ai_vendor,
-                    provider=st.session_state.get("global_llm_provider"),
-                    model=st.session_state.get("global_llm_model"),
-                    temperature=0.2,
-                )
-            st.session_state["ki_ai_results"][selected_ai_vendor] = ai_result
+    vendor_list = [v for v, _ in ki_result["ranking"]]
+    selected_ai_vendor = st.selectbox(
+        "Anbieter für Tiefenanalyse wählen",
+        options=vendor_list,
+        key="ki_ai_vendor_select"
+    )
 
-        if selected_ai_vendor in st.session_state["ki_ai_results"]:
-            ai_res = st.session_state["ki_ai_results"][selected_ai_vendor]
-            if "error" in ai_res:
-                st.error(f"Fehler: {ai_res['error']}")
-            else:
-                ai_score = ai_res.get("ki_score", "?")
-                confidence = ai_res.get("confidence", "?")
-                fazit = ai_res.get("fazit", "")
-                merkmale = ai_res.get("hauptmerkmale", [])
-                heur_score = ki_result["vendors"][selected_ai_vendor]["ki_score"]
+    if st.button("🔬 KI-Tiefenanalyse starten", key="ki_ai_analyze_btn"):
+        all_vendor_qs = [
+            str(chunk.get("Frage", "")).strip()
+            for chunk in ki_questions
+            if str(chunk.get("Lieferant", "")).strip() == selected_ai_vendor
+            and str(chunk.get("Frage", "")).strip()
+        ]
+        with st.spinner(f"Analysiere {selected_ai_vendor} mit {st.session_state.get('global_llm_provider', 'LLM')}…"):
+            ai_result = analyze_vendor_with_ai(
+                questions=all_vendor_qs,
+                vendor=selected_ai_vendor,
+                provider=st.session_state.get("global_llm_provider"),
+                model=st.session_state.get("global_llm_model"),
+                temperature=0.2,
+            )
+        st.session_state["ki_ai_results"][selected_ai_vendor] = ai_result
 
-                col_x, col_y = st.columns(2)
-                col_x.metric("KI-Score (Heuristik)", f"{heur_score:.0%}")
-                col_y.metric("KI-Score (AI-Urteil)", f"{ai_score}%", help=f"Konfidenz: {confidence}")
-                if fazit:
-                    st.info(f"**Fazit (AI):** {fazit}")
-                if merkmale:
-                    st.markdown("**Erkannte Hauptmerkmale:**")
-                    for m in merkmale:
-                        st.markdown(f"- {m}")
+    if selected_ai_vendor in st.session_state["ki_ai_results"]:
+        ai_res = st.session_state["ki_ai_results"][selected_ai_vendor]
+        if "error" in ai_res:
+            st.error(f"Fehler bei AI-Analyse: {ai_res['error']}")
+        else:
+            ai_score = ai_res.get("ki_score", "?")
+            confidence = ai_res.get("confidence", "?")
+            fazit = ai_res.get("fazit", "")
+            merkmale = ai_res.get("hauptmerkmale", [])
+            heur_score = ki_result["vendors"][selected_ai_vendor]["ki_score"]
+
+            col_x, col_y = st.columns(2)
+            col_x.metric("KI-Score (Heuristik)", f"{heur_score:.0%}")
+            col_y.metric("KI-Score (AI-Urteil)", f"{ai_score}%", help=f"Konfidenz: {confidence}")
+            if fazit:
+                st.info(f"**Fazit (AI):** {fazit}")
+            if merkmale:
+                st.markdown("**Erkannte Hauptmerkmale:**")
+                for m in merkmale:
+                    st.markdown(f"- {m}")
 
 # ============ SCHRITT 3: ROLLEN WÄHLEN ============
 st.markdown("---")
