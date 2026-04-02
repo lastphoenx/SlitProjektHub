@@ -10,10 +10,13 @@ S = get_settings()
 engine = create_engine(S.db_url, echo=False)
 
 DOCUMENT_CLASSIFICATIONS = [
-    "API-Doku",
-    "Anforderung", 
-    "Tutorial",
-    "Richtlinie",
+    "Pflichtenheft (Projekt)",
+    "Pflichtenheft (Rolle)",
+    "Anforderung/Feature",
+    "Standard/Richtlinie",
+    "FAQ/Fragen-Katalog",
+    "API-Dokumentation",
+    "Tutorial/Anleitung",
     "Sonstiges"
 ]
 
@@ -124,6 +127,8 @@ class Document(SQLModel, table=True):
     file_size: Optional[int] = None
     embedding_model: Optional[str] = None
     chunk_count: int = Field(default=0)
+    chunk_size_used: Optional[int] = None  # Verwendete Chunk-Größe beim Upload
+    linked_role_keys: Optional[str] = None  # JSON-Array: ["role-1", "role-2"] für Rollen-Dokumente
     uploaded_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False, index=True)

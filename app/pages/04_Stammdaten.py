@@ -2132,7 +2132,7 @@ elif current_tab == 4:
         st.markdown("#### 📤 Dokument hochladen")
         
         uploaded_file = st.file_uploader(
-            "Datei hochladen (PDF, TXT, MD, etc.)",
+            "Datei hochladen (PDF, TXT, MD, CSV, etc.)",
             type=["pdf", "txt", "md", "csv", "json", "yaml", "yml"],
             key="doc_file_uploader"
         )
@@ -2143,6 +2143,50 @@ elif current_tab == 4:
             key="doc_classification_select"
         )
         
+        # Chunk-Größe (editierbar)
+        default_chunk_size = st.session_state.get("global_rag_chunk_size", 1000)
+        chunk_size = st.number_input(
+            "Chunk-Größe (Zeichen)",
+            min_value=200,
+            max_value=5000,
+            value=default_chunk_size,
+            step=100,
+            key="doc_chunk_size_input",
+            help="Größere Chunks = mehr Kontext, kleinere = präziser. Standard: 1000"
+        )
+        
+        # Rollen-Zuordnung bei "Pflichtenheft (Rolle)"
+        linked_role_keys = None
+        if classification == "Pflichtenheft (Rolle)":
+            st.info("💡 **Rollen-Dokument**: Wählen Sie die zugehörigen Rollen aus")
+            all_roles = list_roles()
+            if all_roles:
+                role_options = {r.key: f"{r.title} ({r.short_code})" for r in all_roles}
+                selected_roles = st.multiselect(
+                    "Zugehörige Rollen",
+                    options=list(role_options.keys()),
+                    format_func=lambda x: role_options.get(x, x),
+                    key="doc_linked_roles_select",
+                    help="Dieses Dokument wird NUR bei Task-Gen für diese Rollen verwendet"
+                )
+                if selected_roles:
+                    linked_role_keys = selected_roles
+            else:
+                st.warning("⚠️ Keine Rollen vorhanden. Bitte erstellen Sie zuerst Rollen.")
+        
+        # CSV-spezifische Optionen
+        csv_delimiter = ";"
+        if uploaded_file and uploaded_file.name.endswith(".csv"):
+            st.info("📊 **CSV-Datei erkannt**: Jede Zeile wird als separater Chunk behandelt (ideal für Listen/Fragen).")
+            csv_delimiter = st.selectbox(
+                "CSV-Trennzeichen (Delimiter)",
+                options=[";", ",", "\t", "|"],
+                index=0,
+                key="csv_delimiter_select",
+                help="Wählen Sie das Trennzeichen Ihrer CSV-Datei. Standard für deutsche Excel-Dateien: ';'"
+            )
+            st.caption("**Erforderliche Spalten für Batch-QA:** Nr, Lieferant, Frage (Antwort ist optional)")
+        
         if uploaded_file is not None:
             col1, col2 = st.columns(2)
             
@@ -2150,12 +2194,13 @@ elif current_tab == 4:
                 if st.button("✅ Hochladen & Einbetten", key="doc_submit_btn", type="primary"):
                     with st.spinner("Datei wird verarbeitet..."):
                         file_data = uploaded_file.read()
-                        chunk_size = st.session_state.get("global_rag_chunk_size", 1000)
                         success, message = ingest_document(
                             file_name=uploaded_file.name,
                             file_bytes=file_data,
                             classification=classification,
-                            chunk_size=chunk_size
+                            chunk_size=chunk_size,
+                            csv_delimiter=csv_delimiter,
+                            linked_role_keys=linked_role_keys
                         )
                         
                         if success:
@@ -2210,6 +2255,9 @@ elif current_tab == 4:
                     "Dateiname": d.filename,
                     "Klassifizierung": d.classification,
                     "Chunks": d.chunk_count,
+                    "Ø Chunk-Size": d.chunk_size_used if d.chunk_size_used else (
+                        f"~{d.file_size // d.chunk_count:,}" if d.chunk_count > 0 and d.file_size else "—"
+                    ),
                     "Größe (KB)": d.file_size // 1024 if d.file_size else 0,
                     "Hochgeladen": d.uploaded_at.strftime("%Y-%m-%d %H:%M") if d.uploaded_at else "",
                     "SHA256": d.sha256_hash[:16] + "..."

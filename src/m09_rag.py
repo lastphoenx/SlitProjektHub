@@ -260,26 +260,39 @@ def index_task(task_key: str, force: bool = False) -> bool:
     return True
 
 
-def _keyword_search(query: str, project_key: str | None = None, limit: int = 5) -> dict:
+def _keyword_search(
+    query: str, 
+    project_key: str | None = None, 
+    limit: int = 5,
+    role_key: str | None = None,
+    classification_filter: str | None = None
+) -> dict:
     """
     Keyword-basierte Suche (LIKE-Match in Text).
     Args:
         query: Die Nutzer-Query
         project_key: Optional: Filter für Dokumente
         limit: Max Resultate
+        role_key: Optional: Filter für Rollen-spezifische Dokumente
+        classification_filter: Optional: Filter für Dokument-Klassifizierung
     Returns: Dict mit keyword-gefundenen Chunks
     """
     keywords = query.lower().split()
     
     with get_session() as ses:
-        chunks = ses.exec(select(DocumentChunk).join(Document).where(Document.is_deleted == False)).all()
+        doc_query = select(DocumentChunk).join(Document).where(Document.is_deleted == False)
         
         if project_key:
-            chunks = ses.exec(
-                select(DocumentChunk).join(Document)
-                .join(ProjectDocumentLink, ProjectDocumentLink.document_id == Document.id)
-                .where((Document.is_deleted == False) & (ProjectDocumentLink.project_key == project_key))
-            ).all()
+            doc_query = doc_query.join(ProjectDocumentLink, ProjectDocumentLink.document_id == Document.id)\
+                                 .where(ProjectDocumentLink.project_key == project_key)
+        
+        if role_key:
+            doc_query = doc_query.where(Document.linked_role_keys.like(f'%"{role_key}"%'))
+        
+        if classification_filter:
+            doc_query = doc_query.where(Document.classification == classification_filter)
+        
+        chunks = ses.exec(doc_query).all()
         
         matches = []
         for chunk in chunks:
@@ -301,15 +314,24 @@ def _keyword_search(query: str, project_key: str | None = None, limit: int = 5) 
         return sorted(matches, key=lambda x: x["match_score"], reverse=True)[:limit]
 
 
-def retrieve_relevant_chunks_hybrid(query: str, project_key: str | None = None, limit: int = 5, threshold: float = 0.5) -> dict:
+def retrieve_relevant_chunks_hybrid(
+    query: str, 
+    project_key: str | None = None, 
+    limit: int = 5, 
+    threshold: float = 0.5,
+    role_key: str | None = None,
+    classification_filter: str | None = None
+) -> dict:
     """
     Hybrid-Suche: Semantic (70%) + Keyword (30%) kombinieren.
     
     Args:
         query: Die Nutzer-Query
-        project_key: Optional: Filter für Dokumente
+        project_key: Optional: Filter für Projekt-Dokumente
         limit: Max Resultate pro Typ
         threshold: Min Similarity für Semantic
+        role_key: Optional: Filter für Rollen-spezifische Dokumente (verwendet linked_role_keys)
+        classification_filter: Optional: Filter für Dokument-Klassifizierung
     
     Returns: Dict mit kombinierten Ergebnissen
     """
@@ -318,10 +340,18 @@ def retrieve_relevant_chunks_hybrid(query: str, project_key: str | None = None, 
         return _RAG_CACHE[cache_key]
 
     # Semantic-Suche
-    semantic_results = retrieve_relevant_chunks(query, project_key, limit, threshold)
+    semantic_results = retrieve_relevant_chunks(
+        query, project_key, limit, threshold, 
+        role_key=role_key, 
+        classification_filter=classification_filter
+    )
     
     # Keyword-Suche
-    keyword_docs = _keyword_search(query, project_key, limit)
+    keyword_docs = _keyword_search(
+        query, project_key, limit,
+        role_key=role_key,
+        classification_filter=classification_filter
+    )
     
     # Hybrid: Dokumente kombinieren
     if semantic_results.get("documents") and keyword_docs:
@@ -344,16 +374,25 @@ def retrieve_relevant_chunks_hybrid(query: str, project_key: str | None = None, 
     return semantic_results
 
 
-def retrieve_relevant_chunks(query: str, project_key: str | None = None, limit: int = 5, threshold: float = 0.5) -> dict:
+def retrieve_relevant_chunks(
+    query: str, 
+    project_key: str | None = None, 
+    limit: int = 5, 
+    threshold: float = 0.5,
+    role_key: str | None = None,
+    classification_filter: str | None = None
+) -> dict:
     """
     Sucht die relevantesten Chunks (Rollen, Kontexte, Projekte, Tasks, Decisions, Dokumente) für eine Query.
     Nutzt Similarity Search auf den Embeddings.
     
     Args:
         query: Die Nutzer-Query
-        project_key: Optional: Filter für Dokumente
+        project_key: Optional: Filter für Projekt-Dokumente
         limit: Max Anzahl Resultate pro Typ
         threshold: Min Similarity Score (0-1)
+        role_key: Optional: Filter für Rollen-spezifische Dokumente
+        classification_filter: Optional: Filter für Dokument-Klassifizierung
     
     Returns: Dict mit relevanten Objekten:
         {
@@ -485,9 +524,18 @@ def retrieve_relevant_chunks(query: str, project_key: str | None = None, limit: 
         # Dokumente durchsuchen (Chunks)
         doc_query = select(DocumentChunk).join(Document).where(Document.is_deleted == False)
         
+        # Filter: Projekt-Zuordnung
         if project_key:
             doc_query = doc_query.join(ProjectDocumentLink, ProjectDocumentLink.document_id == Document.id)\
                                  .where(ProjectDocumentLink.project_key == project_key)
+        
+        # Filter: Rollen-Zuordnung (für Task-Gen) - NUR Rollen-spezifische Dokumente
+        if role_key:
+            doc_query = doc_query.where(Document.linked_role_keys.like(f'%"{role_key}"%'))
+        
+        # Filter: Klassifizierung
+        if classification_filter:
+            doc_query = doc_query.where(Document.classification == classification_filter)
         
         chunks = ses.exec(doc_query).all()
         

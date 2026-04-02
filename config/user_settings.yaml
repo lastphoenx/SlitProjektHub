@@ -1,6 +1,6 @@
-model: haiku-4.5
+model: sonnet-4.6
 provider: anthropic
-rag_chunk_size: 3400
+rag_chunk_size: 2900
 rag_enabled: true
 rag_similarity_threshold: 0.6
 rag_top_k: 5

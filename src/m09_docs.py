@@ -23,6 +23,11 @@ try:
 except ImportError:
     pdfplumber = None
 
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
 from .m01_config import get_settings
 from .m03_db import (
     get_session, Document, DocumentChunk, ProjectDocumentLink, 
@@ -122,11 +127,54 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[st
     return chunks
 
 
+def process_csv_to_chunks(file_path: Path, delimiter: str = ";") -> Tuple[bool, str, List[dict]]:
+    """
+    Verarbeitet CSV-Datei für Batch-QA:
+    - Jede Zeile wird ein Chunk (als JSON gespeichert)
+    - Validiert Pflicht-Spalten: Nr, Lieferant, Frage
+    - Returns: (success, message, chunks_as_dicts)
+    """
+    if pd is None:
+        return False, "pandas ist nicht installiert - CSV-Import nicht möglich", []
+    
+    try:
+        df = pd.read_csv(file_path, sep=delimiter, encoding="utf-8")
+    except Exception as e:
+        try:
+            df = pd.read_csv(file_path, sep=delimiter, encoding="latin-1")
+        except Exception as e2:
+            return False, f"CSV konnte nicht gelesen werden: {e2}", []
+    
+    # Validierung: Pflicht-Spalten
+    required_cols = ["Nr", "Lieferant", "Frage"]
+    missing = [col for col in required_cols if col not in df.columns]
+    if missing:
+        return False, f"CSV fehlen Pflicht-Spalten: {', '.join(missing)}. Gefunden: {list(df.columns)}", []
+    
+    # Stelle sicher dass "Antwort"-Spalte existiert (optional im Input, aber wir brauchen sie für Output)
+    if "Antwort" not in df.columns:
+        df["Antwort"] = ""
+    
+    chunks = []
+    for idx, row in df.iterrows():
+        chunk_dict = {
+            "Nr": str(row.get("Nr", idx)),
+            "Lieferant": str(row.get("Lieferant", "")),
+            "Frage": str(row.get("Frage", "")),
+            "Antwort": str(row.get("Antwort", ""))
+        }
+        chunks.append(chunk_dict)
+    
+    return True, f"CSV erfolgreich verarbeitet: {len(chunks)} Zeilen/Fragen", chunks
+
+
 def ingest_document(
     file_name: str,
     file_bytes: bytes,
     classification: str,
-    chunk_size: int = 1000
+    chunk_size: int = 1000,
+    csv_delimiter: str = ";",
+    linked_role_keys: list[str] | None = None
 ) -> Tuple[bool, str]:
     """
     Verarbeitet ein hochgeladenes Dokument:
@@ -135,6 +183,9 @@ def ingest_document(
     3. Text extrahieren
     4. Chunken & Embedden
     5. DB-Einträge erstellen
+    
+    Für CSV: csv_delimiter bestimmt das Trennzeichen (default: ";")
+    linked_role_keys: Optional, für "Pflichtenheft (Rolle)" - Liste von role.key Werten
     """
     file_hash = calculate_sha256(file_bytes)
     
@@ -165,9 +216,16 @@ def ingest_document(
         
         # Text extrahieren
         text_content = ""
+        csv_chunks = None  # Für strukturierte CSV-Verarbeitung
         ext = file_path.suffix.lower()
         
-        if ext == ".pdf":
+        if ext == ".csv":
+            # CSV: spezielle Behandlung - jede Zeile wird ein strukturierter Chunk
+            success, message, csv_data = process_csv_to_chunks(file_path, delimiter=csv_delimiter)
+            if not success:
+                return False, f"CSV-Verarbeitung fehlgeschlagen: {message}"
+            csv_chunks = csv_data  # Liste von dicts
+        elif ext == ".pdf":
             text_content = extract_text_from_pdf(file_path)
         elif ext in [".md", ".txt", ".json", ".yaml", ".yml"]:
             try:
@@ -185,6 +243,10 @@ def ingest_document(
                 pass
 
         # DB Eintrag erstellen
+        linked_keys_json = None
+        if linked_role_keys:
+            linked_keys_json = json.dumps(linked_role_keys)
+        
         doc = Document(
             filename=file_name,
             sha256_hash=file_hash,
@@ -192,14 +254,37 @@ def ingest_document(
             file_path=str(file_path),
             file_size=len(file_bytes),
             embedding_model=EMBEDDING_MODEL,
-            chunk_count=0
+            chunk_count=0,
+            chunk_size_used=chunk_size,
+            linked_role_keys=linked_keys_json
         )
         session.add(doc)
         session.commit()
         session.refresh(doc)
         
         # Chunken & Embedden
-        if text_content:
+        if csv_chunks:
+            # CSV: Jede Zeile ist ein Chunk (als JSON gespeichert)
+            doc.chunk_count = len(csv_chunks)
+            session.add(doc)
+            
+            for i, row_dict in enumerate(csv_chunks):
+                chunk_text_json = json.dumps(row_dict, ensure_ascii=False)
+                emb = embed_text(row_dict.get("Frage", ""))  # Embed nur die Frage für Suche
+                chunk_entry = DocumentChunk(
+                    document_id=doc.id,
+                    chunk_index=i,
+                    chunk_text=chunk_text_json,  # Strukturierte Daten als JSON
+                    embedding=json.dumps(emb) if emb else None,
+                    embedding_model=EMBEDDING_MODEL,
+                    tokens_count=len(chunk_text_json) // 4
+                )
+                session.add(chunk_entry)
+            
+            session.commit()
+            clear_rag_cache()
+            return True, f"✅ CSV erfolgreich importiert: {doc.chunk_count} Fragen"
+        elif text_content:
             chunks = chunk_text(text_content, chunk_size=chunk_size)
             doc.chunk_count = len(chunks)
             session.add(doc)

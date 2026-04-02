@@ -346,13 +346,13 @@ def render_global_llm_settings():
             _save_settings_to_disk()
 
         chunk_size = st.slider(
-            "Chunk-Größe",
+            "Standard Chunk-Größe (Upload)",
             min_value=100,
             max_value=5000,
             value=st.session_state.get("global_rag_chunk_size", 1000),
             step=100,
             key="sidebar_rag_chunk_size_slider",
-            help="Größe der Text-Chunks für RAG (in Zeichen)"
+            help="Standard-Chunk-Größe für neue Dokument-Uploads (in Zeichen). Kann pro Dokument angepasst werden."
         )
         if st.session_state["global_rag_chunk_size"] != chunk_size:
             st.session_state["global_rag_chunk_size"] = chunk_size

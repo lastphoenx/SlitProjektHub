@@ -349,3 +349,25 @@ def get_project_structure(key: str) -> str:
              except Exception: pass
              
     return "\n".join(parts)
+
+
+def get_project_roles(key: str) -> list[Role]:
+    """
+    Holt alle Rollen die einem Projekt zugeordnet sind.
+    Returns: Liste von Role-Objekten (leer falls keine Rollen oder Projekt nicht gefunden)
+    """
+    skey = _slugify(key)
+    with get_session() as ses:
+        proj = ses.exec(select(Project).where(Project.key == skey)).first()
+        if not proj or not proj.role_keys:
+            return []
+        
+        try:
+            role_keys = json.loads(proj.role_keys) if isinstance(proj.role_keys, str) else proj.role_keys
+            if not role_keys or not isinstance(role_keys, list):
+                return []
+            
+            roles = ses.exec(select(Role).where(Role.key.in_(role_keys))).all()
+            return list(roles)
+        except:
+            return []

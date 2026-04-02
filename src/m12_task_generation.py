@@ -67,7 +67,8 @@ def generate_tasks_from_role(
                 query,
                 project_key=None,
                 limit=max(1, int(rag_top_k)),
-                threshold=max(0.0, min(1.0, float(rag_similarity_threshold)))
+                threshold=max(0.0, min(1.0, float(rag_similarity_threshold))),
+                role_key=role_key  # NUR Dokumente dieser Rolle (alle Klassifizierungen)
             )
             rag_results = deduplicate_results(rag_results)
             rag_context = build_rag_context_from_search(rag_results)
