@@ -207,9 +207,12 @@ if st.session_state["ki_analysis_result"] is not None:
             "Strukturrefs": f"{res['structural_refs_ratio']:.0%}",
             "KI-Floskeln": f"{res['ki_phrases_ratio']:.0%}",
             "Übergänge": f"{res['transition_phrases_ratio']:.0%}",
-            "Uniforme Einstiege": f"{res['uniform_openers_ratio']:.0%}",
-            "Burstiness ↓": f"{res['sentence_burstiness_score']:.0%}",
-            "Volumen ↑": f"{res['volume_signal']:.0%}",
+            "Einstiege": f"{res['uniform_openers_ratio']:.0%}",
+            "Bullets": f"{res['bullet_sublists_ratio']:.0%}",
+            "Aufzähl.": f"{res['exhaustive_enum_ratio']:.0%}",
+            "Informal ↓": f"{res['informal_markers_ratio']:.0%}",
+            "Burstiness": f"{res['sentence_burstiness_score']:.0%}",
+            "Volumen": f"{res['volume_signal']:.0%}",
             "Ø Länge": f"{res['avg_length']:.0f} Z.",
             "Urteil": f"{res['verdict_emoji']} {res['verdict']}",
         })
@@ -220,17 +223,20 @@ if st.session_state["ki_analysis_result"] is not None:
     with st.expander("ℹ️ Wie wird der KI-Score berechnet?"):
         st.markdown(
             """
-Der KI-Score ist ein gewichteter Heuristik-Index (0–100%) basierend auf sieben textbasierten Merkmalen:
+Der KI-Score ist ein gewichteter Heuristik-Index (0–100%) basierend auf zehn textbasierten Merkmalen:
 
 | Merkmal | Gewicht | Erklärung |
 |---|---|---|
-| **Strukturrefs** | 25% | Kapitel X.Y / Abschnitt X / Anforderung X |
-| **KI-Floskeln** | 20% | "Bitte beschreiben Sie…", "Wie stellen Sie sicher…" |
-| **Übergänge** | 15% | "Darüber hinaus", "Des Weiteren", "Im Hinblick auf…" |
-| **Uniforme Einstiege** | 15% | Gleichartige Satzeinstiege über alle Fragen |
-| **Burstiness ↓** | 10% | Gleichmässige Satzlängen (nur ab 5 Fragen / 8 Sätzen) |
-| **Volumen ↑** | 10% | Überdurchschnittlich viele Fragen |
-| **Längenuniformität** | 5% | Uniforme Fragelänge (niedriger CV) |
+| **Strukturrefs** | 20% | Kapitel X.Y / Abschnitt X / Anforderung X |
+| **KI-Floskeln** | 15% | "Bitte beschreiben Sie…", "Wie stellen Sie sicher…" |
+| **Bullets** | 12% | Bullet-/Unterlisten innerhalb einer Frage |
+| **Aufzähl.** | 10% | Erschöpfende Aufzählungen: "A, B, C und D" |
+| **Übergänge** | 10% | "Darüber hinaus", "Des Weiteren", "Im Hinblick auf…" |
+| **Einstiege** | 10% | Gleichartige Satzeinstiege über alle Fragen |
+| **Volumen** | 10% | Überdurchschnittlich viele Fragen |
+| **Burstiness** | 8% | Gleichmässige Satzlängen (ab 5 Fragen / 8 Sätzen) |
+| **Länge** | 5% | Uniforme Fragelänge (niedriger CV) |
+| **Informal ↓** | −20% | Abzug bei informellen Markern ("eigentlich", "bei uns", ...) |
 
 Ein Score ≥ 70% gilt als **sehr wahrscheinlich KI-generiert**, ≥ 45% als **verdächtig**.
 Kein Werkzeug ist perfekt – der Score ist ein Hinweis, kein Beweis.
@@ -239,7 +245,7 @@ Kein Werkzeug ist perfekt – der Score ist ein Hinweis, kein Beweis.
 
     # --- Optionale KI-Tiefenanalyse ---
     st.markdown("#### 🧠 KI-gestützte Tiefenanalyse (optional)")
-    st.caption("Schickt eine Stichprobe der Fragen eines Anbieters an OpenAI/Anthropic für eine zweite Meinung.")
+    st.caption("Schickt eine Stichprobe der Fragen eines Anbieters an OpenAI/Anthropic für eine zweite Meinung. OpenAI verwendet immer gpt-4o-mini.")
 
     vendor_list = [v for v, _ in ki_result["ranking"]]
     selected_ai_vendor = st.selectbox(

@@ -68,6 +68,21 @@ _OPENER_PATTERNS = [
 # Satz-Splitter (für Burstiness)
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
+# Bullet-Erkennung innerhalb einer Frage (KI macht gerne Unterlisten)
+_BULLET_PATTERN = re.compile(r"(\n\s*[-•*]|\n\s*\d+\.)\s+\S", re.MULTILINE)
+
+# Erschöpfende Aufzählungen: "X, Y, Z und/sowie W" — KI zählt gerne alles auf
+_ENUMERATION_PATTERN = re.compile(r"\w[\w\s]+,\s*\w[\w\s]+,\s*\w[\w\s]+(,|\s+(und|sowie|oder)\s+)\w[\w\s]+", re.IGNORECASE)
+
+# Informelle Marker die Menschen benutzen, KI aber nicht
+# Anwesenheit dieser senkt den KI-Score
+_INFORMAL_MARKERS = re.compile(
+    r"\b(eigentlich|irgendwie|halt|eben|doch|mal|übrigens|btw|ps:|tipp:|frage:|anmerkung:)\b"
+    r"|\b(wir haben|ich habe|unser|unsere|bei uns|in unserem)\b"
+    r"|[!]{2,}|\?{2,}|\.{3,}",
+    re.IGNORECASE
+)
+
 
 # ---------------------------------------------------------------------------
 # Kern-Analysefunktionen
@@ -88,6 +103,21 @@ def _count_transition_phrases(text: str) -> int:
 def _has_uniform_opener(text: str) -> bool:
     stripped = text.strip()
     return any(p.match(stripped) for p in _OPENER_PATTERNS)
+
+
+def _has_bullet_sublist(text: str) -> bool:
+    """KI gliedert Fragen gerne in Unterpunkte."""
+    return bool(_BULLET_PATTERN.search(text))
+
+
+def _has_exhaustive_enumeration(text: str) -> bool:
+    """KI listet Dinge erschöpfend auf: 'A, B, C und D'."""
+    return bool(_ENUMERATION_PATTERN.search(text))
+
+
+def _has_informal_markers(text: str) -> bool:
+    """Menschliche Marker: 'eigentlich', 'bei uns', 'Ich habe...', '...', '!!' etc."""
+    return bool(_INFORMAL_MARKERS.search(text))
 
 
 def _coefficient_of_variation(values: list[float]) -> float:
@@ -163,6 +193,9 @@ def analyze_vendor_questions(
             "ki_phrases_ratio": 0.0,
             "transition_phrases_ratio": 0.0,
             "uniform_openers_ratio": 0.0,
+            "bullet_sublists_ratio": 0.0,
+            "exhaustive_enum_ratio": 0.0,
+            "informal_markers_ratio": 0.0,
             "sentence_burstiness_score": 0.0,
             "length_cv": 0.0,
             "avg_length": 0.0,
@@ -188,27 +221,42 @@ def analyze_vendor_questions(
     # --- Feature 4: Uniforme Satzeinstiege ---
     uniform_openers_ratio = sum(1 for q in questions if _has_uniform_opener(q)) / n
 
-    # --- Feature 5: Burstiness (Satzlängen-Uniformität über alle Fragen) ---
+    # --- Feature 5: Bullet-Unterlisten innerhalb von Fragen ---
+    bullet_sublists_ratio = sum(1 for q in questions if _has_bullet_sublist(q)) / n
+
+    # --- Feature 6: Erschöpfende Aufzählungen ("A, B, C und D") ---
+    exhaustive_enum_ratio = sum(1 for q in questions if _has_exhaustive_enumeration(q)) / n
+
+    # --- Feature 7: Informelle Marker (negativ-Signal: senkt Score) ---
+    informal_count = sum(1 for q in questions if _has_informal_markers(q))
+    informal_markers_ratio = informal_count / n
+    # Wenn >20% der Fragen informelle Marker haben → starkes menschliches Signal
+    informal_penalty = min(informal_markers_ratio / 0.2, 1.0)  # 0–1
+
+    # --- Feature 8: Burstiness (Satzlängen-Uniformität über alle Fragen) ---
     sentence_burstiness_score = _sentence_burstiness(questions)
 
-    # --- Feature 6: Fragelängen-Uniformität ---
+    # --- Feature 9: Fragelängen-Uniformität ---
     length_cv = _coefficient_of_variation([float(l) for l in lengths])
     length_uniformity_score = max(0.0, min(1.0, 1.0 - (length_cv / 0.6)))
 
-    # --- Feature 7: Volumen-Signal ---
+    # --- Feature 10: Volumen-Signal ---
     vol_signal = _volume_signal(n, total_vendors, total_questions or n * total_vendors)
 
-    # --- Gewichteter KI-Score ---
-    ki_score = (
-        0.25 * structural_refs_ratio
-        + 0.20 * ki_phrases_ratio
-        + 0.15 * transition_phrases_ratio
-        + 0.15 * uniform_openers_ratio
-        + 0.10 * sentence_burstiness_score
+    # --- Gewichteter KI-Score (mit Abzug für informelle Marker) ---
+    raw_score = (
+        0.20 * structural_refs_ratio
+        + 0.15 * ki_phrases_ratio
+        + 0.10 * transition_phrases_ratio
+        + 0.10 * uniform_openers_ratio
+        + 0.12 * bullet_sublists_ratio
+        + 0.10 * exhaustive_enum_ratio
+        + 0.08 * sentence_burstiness_score
         + 0.05 * length_uniformity_score
         + 0.10 * vol_signal
     )
-    ki_score = round(min(ki_score, 1.0), 3)
+    # Informelle Marker reduzieren den Score (max. -20%)
+    ki_score = round(min(1.0, max(0.0, raw_score * (1.0 - 0.20 * informal_penalty))), 3)
 
     # --- Urteil ---
     if ki_score >= 0.70:
@@ -230,8 +278,9 @@ def analyze_vendor_questions(
         "structural_refs_ratio": round(structural_refs_ratio, 3),
         "ki_phrases_ratio": round(ki_phrases_ratio, 3),
         "transition_phrases_ratio": round(transition_phrases_ratio, 3),
-        "uniform_openers_ratio": round(uniform_openers_ratio, 3),
-        "sentence_burstiness_score": round(sentence_burstiness_score, 3),
+        "uniform_openers_ratio": round(uniform_openers_ratio, 3),        "bullet_sublists_ratio": round(bullet_sublists_ratio, 3),
+        "exhaustive_enum_ratio": round(exhaustive_enum_ratio, 3),
+        "informal_markers_ratio": round(informal_markers_ratio, 3),        "sentence_burstiness_score": round(sentence_burstiness_score, 3),
         "length_cv": round(length_cv, 3),
         "avg_length": round(avg_length, 1),
         "volume_signal": round(vol_signal, 3),
@@ -245,20 +294,24 @@ def analyze_vendor_questions(
 # Optionale KI-gestützte Tiefenanalyse
 # ---------------------------------------------------------------------------
 
-_AI_SYSTEM_PROMPT = """Du bist Experte für die Erkennung KI-generierter Texte in Ausschreibungsverfahren.
-Du analysierst Bieterfragen aus einer öffentlichen Ausschreibung und bewertest ob sie KI-generiert wurden.
+_AI_SYSTEM_PROMPT = """You are an expert in detecting AI-generated text in public procurement question sets.
+Analyze the provided sample of vendor questions and assess whether they were AI-generated.
 
-Typische Merkmale KI-generierter Ausschreibungsfragen:
-- Systematische Kapitelreferenzen ("Gemäss Kapitel X.Y des Pflichtenhefts...")
-- Uniform strukturierte Formulierungen ohne persönliche Note
-- Gleiche Satzeinstiegsmuster (Bitte beschreiben Sie / Wie stellen Sie sicher / Welche Massnahmen...)
-- Sehr gleichmässige Länge und Komplexität
-- Übergang-Marker wie "Darüber hinaus", "Des Weiteren", "Im Weiteren"
-- Keine Rechtschreibfehler, keine umgangssprachlichen Ausdrücke
-- Keine spezifischen Unternehmens- oder Personenreferenzen
+Typical signs of AI-generated procurement questions:
+- Systematic chapter references ("Gemäss Kapitel X.Y des Pflichtenhefts...")
+- Uniformly structured phrasing with no personal voice
+- Repeated sentence openers (Bitte beschreiben Sie / Wie stellen Sie sicher / Welche Massnahmen...)
+- Very consistent question length and complexity
+- Transition markers: "Darüber hinaus", "Des Weiteren", "Im Weiteren", "Basierend auf"
+- No typos, no colloquial language
+- No specific company or person references
+- Unusually high total question count
 
-Antworte ausschliesslich mit einem JSON-Objekt, keine weiteren Erklärungen:
-{"ki_score": <0-100>, "confidence": "<hoch|mittel|niedrig>", "hauptmerkmale": ["...", "..."], "fazit": "<1 Satz>"}"""
+IMPORTANT: Respond ONLY with a JSON object. No preamble, no explanation, no markdown fences.
+Start your response with { and end with }.
+
+Required format:
+{"ki_score": <integer 0-100>, "confidence": "<hoch|mittel|niedrig>", "hauptmerkmale": ["<feature>", "<feature>"], "fazit": "<one sentence in German>"}"""
 
 
 def analyze_vendor_with_ai(
@@ -283,10 +336,7 @@ def analyze_vendor_with_ai(
     Returns:
         dict mit: ki_score (0–100), confidence, hauptmerkmale, fazit, raw_response
     """
-    try:
-        from src.m08_llm import try_models_with_messages
-    except ImportError:
-        return {"error": "m08_llm nicht verfügbar", "ki_score": None}
+    import json as _json
 
     # Stichprobe: verteilt über die Fragenliste (nicht nur erste N)
     if len(questions) > max_sample:
@@ -297,34 +347,71 @@ def analyze_vendor_with_ai(
 
     sample_text = "\n".join(f"{i+1}. {q}" for i, q in enumerate(sample))
     user_prompt = (
-        f"Anbieter: {vendor}\n"
-        f"Anzahl Fragen insgesamt: {len(questions)}\n"
-        f"Stichprobe ({len(sample)} Fragen):\n\n{sample_text}"
+        f"Vendor: {vendor}\n"
+        f"Total questions: {len(questions)}\n"
+        f"Sample ({len(sample)} questions):\n\n{sample_text}"
     )
+    all_messages = [
+        {"role": "user", "content": user_prompt},
+    ]
 
+    raw = None
     try:
-        raw = try_models_with_messages(
-            provider=provider,
-            system=_AI_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
-            max_tokens=400,
-            temperature=temperature,
-            model=model,
-        )
-        if not raw:
-            return {"error": "Keine Antwort", "ki_score": None}
+        if provider == "openai":
+            from src.m08_llm import have_key
+            if not have_key("openai"):
+                return {"error": "Kein OpenAI API-Key konfiguriert", "ki_score": None}
+            from openai import OpenAI
+            client = OpenAI()
+            # Immer gpt-4o-mini: stabil, günstig, unterstützt JSON-Mode
+            # Das globale UI-Modell wird hier NICHT verwendet (kann experimental/preview sein)
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "system", "content": _AI_SYSTEM_PROMPT}] + all_messages,
+                max_tokens=600,
+                temperature=temperature,
+                response_format={"type": "json_object"},
+            )
+            raw = resp.choices[0].message.content.strip()
 
-        # JSON aus Antwort extrahieren
-        import json as _json
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if json_match:
-            parsed = _json.loads(json_match.group())
-            parsed["raw_response"] = raw
-            return parsed
-        return {"error": "Kein JSON in Antwort", "raw_response": raw, "ki_score": None}
+        elif provider == "anthropic":
+            from src.m08_llm import have_key, get_model_id, DEFAULT_MODELS
+            if not have_key("anthropic"):
+                return {"error": "Kein Anthropic API-Key konfiguriert", "ki_score": None}
+            import anthropic
+            import os
+            client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+            model_id = get_model_id("anthropic", model) or DEFAULT_MODELS.get("anthropic", "claude-3-5-haiku-20241022")
+            msg = client.messages.create(
+                model=model_id,
+                system=_AI_SYSTEM_PROMPT,
+                messages=all_messages,
+                max_tokens=600,
+                temperature=temperature,
+            )
+            raw = msg.content[0].text.strip()
+
+        else:
+            return {"error": f"Provider '{provider}' nicht unterstützt für KI-Analyse", "ki_score": None}
 
     except Exception as e:
-        return {"error": str(e), "ki_score": None}
+        return {"error": str(e), "raw_response": raw, "ki_score": None}
+
+    if not raw:
+        return {"error": "Leere Antwort vom Modell", "ki_score": None}
+
+    # JSON extrahieren: finde erstes '{' und letztes '}'
+    start = raw.find('{')
+    end = raw.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        try:
+            parsed = _json.loads(raw[start:end + 1])
+            parsed["raw_response"] = raw
+            return parsed
+        except _json.JSONDecodeError as e:
+            return {"error": f"JSON-Parse-Fehler: {e}", "raw_response": raw, "ki_score": None}
+
+    return {"error": "Kein JSON in Antwort", "raw_response": raw, "ki_score": None}
 
 
 def analyze_all_vendors(chunks: list[dict]) -> dict:
