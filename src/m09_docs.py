@@ -28,6 +28,11 @@ try:
 except ImportError:
     pd = None
 
+try:
+    from docx import Document as DocxDocument
+except ImportError:
+    DocxDocument = None
+
 from .m01_config import get_settings
 from .m03_db import (
     get_session, Document, DocumentChunk, ProjectDocumentLink, 
@@ -145,23 +150,36 @@ def process_csv_to_chunks(file_path: Path, delimiter: str = ";") -> Tuple[bool, 
         except Exception as e2:
             return False, f"CSV konnte nicht gelesen werden: {e2}", []
     
-    # Validierung: Pflicht-Spalten
-    required_cols = ["Nr", "Lieferant", "Frage"]
-    missing = [col for col in required_cols if col not in df.columns]
+    # Validierung: Pflicht-Spalten (flexibel mit Punkt-Varianten)
+    # Normalisiere Spaltennamen: entferne Punkte und Leerzeichen, lowercase
+    df_normalized_cols = {col.strip().rstrip('.').lower(): col for col in df.columns}
+    
+    required_cols = ["nr", "lieferant", "frage"]
+    missing = []
+    col_mapping = {}  # Maps: required_name -> actual_column_name
+    
+    for req_col in required_cols:
+        if req_col in df_normalized_cols:
+            col_mapping[req_col] = df_normalized_cols[req_col]
+        else:
+            missing.append(req_col.capitalize())
+    
     if missing:
         return False, f"CSV fehlen Pflicht-Spalten: {', '.join(missing)}. Gefunden: {list(df.columns)}", []
     
     # Stelle sicher dass "Antwort"-Spalte existiert (optional im Input, aber wir brauchen sie für Output)
-    if "Antwort" not in df.columns:
+    antwort_col = df_normalized_cols.get("antwort")
+    if not antwort_col:
         df["Antwort"] = ""
+        antwort_col = "Antwort"
     
     chunks = []
     for idx, row in df.iterrows():
         chunk_dict = {
-            "Nr": str(row.get("Nr", idx)),
-            "Lieferant": str(row.get("Lieferant", "")),
-            "Frage": str(row.get("Frage", "")),
-            "Antwort": str(row.get("Antwort", ""))
+            "Nr": str(row.get(col_mapping["nr"], idx)),
+            "Lieferant": str(row.get(col_mapping["lieferant"], "")),
+            "Frage": str(row.get(col_mapping["frage"], "")),
+            "Antwort": str(row.get(antwort_col, ""))
         }
         chunks.append(chunk_dict)
     
@@ -227,6 +245,8 @@ def ingest_document(
             csv_chunks = csv_data  # Liste von dicts
         elif ext == ".pdf":
             text_content = extract_text_from_pdf(file_path)
+        elif ext == ".docx":
+            text_content = extract_text_from_docx(file_path)
         elif ext in [".md", ".txt", ".json", ".yaml", ".yml"]:
             try:
                 text_content = file_path.read_text(encoding="utf-8")

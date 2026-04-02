@@ -2160,6 +2160,14 @@ elif current_tab == 4:
         
         **Chunk-Größe**: Bestimmt wie Text zerlegt wird (Standard: 1000 Zeichen). Größere Chunks = mehr Kontext, kleinere = präziser.
         
+        **Beispiele für Chunk-Größen:**
+        ```
+        ├─ Pflichtenheft.pdf    → 1500 (Zusammenhänge wichtig)
+        ├─ Fragen.csv           → 250  (1 Zeile = 1 Chunk)
+        ├─ ISO-Standard.pdf     → 1000 (strukturiert)
+        └─ Meeting-Notes.txt    → 800  (Absätze)
+        ```
+        
         **RAG-Suche**: Findet automatisch relevante Abschnitte via Embedding (Ähnlichkeitssuche) und fügt sie als Kontext in Prompts ein.
         """)
     
@@ -2180,8 +2188,8 @@ elif current_tab == 4:
         st.markdown("#### 📤 Dokument hochladen")
         
         uploaded_file = st.file_uploader(
-            "Datei hochladen (PDF, TXT, MD, CSV, etc.)",
-            type=["pdf", "txt", "md", "csv", "json", "yaml", "yml"],
+            "Datei hochladen (PDF, Word, TXT, MD, CSV, etc.)",
+            type=["pdf", "docx", "txt", "md", "csv", "json", "yaml", "yml"],
             key="doc_file_uploader"
         )
         
