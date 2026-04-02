@@ -7,6 +7,10 @@ paths:
   backups_dir: "backups"
 database:
   url: "sqlite:///data/db/slitproj.db"
+  # WAL-Modus: verbessert Concurrent-Reads bei mehreren gleichzeitigen Nutzern.
+  # Zum Deaktivieren: auf false setzen (oder diese Zeile entfernen).
+  # Erzeugt zusätzliche Dateien: slitproj.db-wal und slitproj.db-shm (normal, kein Fehler).
+  wal_mode: true
 ui:
   title: "SlitProjektHub"
   sidebar_title: "Navigation"

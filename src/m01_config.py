@@ -19,6 +19,7 @@ USER_SETTINGS_PATH = BASE_DIR / "config" / "user_settings.yaml"
 class Settings:
     app_name: str
     db_url: str
+    db_wal_mode: bool  # WAL-Modus: config.yaml → database.wal_mode
     base_dir: Path
     data_dir: Path
     db_dir: Path
@@ -43,6 +44,7 @@ def get_settings() -> Settings:
     return Settings(
         app_name=cfg["app_name"],
         db_url=cfg["database"]["url"],
+        db_wal_mode=cfg["database"].get("wal_mode", False),  # WAL-Modus, Standard: aus
         base_dir=base_dir,
         data_dir=data_dir,
         db_dir=db_dir,

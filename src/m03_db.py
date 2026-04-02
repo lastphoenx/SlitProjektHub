@@ -4,10 +4,19 @@ from typing import Optional, List
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, create_engine, Session, Relationship
 from sqlalchemy import Column, String, DateTime, Boolean, Integer, Index, text, Float
+from sqlalchemy import event  # WAL-Modus
 from .m01_config import get_settings
 
 S = get_settings()
 engine = create_engine(S.db_url, echo=False)
+
+# WAL-Modus: aktiviert Write-Ahead-Logging für robustere Concurrent-Zugriffe.
+# Gesteuert via config.yaml → database.wal_mode.
+# Zum Deaktivieren: wal_mode: false in config.yaml setzen.
+if S.db_wal_mode:
+    @event.listens_for(engine, "connect")
+    def _set_wal_mode(dbapi_conn, _):
+        dbapi_conn.execute("PRAGMA journal_mode=WAL")
 
 DOCUMENT_CLASSIFICATIONS = [
     "Pflichtenheft (Projekt)",
