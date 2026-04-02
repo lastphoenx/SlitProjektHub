@@ -255,7 +255,7 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
     
     project_context_text = ""
     if use_project_context:
-        project_context_text = f"\n\nPROJEKT: {proj_obj.title}\nBESCHREIBUNG: {proj_obj.body or 'Keine Beschreibung'}"
+        project_context_text = f"\n\nPROJEKT: {proj_obj.title}\nBESCHREIBUNG: {proj_obj.description or 'Keine Beschreibung'}"
     
     # Batch-Loop
     for idx, question_data in enumerate(questions):
