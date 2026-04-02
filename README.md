@@ -1,239 +1,99 @@
-﻿# SlitProjektHub - KI-gestütztes Projektmanagement
+# SlitProjektHub
 
-> Intelligentes Projektmanagement-Tool mit RAG (Retrieval Augmented Generation), Multi-Provider LLM-Integration und strukturiertem Aufgaben-/Rollenmanagement.
+KI-gestütztes Tool zur Verwaltung von Ausschreibungsprojekten mit automatischer Fragenbeantwortung (RAG) und KI-Erkennung.
 
-[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)](https://streamlit.io/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)](https://fastapi.tiangolo.com/)
+## Was es tut
 
-## 🎯 Features
+- **Projekte & Stammdaten**: Projekte, Rollen und Aufgaben verwalten
+- **Dokumente**: PDF, Word, CSV hochladen und durchsuchbar machen (ChromaDB, Embeddings)
+- **Fragen-Batch**: CSV mit Anbieter-Fragen einlesen → automatisch mit KI + RAG beantworten → als Excel/CSV exportieren
+- **KI-Erkennung**: Analysiert Anbieter-Fragen auf KI-typische Merkmale (Heuristik + optionale AI-Tiefenanalyse)
+- **Chat**: Projektbezogener Chat mit Kontext aus hochgeladenen Dokumenten
+- **Multi-Provider LLM**: OpenAI (GPT-5.x, GPT-4o), Anthropic (Claude), Mistral — umschaltbar im UI
 
-- **📊 Projektmanagement**: Projekte, Rollen, Aufgaben und Kontexte strukturiert verwalten
-- **🤖 Multi-LLM Integration**: OpenAI, Anthropic, Mistral, DeepSeek mit einheitlicher API
-- **💬 KI-Chat**: Projekt-spezifische Chats mit RAG-basierter Dokumenten-Integration
-- **📚 Dokumenten-Management**: Upload, Klassifizierung und intelligente Suche
-- **🔍 Vector Search**: Semantische Suche über alle Inhalte (ChromaDB)
-- **🎨 Moderne UI**: Streamlit-basiertes Interface mit responsive Design
-- **🚀 Production-Ready**: Docker + Authelia 2FA + Traefik/nginx Support
+## Technologie
 
-## 📁 Projektstruktur
+- **Frontend**: Streamlit (Python)
+- **Backend**: FastAPI (REST API, läuft lokal auf Port 8000)
+- **Datenbank**: SQLite via SQLModel
+- **Vektorsuche**: ChromaDB
+- **Betrieb**: Lokal unter Windows, Start via `start_app.ps1`
 
-```
-SlitProjektHub/
-├── 📱 app/                    # Streamlit Frontend
-│   ├── streamlit_app.py       # Main App
-│   └── pages/                 # Multi-Page App
-├── 🔌 backend/                # FastAPI Backend
-│   └── main.py                # REST API
-├── 📦 src/                    # Core Business Logic
-│   ├── m03_db.py              # Database Models (SQLModel)
-│   ├── m07_*.py               # Domain Logic (Roles, Tasks, Projects)
-│   ├── m08_llm.py             # LLM Provider Abstraction
-│   ├── m09_rag.py             # RAG Implementation
-│   └── m10_chat.py            # Chat Logic
-├── 🐳 deployment/             # Docker, nginx, Production Configs
-├── 📚 docs/                   # Dokumentation
-│   ├── ARCHITECTURE.md        # System-Architektur
-│   └── deployment/            # Deployment-Guides
-├── 🔧 scripts/                # Utility Scripts
-│   ├── maintenance/           # check_*, fix_*, debug_*
-│   ├── testing/               # test_*
-│   └── migrations/            # DB Migrations
-├── 💾 data/                   # Daten (nicht in Git!)
-│   ├── db/                    # SQLite Datenbank
-│   └── rag/                   # ChromaDB Vector Store
-└── ⚙️ config/                 # Konfigurationen
+## Voraussetzungen
 
-```
-
-## 🚀 Schnellstart (Lokal)
-
-### Voraussetzungen
 - Python 3.11+
-- Git
-- API Keys: OpenAI, Anthropic, oder Mistral
+- API-Key von OpenAI, Anthropic oder Mistral
 
-### Installation
+## Installation
 
-```bash
-# Repository clonen
-git clone https://github.com/YOUR_USERNAME/SlitProjektHub.git
+```powershell
+git clone https://github.com/lastphoenx/SlitProjektHub.git
 cd SlitProjektHub
-
-# Virtual Environment erstellen
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# Dependencies installieren
+.venv\Scripts\activate
 pip install -r requirements.txt
-
-# .env erstellen
-cp .env.example .env
-# .env bearbeiten und API Keys eintragen
+copy .env.example .env
+# .env öffnen und API-Keys eintragen
 ```
 
-### Starten
+## Starten
 
-**Windows:**
 ```powershell
 .\start_app.ps1
 ```
 
-**Linux/Mac:**
-```bash
-# Backend starten
-cd backend
-python main.py &
+Das Skript beendet automatisch laufende Prozesse auf Port 8000/8501 und öffnet Backend und Frontend in separaten Fenstern.
 
-# Frontend starten
-streamlit run app/streamlit_app.py
+- **Frontend**: http://localhost:8501
+- **Backend API / Docs**: http://localhost:8000/docs
+
+## Projektstruktur
+
+```
+app/
+  streamlit_app.py       # Einstiegspunkt Streamlit
+  pages/                 # Einzelne App-Seiten (01–08)
+src/
+  m01_config.py          # Einstellungen
+  m03_db.py              # Datenbank-Modelle (SQLModel)
+  m07_*.py               # Domänenlogik (Projekte, Rollen, Tasks)
+  m08_llm.py             # LLM Provider Abstraction (OpenAI/Anthropic/Mistral)
+  m09_rag.py             # RAG (Retrieval Augmented Generation)
+  m10_chat.py            # Chat-Logik
+  m13_ki_detector.py     # KI-Erkennung für Ausschreibungsfragen
+backend/
+  main.py                # FastAPI REST API
+data/
+  db/                    # SQLite Datenbank (nicht in Git)
+  rag/                   # ChromaDB Vektoren (nicht in Git)
+config/
+  config.yaml            # App-Einstellungen
+scripts/
+  maintenance/           # Hilfsskripte (check_*, fix_*, debug_*)
+docs/
+  ARCHITECTURE.md        # Technische Architektur
+  PROJECT_STRUCTURE.md   # Dateistruktur & Feature-Übersicht
 ```
 
-**Zugriff:**
-- Frontend: http://localhost:8501
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
+## Konfiguration
 
-## 🐳 Production Deployment
+`.env`-Datei im Root-Verzeichnis (Vorlage: `.env.example`):
 
-Siehe [Deployment Quick Start](docs/deployment/DEPLOYMENT_QUICK_START.md) für vollständige Anleitung.
-
-**Kurz-Version:**
-
-```bash
-# .env.production konfigurieren
-cp .env.production.template .env.production
-nano .env.production
-
-# Docker Container starten
-docker-compose -f deployment/docker-compose.production.yml up -d
-```
-
-Unterstützt:
-- ✅ Traefik (Auto-SSL via Let's Encrypt)
-- ✅ nginx Reverse Proxy
-- ✅ Authelia 2FA Authentication
-- ✅ Proxmox/Debian Server
-
-## 📚 Dokumentation
-
-| Dokument | Beschreibung |
-|----------|-------------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System-Architektur & Technologie-Stack |
-| [Deployment Quick Start](docs/deployment/DEPLOYMENT_QUICK_START.md) | Schnelle Production-Deployment Anleitung |
-| [Deployment Guide](docs/deployment/DEPLOYMENT_GUIDE.md) | Vollständiger Deployment-Guide |
-| [Proxmox Setup](docs/deployment/PROXMOX_SETUP.md) | Proxmox-spezifische Konfiguration |
-
-## 🛠️ Entwicklung
-
-### Projekt-Struktur Setup
-
-```bash
-# Datenbank initialisieren
-python -c "from src.m03_db import init_db; init_db()"
-
-# Entwicklungs-Server starten
-streamlit run app/streamlit_app.py --server.runOnSave=true
-```
-
-### Hilfreiche Skripte
-
-```bash
-# Datenbank prüfen
-python scripts/maintenance/check_db.py
-
-# Embeddings anzeigen
-python scripts/maintenance/show_embeddings.py
-
-# Tests ausführen
-python scripts/testing/test_*.py
-```
-
-### Code-Qualität
-
-```bash
-# Type Checking
-mypy src/
-
-# Linting
-ruff check src/
-
-# Formatting
-black src/
-```
-
-## 🔧 Konfiguration
-
-### Environment Variables
-
-```bash
-# LLM Provider API Keys
+```env
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 MISTRAL_API_KEY=...
-
-# Optional
-DEEPSEEK_API_KEY=...
-GROQ_API_KEY=...
 ```
 
-### Datenbank
+## KI-Erkennung
 
-SQLite (Development):
-```
-data/db/slitproj.db
-```
+Analysiert Fragen aus eingelesenen CSV-Dateien darauf, ob sie KI-generiert wirken:
 
-Automatische Schema-Migration beim Start via `init_db()`.
+- **Heuristik** (kostenlos, 10 Signale): Strukturreferenzen, KI-Floskeln, Übergangsphrasing, Einstiege, Bullets, erschöpfende Aufzählungen, Burstiness, Längenuniformität, Volumen, Informal-Malus
+- **AI-Tiefenanalyse** (optional, OpenAI/Anthropic): Einzelner Anbieter oder alle Anbieter auf einmal, kalibrierter Prompt mit Gegenmerkmalen
 
-### Vector Store
+## Bekannte Einschränkungen
 
-ChromaDB (RAG):
-```
-data/rag/chroma/
-```
-
-Automatische Initialisierung beim ersten RAG-Zugriff.
-
-## 🤝 Migration zu neuem Server
-
-Siehe [Migration Guide](docs/deployment/DEPLOYMENT_GUIDE.md#migration).
-
-**Quick:**
-```bash
-# 1. Windows: Datenbanken exportieren
-.\scripts\export_databases.ps1
-
-# 2. Code zu GitHub pushen
-git push origin main
-
-# 3. Server: Clonen & Setup
-./scripts/clone_and_setup.sh --repo github.com/user/SlitProjektHub
-
-# 4. Datenbanken importieren
-scp backup.db user@server:~/projects/SlitProjektHub/data/db/
-```
-
-## 📊 Tech Stack
-
-| Layer | Technologie |
-|-------|-------------|
-| **Frontend** | Streamlit 1.28+ |
-| **Backend** | FastAPI 0.104+ |
-| **Database** | SQLite + SQLModel |
-| **Vector Store** | ChromaDB |
-| **LLM Providers** | OpenAI, Anthropic, Mistral, DeepSeek |
-| **Embeddings** | OpenAI text-embedding-3-small |
-| **Deployment** | Docker, Traefik, Authelia |
-
-## 📝 Lizenz
-
-[Deine Lizenz hier einfügen]
-
-## 🙏 Credits
-
-Entwickelt für strukturiertes KI-gestütztes Projektmanagement.
-
----
-
-**Letzte Aktualisierung:** Dezember 2025
+- Läuft ausschliesslich lokal (kein Cloud-Deployment vorgesehen)
+- Keine Benutzerauthentifizierung (single-user)
+- Embedding-Modell: lokal via `sentence-transformers`
