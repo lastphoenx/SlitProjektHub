@@ -24,6 +24,7 @@ from src.m07_projects import list_projects_df, load_project, get_project_roles
 from src.m08_llm import try_models_with_messages
 from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results
 from src.m09_docs import get_project_documents
+from src.m13_ki_detector import analyze_all_vendors
 from sqlmodel import select
 
 S = get_settings()
@@ -121,6 +122,94 @@ if selected_csv_id:
         st.stop()
 else:
     st.stop()
+
+# ============ KI-ERKENNUNG (optional, nach CSV-Auswahl) ============
+st.markdown("---")
+st.markdown("### 🤖 KI-Erkennung (optional)")
+st.caption("Analysiert die Fragen auf typische Merkmale KI-generierter Texte – pro Anbieter und gesamt")
+
+if st.button("🔍 Fragen analysieren", help="Analysiert alle Fragen aus der CSV auf KI-Muster (ohne API-Aufrufe)"):
+    with get_session() as session:
+        ki_chunks_raw = session.exec(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_id == selected_csv_id)
+            .order_by(DocumentChunk.chunk_index)
+        ).all()
+
+    ki_questions = []
+    for chunk in ki_chunks_raw:
+        try:
+            ki_questions.append(json.loads(chunk.chunk_text))
+        except Exception:
+            pass
+
+    if not ki_questions:
+        st.warning("⚠️ Keine Daten in der CSV gefunden")
+    else:
+        with st.spinner("Analysiere…"):
+            ki_result = analyze_all_vendors(ki_questions)
+
+        total_q = ki_result["total_questions"]
+        total_v = ki_result["total_vendors"]
+        overall = ki_result["overall_ki_score"]
+        ki_v_count = ki_result["ki_vendors_count"]
+        ki_v_ratio = ki_result["ki_vendors_ratio"]
+
+        # Gesamtfazit
+        if overall >= 0.70:
+            overall_verdict = "🤖 Sehr hoher KI-Index – wahrscheinlich grossflächiger ChatGPT-Einsatz"
+            overall_color = "error"
+        elif overall >= 0.45:
+            overall_verdict = "⚠️ Erhöhter KI-Index – teilweiser KI-Einsatz wahrscheinlich"
+            overall_color = "warning"
+        elif overall >= 0.25:
+            overall_verdict = "🔍 Moderater KI-Index – vereinzelte Hinweise"
+            overall_color = "info"
+        else:
+            overall_verdict = "✅ Niedriger KI-Index – Fragen wirken überwiegend manuell verfasst"
+            overall_color = "success"
+
+        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a.metric("Fragen total", total_q)
+        col_b.metric("Anbieter", total_v)
+        col_c.metric("Gesamt-KI-Index", f"{overall:.0%}")
+        col_d.metric("Anbieter mit KI-Verdacht", f"{ki_v_count} / {total_v}")
+
+        getattr(st, overall_color)(overall_verdict)
+
+        # Ranking-Tabelle
+        rows = []
+        for vendor, res in ki_result["ranking"]:
+            rows.append({
+                "Lieferant": vendor,
+                "Fragen": res["count"],
+                "KI-Score": f"{res['ki_score']:.0%}",
+                "Strukturrefs": f"{res['structural_refs_ratio']:.0%}",
+                "KI-Floskeln": f"{res['ki_phrases_ratio']:.0%}",
+                "Uniforme Einstiege": f"{res['uniform_openers_ratio']:.0%}",
+                "Ø Länge": f"{res['avg_length']:.0f} Zeichen",
+                "Urteil": f"{res['verdict_emoji']} {res['verdict']}",
+            })
+
+        ranking_df = pd.DataFrame(rows)
+        st.dataframe(ranking_df, width="stretch", hide_index=True)
+
+        with st.expander("ℹ️ Wie wird der KI-Score berechnet?"):
+            st.markdown(
+                """
+Der KI-Score ist ein gewichteter Heuristik-Index (0–100%) basierend auf vier textbasierten Merkmalen:
+
+| Merkmal | Gewicht | Erklärung |
+|---|---|---|
+| **Strukturreferenzen** | 35% | Anteil Fragen mit "Kapitel X.Y", "Abschnitt X" etc. |
+| **KI-Floskeln** | 25% | Typische Formulierungen wie "Bitte beschreiben Sie…", "Wie stellen Sie sicher…" |
+| **Uniforme Einstiege** | 20% | Anteil Fragen mit gleichartigem Satzbeginn |
+| **Längenuniformität** | 20% | Wie gleichmässig sind die Fragelängen? (niedrige Varianz → verdächtig) |
+
+Ein Score ≥ 70% gilt als **sehr wahrscheinlich KI-generiert**, ≥ 45% als **verdächtig**.
+Kein Tool ist perfekt – der Score ist ein Hinweis, kein Beweis.
+                """
+            )
 
 # ============ SCHRITT 3: ROLLEN WÄHLEN ============
 st.markdown("---")
