@@ -443,7 +443,7 @@ with col1:
     use_project_context = st.checkbox(
         "Projekt-Kontext einbeziehen",
         value=True,
-        help="Fügt Projektbeschreibung, Rollen und Tasks in den Prompt ein"
+        help="Fügt Projekttitel und -beschreibung in den Prompt ein (Tasks werden nicht verwendet)"
     )
 
 with col2:
@@ -452,6 +452,92 @@ with col2:
         options=["Sachlich & präzise", "Ausführlich & erkärend", "Kurz & bündig"],
         index=0
     )
+
+# style_instructions hier definiert, damit Prompt-Vorschau und Batch-Loop darauf zugreifen können
+style_instructions = {
+    "Sachlich & präzise": "Antworte sachlich, präzise und auf den Punkt.",
+    "Ausführlich & erkärend": "Antworte ausführlich und erkläre alle relevanten Details.",
+    "Kurz & bündig": "Antworte so kurz wie möglich, max. 2-3 Sätze."
+}
+
+# ============ PROMPT-VORSCHAU ============
+st.markdown("---")
+st.markdown("### 🔍 Prompt-Vorschau")
+st.caption("Zeigt den exakten Prompt, den das Modell für Frage 1 erhält – inkl. RAG-Chunks und Rollen-Kontext.")
+if st.button("📋 Beispiel-Prompt anzeigen (Frage 1)", key="prompt_preview_btn"):
+    st.session_state["_show_prompt_preview"] = True
+
+if st.session_state.get("_show_prompt_preview") and selected_csv_id:
+    try:
+        with get_session() as _prev_session:
+            _first_chunk = _prev_session.exec(
+                select(DocumentChunk)
+                .where(DocumentChunk.document_id == selected_csv_id)
+                .order_by(DocumentChunk.chunk_index)
+                .limit(1)
+            ).first()
+        if _first_chunk:
+            _q1 = json.loads(_first_chunk.chunk_text)
+            _q1_text = _q1.get("Frage", "")
+            _q1_nr = _q1.get("Nr", 1)
+            _q1_lief = _q1.get("Lieferant", "")
+
+            _proj_ctx = ""
+            if use_project_context and proj_obj:
+                _proj_ctx = f"\n\nPROJEKT: {proj_obj.title}\nBESCHREIBUNG: {proj_obj.description or 'Keine Beschreibung'}"
+
+            _rag_prev = ""
+            _rag_sources = "(RAG deaktiviert)"
+            if st.session_state.get("global_rag_enabled", True):
+                _rr = retrieve_relevant_chunks_hybrid(
+                    _q1_text,
+                    project_key=selected_project,
+                    limit=st.session_state.get("global_llm_rag_top_k", 5),
+                    threshold=st.session_state.get("global_rag_similarity_threshold", 0.5)
+                )
+                _rr = deduplicate_results(_rr)
+                _rag_prev = build_rag_context_from_search(_rr)
+                if _rr.get("documents"):
+                    _rag_sources = "\n".join(
+                        f"  • {d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%})"
+                        for d in _rr["documents"]
+                    )
+                else:
+                    _rag_sources = "(keine passenden Chunks gefunden)"
+
+            _style = style_instructions[answer_style]
+            if role_mode == "none":
+                _sys_prev = f"""Du bist ein technischer Berater der Fragen zu einem Pflichtenheft beantwortet.\n\n{_style}{_proj_ctx}\n\nRELEVANTE DOKUMENTE (aus Pflichtenheft):\n{_rag_prev or '(keine RAG-Ergebnisse)'}\n\nAUFGABE: Beantworte die folgende Frage präzise und vollständig basierend auf den bereitgestellten Dokumenten."""
+            elif role_mode == "all_merged":
+                _roles_ctx = "\n".join(
+                    f"- {r.title}: {r.description or '(keine Beschreibung)'}"
+                    for r in project_roles if r.key in selected_roles
+                )
+                _sys_prev = f"""Du bist ein technisches Berater-Team das Fragen zu einem Pflichtenheft beantwortet.\n\n{_style}{_proj_ctx}\n\nTEAM-PERSPEKTIVEN (berücksichtige alle):\n{_roles_ctx}\n\nRELEVANTE DOKUMENTE (aus Pflichtenheft):\n{_rag_prev or '(keine RAG-Ergebnisse)'}\n\nAUFGABE: Beantworte die folgende Frage vollständig, indem du die Perspektiven ALLER Team-Rollen berücksichtigst und in EINE fusionierte Antwort einbaust. Die Antwort soll ausgewogen sein und keine Rolle offensichtlich einzeln nennen."""
+            else:
+                _rp_key = selected_roles[0] if selected_roles else None
+                _rp_obj = next((r for r in project_roles if r.key == _rp_key), None) if _rp_key else None
+                if _rp_obj:
+                    _sys_prev = f"""Du bist ein technischer Berater in der Rolle "{_rp_obj.title}".\n\nDEINE ROLLE:\n{_rp_obj.description or ''}\n\n{_style}{_proj_ctx}\n\nRELEVANTE DOKUMENTE (aus Pflichtenheft):\n{_rag_prev or '(keine RAG-Ergebnisse)'}\n\nAUFGABE: Beantworte die folgende Frage AUS DER PERSPEKTIVE deiner Rolle. Fokussiere dich auf die Aspekte die zu deinem Verantwortungsbereich gehören."""
+                else:
+                    _sys_prev = "(Keine Rolle ausgewählt)"
+
+            _user_prev = f"Frage von {_q1_lief} (Nr. {_q1_nr}):\n{_q1_text}"
+
+            with st.expander("📋 Beispiel-Prompt (Frage 1) — so sieht das Modell die Anfrage", expanded=True):
+                _pc1, _pc2 = st.columns([3, 1])
+                with _pc2:
+                    st.caption("**Verwendete RAG-Quellen:**")
+                    st.text(_rag_sources)
+                with _pc1:
+                    st.caption("**SYSTEM-PROMPT:**")
+                    st.text_area("sys_prev", _sys_prev, height=380, key="pp_sys", disabled=True, label_visibility="collapsed")
+                    st.caption("**USER:**")
+                    st.text_area("usr_prev", _user_prev, height=80, key="pp_usr", disabled=True, label_visibility="collapsed")
+        else:
+            st.warning("Keine Fragen in der CSV gefunden.")
+    except Exception as _prev_err:
+        st.warning(f"Vorschau nicht möglich: {_prev_err}")
 
 # ============ SCHRITT 5: BATCH STARTEN ============
 st.markdown("---")
@@ -569,13 +655,7 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
     st.markdown("### 📊 Zwischenstand (Live-Vorschau)")
     live_preview_container = st.empty()
     
-    # System Prompt vorbereiten
-    style_instructions = {
-        "Sachlich & präzise": "Antworte sachlich, präzise und auf den Punkt.",
-        "Ausführlich & erkärend": "Antworte ausführlich und erkläre alle relevanten Details.",
-        "Kurz & bündig": "Antworte so kurz wie möglich, max. 2-3 Sätze."
-    }
-    
+    # System Prompt vorbereiten (style_instructions ist oben global definiert)
     project_context_text = ""
     if use_project_context:
         project_context_text = f"\n\nPROJEKT: {proj_obj.title}\nBESCHREIBUNG: {proj_obj.description or 'Keine Beschreibung'}"
@@ -611,6 +691,13 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
             )
             rag_results = deduplicate_results(rag_results)
             rag_context = build_rag_context_from_search(rag_results)
+            # RAG-Debug: Quellen für Export-Spalte _RAG_Chunks
+            result_row["_RAG_Chunks"] = " | ".join(
+                f"{d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%}): {(d.get('text','') or '')[:80].replace(chr(10),' ')}…"
+                for d in rag_results.get("documents", [])
+            )
+        else:
+            result_row["_RAG_Chunks"] = "(RAG deaktiviert)"
         
         # Je nach Rollen-Modus: 1 oder N Antworten generieren
         if role_mode == "none":
@@ -786,6 +873,9 @@ if st.session_state.get("batch_results"):
     
     results_df = pd.DataFrame(st.session_state["batch_results"])
     
+    # _RAG_Chunks: in Anzeige versteckt, aber in CSV/Excel-Export enthalten
+    display_df = results_df[[c for c in results_df.columns if c != "_RAG_Chunks"]]
+
     # Dynamische Spalten-Konfiguration je nach Rollen-Modus
     column_config = {
         "Nr": st.column_config.NumberColumn("Nr", width="small"),
@@ -798,14 +888,18 @@ if st.session_state.get("batch_results"):
     for col in answer_columns:
         column_config[col] = st.column_config.TextColumn(col, width="large")
     
-    # Editierbare Tabelle
+    # Editierbare Tabelle (ohne _RAG_Chunks)
     edited_df = st.data_editor(
-        results_df,
+        display_df,
         width="stretch",
         num_rows="dynamic",
         column_config=column_config,
         key="batch_results_editor"
     )
+    # Export-DataFrame: _RAG_Chunks wieder hinzufügen
+    export_df = edited_df.copy()
+    if "_RAG_Chunks" in results_df.columns:
+        export_df["_RAG_Chunks"] = results_df["_RAG_Chunks"].values
     
     # Download-Button
     st.markdown("---")
@@ -819,7 +913,7 @@ if st.session_state.get("batch_results"):
     with col1:
         # CSV Download
         csv_buffer = BytesIO()
-        edited_df.to_csv(csv_buffer, index=False, sep=";", encoding="utf-8-sig")
+        export_df.to_csv(csv_buffer, index=False, sep=";", encoding="utf-8-sig")
         csv_buffer.seek(0)
         
         st.download_button(
@@ -835,7 +929,7 @@ if st.session_state.get("batch_results"):
             # Excel Download
             excel_buffer = BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                edited_df.to_excel(writer, index=False, sheet_name="Antworten")
+                export_df.to_excel(writer, index=False, sheet_name="Antworten")
             excel_buffer.seek(0)
             
             st.download_button(
