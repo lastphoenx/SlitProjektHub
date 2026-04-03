@@ -22,12 +22,25 @@ from src.m03_db import init_db, get_session, Document, DocumentChunk
 from src.m06_ui import render_global_llm_settings
 from src.m07_projects import list_projects_df, load_project, get_project_roles
 from src.m08_llm import try_models_with_messages
-from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results
+from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results, get_all_documents_with_best_scores
 from src.m09_docs import get_project_documents
 from src.m13_ki_detector import analyze_all_vendors, analyze_vendor_with_ai
 from sqlmodel import select
 
 S = get_settings()
+
+
+def _strip_contextual_prefix(chunk_text: str) -> str:
+    """
+    Entfernt Contextual Prefix wenn vorhanden.
+    Format: [CSV | filename | Frage X]\n{JSON}
+    Returns: Nur den JSON-Teil (oder original text wenn kein Prefix)
+    """
+    if chunk_text.startswith("["):
+        newline_pos = chunk_text.find("\n")
+        if newline_pos > 0:
+            return chunk_text[newline_pos + 1:]
+    return chunk_text
 init_db()
 
 st.set_page_config(page_title="Fragen-Batch", page_icon="🔄", layout="wide")
@@ -42,7 +55,10 @@ st.markdown("**Beantworte große Mengen strukturierter Fragen (aus CSV) automati
 st.info(
     "ℹ️ **Wie funktioniert RAG hier?** Für jede Frage werden relevante Abschnitte aus den **Projekt-zugeordneten Dokumenten** "
     "gesucht (via Embedding-Suche) und als Kontext in den Prompt eingefügt. Die KI kann so spezifische Antworten "
-    "basierend auf Ihrem Pflichtenheft generieren."
+    "basierend auf Ihrem Pflichtenheft generieren.\n\n"
+    "**🔍 Prompt-Vorschau:** Zeigt den exakten Prompt wie ihn das LLM sieht. Die **RAG-Diagnostics** listen ALLE Projekt-Dokumente "
+    "mit ihren Relevanz-Scores auf — auch jene die NICHT in den Top-K kamen. So sehen Sie transparent welche Dokumente geprüft wurden "
+    "und warum sie ein-/ausgeschlossen wurden (z.B. 'Score 38% < Threshold 45%')."
 )
 
 # Session State initialisierung
@@ -151,7 +167,8 @@ if st.button("🔍 Fragen analysieren", help="Analysiert alle Fragen aus der CSV
     ki_questions = []
     for chunk in ki_chunks_raw:
         try:
-            ki_questions.append(json.loads(chunk.chunk_text))
+            clean_text = _strip_contextual_prefix(chunk.chunk_text)
+            ki_questions.append(json.loads(clean_text))
         except Exception:
             pass
 
@@ -494,9 +511,22 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                 .where(DocumentChunk.document_id == selected_csv_id)
                 .order_by(DocumentChunk.chunk_index)
             ).all()
-        _first_chunk = _all_chunks[min(int(_preview_frage_nr) - 1, len(_all_chunks) - 1)] if _all_chunks else None
+        _first_chunk = None
+        for _c in _all_chunks:
+            try:
+                clean_text = _strip_contextual_prefix(_c.chunk_text)
+                _cd = json.loads(clean_text)
+                if str(_cd.get("Nr", "")).strip() == str(int(_preview_frage_nr)):
+                    _first_chunk = _c
+                    break
+            except Exception:
+                pass
+        # Fallback: Array-Index wenn Nr. nicht gefunden
+        if _first_chunk is None and _all_chunks:
+            _first_chunk = _all_chunks[min(int(_preview_frage_nr) - 1, len(_all_chunks) - 1)]
         if _first_chunk:
-            _q1 = json.loads(_first_chunk.chunk_text)
+            clean_text = _strip_contextual_prefix(_first_chunk.chunk_text)
+            _q1 = json.loads(clean_text)
             _q1_text = _q1.get("Frage", "")
             _q1_nr = _q1.get("Nr", _preview_frage_nr)
             _q1_lief = _q1.get("Lieferant", "")
@@ -507,6 +537,7 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
 
             _rag_prev = ""
             _rag_sources = "(RAG deaktiviert)"
+            _rag_diagnostics = []
             if st.session_state.get("global_rag_enabled", True):
                 _rr = retrieve_relevant_chunks_hybrid(
                     _q1_text,
@@ -517,6 +548,8 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                 )
                 _rr = deduplicate_results(_rr)
                 _rag_prev = build_rag_context_from_search(_rr)
+                
+                # RAG-Quellen (gefundene Chunks)
                 if _rr.get("documents"):
                     _rag_sources = "\n".join(
                         f"  • {d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%})\n"
@@ -525,6 +558,14 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                     )
                 else:
                     _rag_sources = "(keine passenden Chunks gefunden)"
+                
+                # DIAGNOSTICS: Alle Dokumente mit Scores
+                _rag_diagnostics = get_all_documents_with_best_scores(
+                    _q1_text,
+                    project_key=selected_project,
+                    threshold=st.session_state.get("global_rag_similarity_threshold", 0.5),
+                    exclude_classification="FAQ/Fragen-Katalog"
+                )
 
             _style = style_instructions[_preview_style]
 
@@ -558,11 +599,63 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                 with _pc2:
                     st.caption("**Verwendete RAG-Quellen:**")
                     st.text(_rag_sources)
+                    
+                    # DIAGNOSTICS: Alle Dokumente mit Scores anzeigen
+                    if _rag_diagnostics:
+                        with st.expander("🔍 RAG-Diagnostics (alle Dokumente)", expanded=False):
+                            st.caption("Zeigt **alle** Projekt-Dokumente mit ihrem besten Score:")
+                            
+                            # Gruppiere: Included vs. Excluded
+                            _included = [d for d in _rag_diagnostics if d["included"]]
+                            _excluded = [d for d in _rag_diagnostics if not d["included"]]
+                            
+                            if _included:
+                                st.markdown("**✅ Eingeschlossen (>= Threshold):**")
+                                for d in _included:
+                                    st.text(f"  {d['best_score']:.0%} | {d['filename'][:35]}")
+                            
+                            if _excluded:
+                                st.markdown("**⚠️ Ausgeschlossen:**")
+                                for d in _excluded:
+                                    _reason_short = d['reason'][:30] if len(d['reason']) <= 30 else d['reason'][:27] + "..."
+                                    st.text(f"  {d['best_score']:>3.0%} | {d['filename'][:25]:25} | {_reason_short}")
+                
                 with _pc1:
                     st.caption("**SYSTEM-PROMPT:**")
                     st.text_area("sys_prev", _sys_prev, height=380, key="pp_sys", disabled=True, label_visibility="collapsed")
                     st.caption("**USER:**")
                     st.text_area("usr_prev", _user_prev, height=80, key="pp_usr", disabled=True, label_visibility="collapsed")
+
+                st.markdown("---")
+                # Button setzt nur Flag, damit er mehrfach funktioniert (Streamlit Buttons sind nur im Klick-Moment TRUE)
+                if st.button("🤖 KI-Antwort abrufen", key="pp_run_llm_btn"):
+                    st.session_state["_pp_trigger_llm"] = True
+                    st.session_state["_pp_trigger_frage"] = _q1_nr
+                    st.rerun()
+                
+                # LLM-Call außerhalb des Button-Blocks (sonst funktioniert nur 1x)
+                if st.session_state.get("_pp_trigger_llm") and st.session_state.get("_pp_trigger_frage") == _q1_nr:
+                    st.session_state["_pp_trigger_llm"] = False
+                    st.session_state["_pp_answer"] = None
+                    
+                    with st.spinner(f"Warte auf {st.session_state.get('global_llm_model', 'LLM')}…"):
+                        _pp_used_model: list = []
+                        _pp_answer = try_models_with_messages(
+                            provider=st.session_state.get("global_llm_provider", "openai"),
+                            system=_sys_prev,
+                            messages=[{"role": "user", "content": _user_prev}],
+                            max_tokens=st.session_state.get("global_llm_max_tokens", 2000),
+                            temperature=st.session_state.get("global_llm_temperature", 0.7),
+                            model=st.session_state.get("global_llm_model"),
+                            _used_model=_pp_used_model,
+                        )
+                        st.session_state["_pp_answer"] = _pp_answer
+                        st.session_state["_pp_used_model"] = _pp_used_model[0] if _pp_used_model else "?"
+                        st.session_state["_pp_answer_frage"] = _q1_nr
+
+                if st.session_state.get("_pp_answer") and st.session_state.get("_pp_answer_frage") == _q1_nr:
+                    st.caption(f"**KI-Antwort** (Modell: `{st.session_state.get('_pp_used_model', '?')}`):")
+                    st.markdown(st.session_state["_pp_answer"])
         else:
             st.warning("Keine Fragen in der CSV gefunden.")
     except Exception as _prev_err:
@@ -620,7 +713,8 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
     questions = []
     for chunk in chunks:
         try:
-            row_data = json.loads(chunk.chunk_text)
+            clean_text = _strip_contextual_prefix(chunk.chunk_text)
+            row_data = json.loads(clean_text)
             questions.append(row_data)
         except:
             st.warning(f"⚠️ Zeile {chunk.chunk_index} konnte nicht gelesen werden")

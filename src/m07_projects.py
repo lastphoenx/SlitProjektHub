@@ -46,34 +46,31 @@ def _index_project_chunks_to_chromadb(project_key: str, project_id: int) -> None
     """
     try:
         from .m07_chroma import get_or_create_project_collection, add_chunks_to_collection
-        from .m09_rag import embed_text
-        
+        from .m09_rag import embed_texts_batch
+
         with get_session() as ses:
             proj = ses.exec(select(Project).where(Project.key == project_key)).first()
             if not proj:
                 return
-            
+
             collection = get_or_create_project_collection(project_id, "text-embedding-3-small")
-            
-            chunks_to_add = []
-            embeddings_to_add = []
+
+            raw_texts = []
             chunk_ids = []
-            
             project_index = 0
-            
+
+            # Projektbeschreibung
             proj_text = f"{proj.title}\n{proj.description}"
             if proj.text_path and Path(proj.text_path).exists():
                 try:
                     proj_text += f"\n{Path(proj.text_path).read_text(encoding='utf-8')}"
                 except:
                     pass
-            
-            proj_emb = embed_text(proj_text)
-            chunks_to_add.append(proj_text[:1000])
-            embeddings_to_add.append(proj_emb)
+            raw_texts.append(proj_text[:1000])
             chunk_ids.append(f"project_{project_id}_chunk_{project_index}")
             project_index += 1
-            
+
+            # Rollen + Tasks
             if proj.role_keys:
                 try:
                     role_keys = json.loads(proj.role_keys) if isinstance(proj.role_keys, str) else proj.role_keys
@@ -82,25 +79,20 @@ def _index_project_chunks_to_chromadb(project_key: str, project_id: int) -> None
                             role = ses.exec(select(Role).where(Role.key == role_key)).first()
                             if not role:
                                 continue
-                            
                             role_text = f"Rolle: {role.title}"
                             if role.description:
                                 role_text += f"\n{role.description}"
                             if role.responsibilities:
                                 role_text += f"\n{role.responsibilities}"
-                            
-                            role_emb = embed_text(role_text)
-                            chunks_to_add.append(role_text[:1000])
-                            embeddings_to_add.append(role_emb)
+                            raw_texts.append(role_text[:1000])
                             chunk_ids.append(f"project_{project_id}_chunk_{project_index}")
                             project_index += 1
-                            
+
                             role_tasks = ses.exec(
                                 select(Task)
                                 .where(Task.source_role_key == role_key)
                                 .where(Task.is_deleted == False)
                             ).all()
-                            
                             for task in role_tasks:
                                 task_text = f"Task von Rolle {role.title}: {task.title}"
                                 if task.description:
@@ -110,15 +102,13 @@ def _index_project_chunks_to_chromadb(project_key: str, project_id: int) -> None
                                         task_text += f"\n{Path(task.text_path).read_text(encoding='utf-8')[:500]}"
                                     except:
                                         pass
-                                
-                                task_emb = embed_text(task_text)
-                                chunks_to_add.append(task_text[:1000])
-                                embeddings_to_add.append(task_emb)
+                                raw_texts.append(task_text[:1000])
                                 chunk_ids.append(f"project_{project_id}_chunk_{project_index}")
                                 project_index += 1
                 except Exception:
                     pass
-            
+
+            # Kontexte
             if proj.context_keys:
                 try:
                     context_keys = json.loads(proj.context_keys) if isinstance(proj.context_keys, str) else proj.context_keys
@@ -127,7 +117,6 @@ def _index_project_chunks_to_chromadb(project_key: str, project_id: int) -> None
                             context = ses.exec(select(Context).where(Context.key == context_key)).first()
                             if not context:
                                 continue
-                            
                             context_text = f"Kontext: {context.title}"
                             if context.description:
                                 context_text += f"\n{context.description}"
@@ -136,21 +125,20 @@ def _index_project_chunks_to_chromadb(project_key: str, project_id: int) -> None
                                     context_text += f"\n{Path(context.text_path).read_text(encoding='utf-8')}"
                                 except:
                                     pass
-                            
-                            ctx_emb = embed_text(context_text)
-                            chunks_to_add.append(context_text[:1000])
-                            embeddings_to_add.append(ctx_emb)
+                            raw_texts.append(context_text[:1000])
                             chunk_ids.append(f"project_{project_id}_chunk_{project_index}")
                             project_index += 1
                 except Exception:
                     pass
-            
-            if chunks_to_add:
+
+            if raw_texts:
+                # Alle Texte in einem einzigen API-Call embedden
+                embeddings_to_add = embed_texts_batch(raw_texts)
                 collection.add(
                     ids=chunk_ids,
-                    documents=chunks_to_add,
+                    documents=raw_texts,
                     embeddings=embeddings_to_add,
-                    metadatas=[{"source": "project_data", "project_id": str(project_id)} for _ in chunks_to_add]
+                    metadatas=[{"source": "project_data", "project_id": str(project_id)} for _ in raw_texts]
                 )
     except Exception as e:
         pass

@@ -1,4 +1,4 @@
-streamlit>=1.38
+streamlit>=1.55.0
 streamlit-aggrid>=0.3.4
 sqlmodel>=0.0.22
 pydantic>=2.8

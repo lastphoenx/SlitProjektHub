@@ -1747,7 +1747,23 @@ elif current_tab == 5:
         "ℹ️ **Dokument-Zuordnung**: Nur Dokumente, die einem Projekt zugeordnet sind, werden in Chat und Batch-QA verwendet. "
         "Ordnen Sie Dokumente im Tab 'Dokumente' zu → 'Zu Projekt zuordnen'."
     )
-    
+
+    with st.expander("ℹ️ Was passiert beim Speichern eines Projekts?", expanded=False):
+        st.markdown("""
+        Beim Speichern eines Projekts werden **zwei Dinge** getan:
+
+        **1. Stammdaten in SQLite speichern** (~sofort)
+        Titel, Beschreibung, zugeordnete Rollen, Kontexte und Dokument-Links werden in der Datenbank aktualisiert.
+
+        **2. Semantischer Index in ChromaDB aktualisieren** (~1–3 Sekunden)
+        Projektbeschreibung, alle zugeordneten Rollen (inkl. Verantwortlichkeiten), deren Tasks und Kontexte werden als Vektoren in ChromaDB indexiert. Dazu wird **1 API-Call** an OpenAI gesendet (Embedding-Modell `text-embedding-3-small`).
+
+        **Wozu der ChromaDB-Index?**
+        Damit der KI-Assistent (Chat & Batch-QA) bei Bedarf auch auf Stammdaten zurückgreifen kann — z.B. wenn eine Frage nach Zuständigkeiten oder Rollen-Verantwortlichkeiten gestellt wird, die nicht im Pflichtenheft stehen, aber in einer Rollenbeschreibung definiert sind.
+
+        **Dokument-Zuordnung** (`link` / `unlink`) selbst ist sofort — nur das Indexing kostet Zeit.
+        """)
+
     st.session_state.setdefault("project_mgmt_edit_mode", False)
     st.session_state.setdefault("project_mgmt_selected_key", None)
     st.session_state.setdefault("project_mgmt_search_query", "")
@@ -2156,19 +2172,21 @@ elif current_tab == 4:
         
         - **🎭 Pflichtenheft (Rolle)**: Wird bei **Task-Generierung** verwendet → Rollen zuordnen beim Upload
         - **📁 Pflichtenheft (Projekt)**: Wird in **Chat & Batch-QA** verwendet → Projekt zuordnen nach Upload
-        - **📋 Andere**: Verfügbar in **Chat & Batch-QA** → Projekt zuordnen nach Upload
+        - **📋 Anforderungen/Feature, Standard/Richtlinie, API-Dokumentation etc.**: Verfügbar in **Chat & Batch-QA** → Projekt zuordnen nach Upload
+        - **🚫 FAQ/Fragen-Katalog**: Wird in **Batch-QA bewusst aus dem RAG ausgeschlossen** — verhindert, dass Anbieter-Fragen als Kontext in Antworten einfliessen. Nur für Fragenkataloge (z.B. SIMAP-CSV) verwenden.
         
-        **Chunk-Größe**: Bestimmt wie Text zerlegt wird (Standard: 1000 Zeichen). Größere Chunks = mehr Kontext, kleinere = präziser.
+        **Chunk-Größe**: Bestimmt wie Text zerlegt wird. Kleinere Chunks = präzisere RAG-Treffer, größere = mehr Kontext pro Treffer.
         
-        **Beispiele für Chunk-Größen:**
+        **Empfohlene Chunk-Größen:**
         ```
-        ├─ Pflichtenheft.pdf    → 1500 (Zusammenhänge wichtig)
-        ├─ Fragen.csv           → 250  (1 Zeile = 1 Chunk)
-        ├─ ISO-Standard.pdf     → 1000 (strukturiert)
-        └─ Meeting-Notes.txt    → 800  (Absätze)
+        ├─ Pflichtenheft.docx   → 1200–1500 (Zusammenhänge wichtig)
+        ├─ Beilagen/Anhänge     → 1200      (präzise Abschnitte)
+        ├─ Fragen.csv           → 250       (1 Zeile = 1 Chunk)
+        ├─ ISO-Standard.pdf     → 1000      (strukturiert)
+        └─ Meeting-Notes.txt    → 800       (Absätze)
         ```
         
-        **RAG-Suche**: Findet automatisch relevante Abschnitte via Embedding (Ähnlichkeitssuche) und fügt sie als Kontext in Prompts ein.
+        **RAG-Suche**: Findet automatisch relevante Abschnitte via Embedding (Ähnlichkeitssuche) + Keyword-Suche und fügt sie als Kontext in Prompts ein. Nur Dokumente die dem Projekt zugeordnet sind werden berücksichtigt.
         """)
     
     st.session_state.setdefault("doc_upload_mode", False)

@@ -1,7 +1,7 @@
-model: sonnet-4.6
+model: opus-4.6
 provider: anthropic
-rag_chunk_size: 2900
+rag_chunk_size: 1200
 rag_enabled: true
-rag_similarity_threshold: 0.6
-rag_top_k: 5
-temperature: 1.0
+rag_similarity_threshold: 0.45
+rag_top_k: 7
+temperature: 0.7

@@ -27,6 +27,9 @@ chroma.sqlite3
 data/rag/
 !data/rag/.gitkeep
 
+# KRITISCH: Interne Dokumente (NICHT in Git!)
+docs/interne_Dokumente/
+
 # KRITISCH: Alle Dokumente (NICHT in Git!)
 *.pdf
 *.PDF

@@ -380,6 +380,51 @@ def render_global_llm_settings():
         if st.session_state["global_rag_enabled"] != rag_enabled:
             st.session_state["global_rag_enabled"] = rag_enabled
             _save_settings_to_disk()
+        
+        # Info-Expander: Parameter-Erklärungen
+        with st.expander("ℹ️ Was bedeuten diese Werte?", expanded=False):
+            st.markdown("""
+            **RAG-Kontexte (Top-K):** `7`  
+            Anzahl der Dokument-Chunks die als Kontext eingefügt werden.
+            - **5:** Schnell, Budget-freundlich
+            - **7:** ✅ **Optimal** (3-5 verschiedene Dokumente dank Diversity-Filter)
+            - **10+:** Sehr detailliert, aber mehr Tokens
+            
+            ---
+            
+            **Chunk-Größe:** `1200`  
+            Zeichenanzahl pro Dokument-Abschnitt beim Upload.
+            - **800-1000:** Für kurze FAQ/Snippets
+            - **1200:** ✅ **Optimal für Pflichtenheft** (2-4 Absätze, Tabellen bleiben zusammen)
+            - **2000+:** Für sehr lange Fließtexte
+            
+            ---
+            
+            **Similarity-Threshold:** `0.45` (45%)  
+            Mindest-Ähnlichkeit zwischen Frage und Dokument-Chunk.
+            - **0.60:** Sehr hohe Präzision, wenig Recall (nur perfekte Matches)
+            - **0.45:** ✅ **Balance** (getestet: findet relevante Dokumente, filtert Noise)
+            - **0.30:** Viel Recall, aber irrelevante Chunks möglich
+            
+            💡 **Tipp:** Bei "zu wenig Kontext" → senken auf 0.35  
+            💡 **Tipp:** Bei "zu viel Irrelevantes" → erhöhen auf 0.55
+            
+            ---
+            
+            **Temperatur:** `0.7`  
+            Kreativität vs. Faktentreue der KI-Antworten.
+            - **0.0-0.3:** Deterministisch, sehr faktisch (Code, Fakten)
+            - **0.7:** ✅ **Optimal für Pflichtenheft** (variabel aber korrekt)
+            - **1.0+:** Kreativ, Brainstorming (Risiko: Halluzinationen)
+            
+            💡 **Tipp:** Für Marketing/Storytelling → 1.0  
+            💡 **Tipp:** Für technische Spezifikationen → 0.3-0.5
+            
+            ---
+            
+            **RAG aktivieren:** `✅`  
+            ⚠️ **Muss aktiviert sein** sonst antwortet KI ohne Pflichtenheft-Kontext!
+            """)
     else:
         st.warning("⚠️ Kein KI-Provider verfügbar. Bitte .env konfigurieren.")
 
