@@ -261,3 +261,103 @@ Diese Architektur bietet:
 - ✅ Wartbar (klare Trennung)
 
 Siehe [DEPLOYMENT_QUICK_START.md](DEPLOYMENT_QUICK_START.md) für Setup-Anleitung! 🚀
+
+---
+
+## 🧠 KI-Retrieval Pipeline (RAG)
+
+### Architektur-Überblick
+
+Das System verwendet eine **vierstufige Query-Intelligence-Pipeline**, die einfache Keyword-Suche weit hinter sich lässt:
+
+```
+Nutzer-Eingabe
+     │
+     ▼
+┌────────────────────────────────────────────────────┐
+│  STUFE 1: Query Distillation                       │
+│  src/m08_llm.py → rewrite_query_for_retrieval()    │
+│                                                    │
+│  LLM bereinigt UI-Noise, extrahiert Fachbegriffe   │
+│  "Was ist eigentlich mit dem Subunternehmer?"      │
+│       → "Subunternehmer Vertrag Anforderungen"     │
+│                                                    │
+│  Konfigurierbar: config/retrieval.yaml             │
+│  query.enable_distillation: true/false             │
+└────────────────────┬───────────────────────────────┘
+                     │
+                     ▼
+┌────────────────────────────────────────────────────┐
+│  STUFE 2: Parallele Hybrid-Retrieval               │
+│  src/m09_rag.py → retrieve_relevant_chunks_hybrid()│
+│                                                    │
+│  ┌─────────────────┐   ┌─────────────────────────┐│
+│  │ BM25 / Keyword  │   │  Semantic / Embedding   ││
+│  │ rank_bm25       │   │  text-embedding-3-small  ││
+│  │ DE-Stemming     │   │  ChromaDB Vector Store   ││
+│  │ IDF-Gewichtung  │   │  Cosine Similarity       ││
+│  │ Priority Boost  │   │  Discovery Threshold     ││
+│  └────────┬────────┘   └────────────┬────────────┘│
+│           │                         │              │
+└───────────┼─────────────────────────┼──────────────┘
+            │                         │
+            ▼                         ▼
+┌────────────────────────────────────────────────────┐
+│  STUFE 3: Reciprocal Rank Fusion (RRF)             │
+│  src/m09_rag.py → reciprocal_rank_fusion()         │
+│                                                    │
+│  Score = Σ ( 1 / (k + rank_i) )  mit k=60         │
+│                                                    │
+│  Vorteile gegenüber Magic-Number Weights:           │
+│  • Robust gegen Score-Skalierung                   │
+│  • Mathematisch fundiert (IR-Literatur)            │
+│  • Keine manuellen Gewichtungen nötig              │
+│  • k konfigurierbar: config/retrieval.yaml         │
+└────────────────────┬───────────────────────────────┘
+                     │
+                     ▼
+┌────────────────────────────────────────────────────┐
+│  STUFE 4: Multi-Hypothesis (Optional)              │
+│  src/m08_llm.py → generate_query_hypotheses()      │
+│                                                    │
+│  Generiert N Suchstrategien:                       │
+│  1. KEYWORD  – kompakte Fachbegriffe               │
+│  2. SEMANTIC – Umformulierung + Synonyme           │
+│  3. CONTEXT  – erweiterte Beschreibung             │
+│                                                    │
+│  Alle Hypothesen-Rankings fliessen in RRF          │
+│  Default: OFF (Performance-Trade-off)              │
+│  Toggle: config/retrieval.yaml → enable_multi_hypothesis│
+└────────────────────┬───────────────────────────────┘
+                     │
+                     ▼
+              Gefilterte, gewichtete
+              Dokument-Chunks + Scores
+                     │
+                     ▼
+           LLM-Antwort mit Kontext
+```
+
+### Konfiguration
+
+Alle Retrieval-Parameter sind **ausschliesslich** in `config/retrieval.yaml` definiert:
+
+| Parameter | Default | Beschreibung |
+|-----------|---------|-------------|
+| `bm25.priority_terms` | Domain-Begriffe | BM25 Score-Boost für wichtige Fachbegriffe |
+| `hybrid.rrf_k` | 60 | RRF Fusion-Parameter (IR-Standard) |
+| `query.enable_distillation` | `true` | LLM-basierte Query-Bereinigung |
+| `query.enable_multi_hypothesis` | `false` | Parallele Query-Varianten |
+| `query.hypothesis_count` | 3 | Anzahl Multi-Hypothesis Varianten |
+| `semantic.discovery_threshold_multiplier` | 0.35 | Breite der semantischen Suche |
+| `filename_boost.boost_amount` | 0.10 | +10% Score bei Filename-Match |
+
+### Module
+
+| Modul | Funktion |
+|-------|----------|
+| `src/m01_retrieval_config.py` | YAML → Python Dataclasses (typsicher) |
+| `src/m08_llm.py` | `rewrite_query_for_retrieval()`, `generate_query_hypotheses()` |
+| `src/m09_rag.py` | `retrieve_relevant_chunks_hybrid()`, `reciprocal_rank_fusion()` |
+| `data/db/chroma/` | ChromaDB Vektor-Store (Embeddings) |
+| `data/rag/` | Originaldokumente (PDF, TXT, MD) |

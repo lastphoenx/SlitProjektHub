@@ -1,0 +1,108 @@
+﻿# =============================================================================
+# RAG Retrieval Configuration
+# =============================================================================
+#
+# Steuert die vierstufige Query-Intelligence-Pipeline:
+#
+#   [1] Query Distillation   — LLM bereinigt Nutzer-Input zu Suchbegriffen
+#       └─ query.enable_distillation
+#
+#   [2] Hybrid Retrieval     — BM25 (Keyword) + Semantic (Embedding) parallel
+#       └─ bm25.* + semantic.*
+#
+#   [3] Reciprocal Rank Fusion — Kombiniert beide Rankings mathematisch robust
+#       └─ hybrid.rrf_k  (Standard: 60, aus IR-Literatur)
+#
+#   [4] Multi-Hypothesis     — N Suchstrategien (KEYWORD/SEMANTIC/CONTEXT), optional
+#       └─ query.enable_multi_hypothesis  (Default: false)
+#
+# Alle Werte hier ändern — kein Code-Änderung nötig.
+# =============================================================================
+
+# ==================== BM25 / KEYWORD SEARCH ====================
+bm25:
+  # Stemming für deutsche Morphologie (z.B. "Subunternehmen" → "subunternehm")
+  use_german_stemming: true
+  
+  # Priority Boosting: Optionale Domain-spezifische Begriffe für Scoring-Boost
+  # PHASE 3: Nicht mehr hardcoded, sondern konfigurierbar
+  # Leer = keine Domain-Prioritäten (generisch)
+  priority_terms:
+    - "subunternehm"      # Subunternehmen/Subunternehmende
+    - "vergabe"           # Vergabeverfahren
+    - "konzern"           # Konzernstrukturen
+    # Weitere domain-spezifische Begriffe hier hinzufügen
+  
+  # Scoring-Gewichte (für BM25-interne Berechnungen)
+  scoring:
+    coverage_weight: 2.0      # Keyword-Coverage Multiplikator
+    idf_weight: 0.75          # IDF-Bonus Multiplikator
+    priority_boost: 6.0       # Boost pro Priority-Term Hit
+    min_token_length: 10      # Min. Länge für Supporting Tokens
+
+# ==================== SEMANTIC SEARCH ====================
+semantic:
+  # Embedding Model
+  model: "text-embedding-3-small"
+  
+  # Similarity Thresholds
+  discovery_threshold_multiplier: 0.35  # Multipliziert mit user threshold für breite Suche
+  min_discovery_threshold: 0.15         # Absolute Untergrenze
+  
+  # Quality Filter
+  min_similarity: 0.5                   # Default Minimum Similarity
+
+# ==================== HYBRID SEARCH (RRF) ====================
+hybrid:
+  # Reciprocal Rank Fusion Parameter
+  rrf_k: 60                             # Standard: 60 (aus IR-Literatur)
+  
+  # Document Diversity
+  max_chunks_per_document: 2            # Default: limit // 2
+  guaranteed_doc_threshold: 0.10        # Min. Score für garantierten Doc-Slot
+  
+  # Special Classifications
+  pflichtenheft_fallback: true          # "Pflichtenheft (Projekt)" immer vertreten
+  pflichtenheft_min_score: 0.10         # Min. Score für Pflichtenheft-Fallback
+
+# ==================== QUERY INTELLIGENCE ====================
+query:
+  # Query Distillation (Phase 1)
+  enable_distillation: true
+  distillation_provider: "openai"
+  distillation_model: "gpt-4o-mini"
+  distillation_temperature: 0.0
+  distillation_max_tokens: 100
+  
+  # Multi-Hypothesis Generation (Phase 3)
+  enable_multi_hypothesis: false        # Advanced: Mehrere Query-Varianten
+  hypothesis_count: 3                   # Anzahl paralleler Query-Varianten
+  
+  # Query Enhancement Strategies
+  strategies:
+    - "distillation"                    # LLM-basierte Query-Bereinigung
+    # - "expansion"                     # Synonym-Expansion (TODO: Phase 3)
+    # - "entity_extraction"             # NER für gezielte Suche (TODO: Phase 3)
+
+# ==================== FILENAME BOOSTING ====================
+filename_boost:
+  enable: true
+  boost_amount: 0.10                    # +10% Score bei Filename-Match
+  min_word_length: 3                    # Min. Query-Wort-Länge für Matching
+  min_prefix_match: 5                   # Min. Zeichen für Präfix-Match
+
+# ==================== CACHING ====================
+cache:
+  enable: true
+  max_size: 100                         # Max. Query-Results im Cache
+
+# ==================== A/B TESTING (Phase 3) ====================
+ab_testing:
+  enable: false                         # Experimentelles Feature
+  strategies:
+    baseline:
+      name: "RRF-Standard"
+      rrf_k: 60
+    experimental:
+      name: "RRF-Aggressive"
+      rrf_k: 40                         # Niedrigerer k = stärkere Rank-Präferenz

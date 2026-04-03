@@ -1,7 +1,7 @@
-model: opus-4.6
-provider: anthropic
+model: gpt-4o
+provider: openai
 rag_chunk_size: 1200
 rag_enabled: true
 rag_similarity_threshold: 0.45
 rag_top_k: 7
-temperature: 0.7
+temperature: 1.0

@@ -137,6 +137,15 @@ Die Kern-Funktionalität:
   - ❓ Annahme
   - ℹ️ Info/Fakt
 
+**🧠 Retrieval-Pipeline im Hintergrund:**
+
+| Stufe | Was passiert | Konfiguration |
+|-------|-------------|---------------|
+| **Query Distillation** | LLM bereinigt Ihre Eingabe zu präzisen Suchbegriffen | `retrieval.yaml → query.enable_distillation` |
+| **Hybrid Search** | BM25 (Keyword) + Semantic (Embedding) parallel | Automatisch aktiv |
+| **RRF Fusion** | Mathematische Kombination beider Rankings (k=60) | `retrieval.yaml → hybrid.rrf_k` |
+| **Multi-Hypothesis** | 3 parallele Suchstrategien (optional, kostspieliger) | `retrieval.yaml → enable_multi_hypothesis` |
+
 ### 5️⃣ **Fragen-Batch** (🔄 Seite)
 Batch-Verarbeitung von Fragen mit KI:
 - **CSV-Upload**: Fragen im CSV-Format (Spalten: Nr, Lieferant, Frage)

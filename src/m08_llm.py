@@ -226,15 +226,9 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
         from openai import OpenAI
         client = OpenAI()
         model_id = get_model_id("openai", model) or "gpt-4o-mini"
-        # o-series und alle gpt-5.x verwenden max_completion_tokens statt max_tokens
-        _COMPLETION_TOKENS_MODELS = ("o1", "o3", "o3-mini", "o4", "o4-mini", "gpt-5")
-        use_completion_tokens = any(model_id.startswith(p) for p in _COMPLETION_TOKENS_MODELS)
         all_messages = [{"role": "system", "content": system}] + messages
         kwargs: dict = dict(model=model_id, messages=all_messages, temperature=temperature)
-        if use_completion_tokens:
-            kwargs["max_completion_tokens"] = max_tokens
-        else:
-            kwargs["max_tokens"] = max_tokens
+        kwargs["max_tokens"] = max_tokens
         try:
             resp = client.chat.completions.create(**kwargs)
             if _used_model is not None:
@@ -242,7 +236,22 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
                 _used_model += [model_id, ""]
             return resp.choices[0].message.content.strip()
         except Exception as e:
-            err_str = str(e)
+            err_str = str(e).lower()
+            # CRITICAL FIX: O1-Modelle und moderne OpenAI-Modelle verwenden max_completion_tokens statt max_tokens
+            if "max_tokens" in err_str and ("unexpected keyword argument" in err_str or "not supported" in err_str):
+                try:
+                    resp = client.chat.completions.create(
+                        model=model_id,
+                        messages=all_messages,
+                        max_completion_tokens=max_tokens,  # Korrigierter Parameter für O1/moderne Modelle
+                        temperature=temperature,
+                    )
+                    if _used_model is not None:
+                        _used_model.clear()
+                        _used_model += [model_id, ""]
+                    return resp.choices[0].message.content.strip()
+                except Exception as e_retry:
+                    raise LLMError(f"OpenAI ({model_id}): {e_retry}") from e_retry
             # Fallback auf gpt-4o-mini wenn Modell nicht gefunden oder Parameter unbekannt
             if model_id != "gpt-4o-mini" and ("model_not_found" in err_str or "unsupported_parameter" in err_str or "does not exist" in err_str):
                 try:
@@ -359,7 +368,114 @@ def providers_available() -> list[str]:
             out.append(p)
     return out or ["none"]
 
-def generate_role_text(provider: str, title: str, function: str | None, role_key: str | None = None) -> str:
+
+def rewrite_query_for_retrieval(query: str, provider: str = "openai", model: str = "gpt-4o-mini") -> str:
+    """
+    Transformiert eine konversationelle Nutzerfrage in eine optimierte Such-Query.
+    Eliminiert UI-Wrapper und fokussiert auf technische Kernbegriffe.
+
+    Phase 1 Query Distillation für RAG-Optimierung.
+
+    Example:
+        >>> rewrite_query_for_retrieval("Frage von Max: Welche Subunternehmen sind für die Verkabelung zuständig?")
+        "Subunternehmen Verkabelung Zuständigkeit"
+    """
+    system_prompt = (
+        "Du bist ein Retrieval-Experte. Deine Aufgabe ist es, eine komplexe Nutzeranfrage "
+        "in eine kurze, präzise Suchanfrage für eine Dokumentensuche (RAG) umzuwandeln. "
+        "Entferne Höflichkeitsfloskeln, UI-Kontext (wie 'Frage von...') und fokussiere dich "
+        "auf die technischen Substantive und fachlichen Anforderungen. "
+        "Behalte wichtige Fachterme bei (z.B. Subunternehmen, Vergabeverfahren, BIM). "
+        "Antwort: Nur die optimierte Suchanfrage, keine Erklärung."
+    )
+    try:
+        rewritten = try_models_with_messages(
+            provider=provider,
+            system=system_prompt,
+            messages=[{"role": "user", "content": query}],
+            max_tokens=100,
+            temperature=0.0,
+            model=model
+        )
+        return (rewritten or query).strip()
+    except Exception:
+        return query
+
+
+def generate_query_hypotheses(
+    query: str,
+    count: int = 3,
+    provider: str = "openai",
+    model: str = "gpt-4o-mini"
+) -> list[str]:
+    """
+    Generiert mehrere parallele Query-Varianten für Multi-Hypothesis Retrieval.
+    Jede Variante optimiert für eine andere Suchstrategie:
+      1. KEYWORD: Kurze Fachbegriffe für exakte BM25-Suche
+      2. SEMANTIC: Umformulierung mit Synonymen für Embedding-Suche
+      3. CONTEXT: Kontextuelle Erweiterung für breite Abdeckung
+
+    Robust gegen verschiedene LLM-Ausgabeformate (Nummerierung optional).
+
+    Args:
+        query: Original Nutzer-Query
+        count: Anzahl Hypothesen (default: 3)
+        provider: LLM Provider
+        model: Model name
+
+    Returns:
+        Liste von Query-Varianten; fällt auf [query] zurück bei Fehler.
+    """
+    system_prompt = (
+        f"Du bist ein Retrieval-Experte. Generiere {count} verschiedene Suchstrategien "
+        "für die folgende Nutzeranfrage. Jede Strategie auf einer eigenen Zeile:\n"
+        "1. KEYWORD: Kompakte Fachbegriffe für exakte Suche (BM25-optimiert)\n"
+        "2. SEMANTIC: Sachliche Umformulierung mit Synonymen (Embedding-optimiert)\n"
+        "3. CONTEXT: Erweiterte Beschreibung mit relevantem Fachkontext\n"
+        "Antwort: Nur die Suchstrategien, eine pro Zeile, keine Erklärungen."
+    )
+    try:
+        response = try_models_with_messages(
+            provider=provider,
+            system=system_prompt,
+            messages=[{"role": "user", "content": query}],
+            max_tokens=200,
+            temperature=0.3,  # Leichte Kreativität für Diversität
+            model=model
+        )
+        if not response:
+            return [query]
+
+        # Robustes Parsing: verschiedene Ausgabeformate abfangen
+        hypotheses = []
+        for line in response.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Nummerierung entfernen: "1.", "1)", "KEYWORD:", "- ", "* "
+            cleaned = re.sub(r'^[\d]+[.)\s]+', '', line)   # "1. ", "2) "
+            cleaned = re.sub(r'^[A-Z]+:\s*', '', cleaned)  # "KEYWORD: ", "SEMANTIC: "
+            cleaned = re.sub(r'^[-*]\s+', '', cleaned)     # "- ", "* "
+            cleaned = cleaned.strip()
+            if cleaned and cleaned.lower() != query.lower():
+                hypotheses.append(cleaned)
+
+        # Deduplizieren, Reihenfolge beibehalten
+        seen: set[str] = set()
+        unique: list[str] = []
+        for h in hypotheses:
+            if h not in seen:
+                seen.add(h)
+                unique.append(h)
+
+        return unique[:count] if unique else [query]
+
+    except Exception:
+        return [query]
+
+
+def generate_role_text(
+    provider: str, title: str, function: str | None, role_key: str | None = None) -> str:
     """
     Gibt eine vorgeschlagene Rollenbeschreibung (Markdown) zurück.
     Wir nutzen je nach Provider die offizielle SDK.

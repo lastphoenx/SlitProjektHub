@@ -9,6 +9,12 @@ from src.m06_ui import render_global_llm_settings
 from src.m08_llm import providers_available, test_provider_connection, test_provider_prompt, chat_provider_messages, get_available_models
 from src.m10_chat import save_message, load_history, delete_history, delete_all_history, list_sessions
 
+try:
+    from src.m01_retrieval_config import get_retrieval_config as _get_rc
+    _rc_available = True
+except Exception:
+    _rc_available = False
+
 st.set_page_config(page_title="KI-Status", page_icon="🚦", layout="wide")
 
 with st.sidebar:
@@ -39,6 +45,31 @@ textarea[aria-label*="Antwort von MISTRAL"] { min-height: 400px; }
 """, unsafe_allow_html=True)
 
 st.title("🚦 KI-Provider: Status & Test")
+
+# ============ INFO: RETRIEVAL PIPELINE ============
+if _rc_available:
+    try:
+        _rc = _get_rc()
+        _d  = _rc.query.enable_distillation
+        _m  = _rc.query.enable_multi_hypothesis
+        with st.expander("🧠 RAG Retrieval-Pipeline — aktive Konfiguration", expanded=False):
+            st.markdown(
+                f"""
+Das System verwendet eine **vierstufige Query-Intelligence-Pipeline**:
+
+| Stufe | Modul | Status | Einstellung |
+|-------|-------|--------|-------------|
+| 1. Query Distillation | `m08_llm.rewrite_query_for_retrieval()` | {'\u2705 Aktiv' if _d else '\u274c Deaktiv.'} | `distillation_model: {_rc.query.distillation_model}` |
+| 2. BM25 Keyword | `m09_rag._keyword_search()` | ✅ Aktiv | DE-Stemming, IDF, Priority-Boost |
+| 3. Semantic Embed | `m09_rag.retrieve_relevant_chunks()` | ✅ Aktiv | `{_rc.semantic.model}` |
+| 4. RRF Fusion | `m09_rag.reciprocal_rank_fusion()` | ✅ Aktiv | `rrf_k={_rc.hybrid.rrf_k}` |
+| 5. Multi-Hypothesis | `m08_llm.generate_query_hypotheses()` | {'\u2705 Aktiv' if _m else '\u23f8\ufe0f Bereit (OFF)'} | `hypothesis_count={_rc.query.hypothesis_count}` |
+
+**Konfiguration:** `config/retrieval.yaml` — alle Parameter ohne Code-Änderung anpassbar.
+"""
+            )
+    except Exception:
+        pass
 
 # ============ BEREICH 1: AMPEL-STATUS + PARALLEL-TEST ============
 st.header("1️⃣ Verbindungs-Status (Ampel)")

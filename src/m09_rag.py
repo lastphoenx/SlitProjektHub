@@ -8,7 +8,16 @@ import math
 from datetime import datetime, timezone
 from pathlib import Path
 from sqlmodel import select
+
+# PHASE 3: Config-basierte Retrieval-Parameter (statt Hardcoding)
+from src.m01_retrieval_config import get_retrieval_config
 from .m03_db import Role, Task, Context, Project, get_session, ChatMessage, Decision, Document, DocumentChunk, ProjectDocumentLink
+
+
+# Lazy import um zirkuläre Abhängigkeiten zu vermeiden
+def _get_generate_query_hypotheses():
+    from src.m08_llm import generate_query_hypotheses
+    return generate_query_hypotheses
 
 
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -366,7 +375,13 @@ def _keyword_search(
     exclude_classification: str | None = None
 ) -> dict:
     """
-    Keyword-basierte Suche (LIKE-Match in Text).
+    BM25-basierte Keyword-Suche (Goldstandard für lexikalisches Matching).
+    
+    BM25 berechnet Relevance-Score basierend auf:
+    - Term Frequency (TF): Wie oft kommt das Wort im Dokument vor?
+    - Inverse Document Frequency (IDF): Wie selten ist das Wort im Korpus?
+    - Document Length Normalization: Kurze Dokumente werden nicht benachteiligt
+    
     Args:
         query: Die Nutzer-Query
         project_key: Optional: Filter für Dokumente
@@ -374,11 +389,114 @@ def _keyword_search(
         role_key: Optional: Filter für Rollen-spezifische Dokumente
         classification_filter: Optional: Filter für Dokument-Klassifizierung
         exclude_classification: Optional: Dokumente mit DIESER Klassifizierung ausschliessen
-    Returns: Dict mit keyword-gefundenen Chunks
+    Returns: List mit keyword-gefundenen Chunks
     """
-    keywords = query.lower().split()
+    from rank_bm25 import BM25Okapi
+    import re
+    
+    # Stopwords (häufige, bedeutungsarme Wörter)
+    STOPWORDS = {
+        "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "eines",
+        "und", "oder", "aber", "mit", "von", "zu", "bei", "für", "auf", "an", "in",
+        "ich", "du", "er", "sie", "es", "wir", "ihr", "ist", "sind", "war", "waren",
+        "wird", "werden", "hat", "haben", "kann", "können", "soll", "sollte", "muss",
+        "wie", "was", "wer", "wo", "wann", "warum", "welche", "welcher", "welches",
+        "bitte", "antworten", "antwort", "frage", "anbieter", "hier", "kurz", "bündig",
+        "betrifft", "konkret", "gilt", "gelten", "stellt", "stelltsich", "nutzung",
+        "interner", "interne", "unserer", "unsere", "unser", "einer", "einem", "einen"
+    }
+
+    def _strip_query_wrapper(text: str) -> str:
+        """Entfernt UI-Wrapper wie 'Frage von Anbieter ...:' und behält die eigentliche Nutzfrage."""
+        lowered = text.lower()
+        marker = "frage von anbieter"
+        if marker in lowered and ":" in text:
+            return text.split(":", 1)[1].strip()
+        return text.strip()
+    
+    def tokenize(text: str) -> list[str]:
+        """
+        Tokenisiert Text mit einfachem German Stemming.
+        
+        - Lowercase
+        - Nur Buchstaben/Zahlen
+        - Stopwords raus
+        - Min 3 Zeichen
+        - Stemming: Entferne häufige deutsche Suffixe
+        """
+        text = text.lower()
+        # Split on non-alphanumeric, keep words
+        words = re.findall(r'\b\w+\b', text)
+        
+        # German Stemmer (einfache Version)
+        def stem_german(word: str) -> str:
+            """Entfernt häufige deutsche Suffixe."""
+            # Lange Wörter: mehrstufiges Stemming
+            if len(word) >= 10:
+                # Entferne lange Suffixe zuerst
+                for suffix in ['ende', 'enden', 'ender', 'enden', 'ungen', 'schaft', 'heit', 'keit']:
+                    if word.endswith(suffix):
+                        word = word[:-len(suffix)]
+                        break
+            
+            # Kurze Suffixe für alle Wörter >= 5 Zeichen
+            if len(word) >= 5:
+                for suffix in ['en', 'er', 'em', 'es', 'end', 'ung']:
+                    if word.endswith(suffix):
+                        word = word[:-len(suffix)]
+                        break
+            
+            return word
+        
+        # Filter: min 3 chars, no stopwords, dann stemmen
+        tokens = []
+        for w in words:
+            if len(w) >= 3 and w not in STOPWORDS:
+                stemmed = stem_german(w)
+                tokens.append(stemmed)
+        
+        return tokens
+
+    # PHASE 3: Priority Terms aus Config laden (statt hardcoded)
+    config = get_retrieval_config()
+    priority_parts = config.bm25.priority_terms
+
+    def _prepare_query_tokens(raw_query: str) -> list[str]:
+        """Fokussiert lange UI-Fragen auf die inhaltlich relevanten Suchterme."""
+        core_query = _strip_query_wrapper(raw_query)
+        tokens = tokenize(core_query)
+
+        # Deduplizieren, Reihenfolge beibehalten
+        unique_tokens = []
+        seen = set()
+        for token in tokens:
+            if token not in seen:
+                seen.add(token)
+                unique_tokens.append(token)
+
+        if len(unique_tokens) <= 12:
+            return unique_tokens
+
+        priority_tokens = [
+            token for token in unique_tokens
+            if any(part in token for part in priority_parts)
+        ]
+
+        if priority_tokens:
+            # Config-basierte Token-Länge
+            min_token_len = config.bm25.min_token_length
+            supporting_tokens = [
+                token for token in unique_tokens
+                if token not in priority_tokens and len(token) >= min_token_len
+            ]
+            return (priority_tokens + supporting_tokens[:4])[:8]
+
+        # Fallback für andere Fragen: die längsten, eindeutigsten Tokens behalten.
+        ranked_tokens = sorted(unique_tokens, key=len, reverse=True)
+        return ranked_tokens[:10]
     
     with get_session() as ses:
+        # Chunks laden mit allen Filtern
         doc_query = select(DocumentChunk).join(Document).where(Document.is_deleted == False)
         
         if project_key:
@@ -396,25 +514,80 @@ def _keyword_search(
         
         chunks = ses.exec(doc_query).all()
         
-        matches = []
+        if not chunks:
+            return []
+        
+        # Pre-fetch alle Dokumente (für Metadata)
+        doc_ids = list(set(c.document_id for c in chunks))
+        docs_map = {d.id: d for d in ses.exec(select(Document).where(Document.id.in_(doc_ids))).all()}
+        
+        # Tokenisieren und BM25 Index erstellen
+        tokenized_corpus = []
+        chunk_metadata = []  # (chunk_id, document_id, chunk_text, doc_object, token_set)
+        
         for chunk in chunks:
-            text = (chunk.chunk_text or "").lower()
-            match_count = sum(1 for kw in keywords if kw in text)
-            
-            if match_count > 0:
-                # Fetch document directly via document_id
-                doc = ses.get(Document, chunk.document_id)
+            tokens = tokenize(chunk.chunk_text or "")
+            if tokens:  # nur Chunks mit Content
+                tokenized_corpus.append(tokens)
+                chunk_metadata.append((chunk.id, chunk.document_id, chunk.chunk_text, docs_map.get(chunk.document_id), set(tokens)))
+        
+        if not tokenized_corpus:
+            return []
+        
+        # BM25 Index erstellen
+        bm25 = BM25Okapi(tokenized_corpus)
+        
+        # Query tokenisieren
+        query_tokens = _prepare_query_tokens(query)
+        
+        if not query_tokens:
+            # Fallback: wenn alle Wörter Stopwords sind, verwende Original
+            query_tokens = [token for token in query.lower().split() if len(token) >= 3]
+        
+        # BM25 Scores berechnen
+        scores = bm25.get_scores(query_tokens)
+        
+        # Top-K Ergebnisse sammeln
+        results = []
+        lowered_query = _strip_query_wrapper(query).lower()
+        active_priority_parts = [part for part in priority_parts if part in lowered_query]
+        for idx, score in enumerate(scores):
+            if score > 0:  # nur Matches
+                chunk_id, doc_id, chunk_text, doc, chunk_tokens = chunk_metadata[idx]
                 if doc:
-                    matches.append({
-                        "chunk_id": chunk.id,
-                        "document_id": doc.id,
+                    coverage = 0.0
+                    idf_bonus = 0.0
+                    priority_hits = 0
+                    matched_tokens = set()
+                    if query_tokens:
+                        matched_tokens = {token for token in query_tokens if token in chunk_tokens}
+                        coverage = len(matched_tokens) / len(query_tokens)
+                        idf_bonus = sum(max(0.0, bm25.idf.get(token, 0.0)) for token in matched_tokens)
+                    lowered_chunk = (chunk_text or "").lower()
+                    priority_hits = sum(1 for part in active_priority_parts if part in lowered_chunk)
+
+                    # PHASE 3: Config-basierte Scoring-Gewichte (statt Magic Numbers)
+                    keyword_score = float(score) + \
+                                    (coverage * config.bm25.coverage_weight) + \
+                                    (idf_bonus * config.bm25.idf_weight) + \
+                                    (priority_hits * config.bm25.priority_boost)
+                    results.append({
+                        "chunk_id": chunk_id,
+                        "document_id": doc_id,
                         "filename": doc.filename,
                         "classification": doc.classification,
-                        "text": chunk.chunk_text,
-                        "match_score": match_count / len(keywords) if keywords else 0
+                        "text": chunk_text,
+                        "match_score": keyword_score,
+                        "raw_bm25_score": float(score),
+                        "keyword_idf_score": round(idf_bonus, 3),
+                        "keyword_coverage": round(coverage, 3),
+                        "priority_hits": priority_hits,
+                        "matched_terms": sorted(matched_tokens),
                     })
         
-        return sorted(matches, key=lambda x: x["match_score"], reverse=True)[:limit]
+        results.sort(key=lambda x: x["match_score"], reverse=True)
+        
+        return results[:limit]
 
 
 def get_all_documents_with_best_scores(
@@ -441,6 +614,20 @@ def get_all_documents_with_best_scores(
     
     result = []
     
+    # CRITICAL FIX: Performance O(N) → O(1)
+    # Query-Embedding EINMAL vor der Schleife berechnen
+    query_emb = embed_text(query)
+    if not query_emb:
+        # Bei Embedding-Fehler: alle Dokumente als "fehlgeschlagen" markieren
+        return [{
+            "document_id": doc.id,
+            "filename": doc.filename,
+            "classification": doc.classification,
+            "best_score": 0.0,
+            "included": False,
+            "reason": "Query-Embedding fehlgeschlagen"
+        } for doc in all_docs]
+    
     with get_session() as ses:
         for doc in all_docs:
             # Hole alle Chunks dieses Dokuments
@@ -456,19 +643,6 @@ def get_all_documents_with_best_scores(
                     "best_score": 0.0,
                     "included": False,
                     "reason": "Keine Chunks vorhanden"
-                })
-                continue
-            
-            # Berechne Similarity für jeden Chunk
-            query_emb = embed_text(query)
-            if not query_emb:
-                result.append({
-                    "document_id": doc.id,
-                    "filename": doc.filename,
-                    "classification": doc.classification,
-                    "best_score": 0.0,
-                    "included": False,
-                    "reason": "Query-Embedding fehlgeschlagen"
                 })
                 continue
             
@@ -499,6 +673,62 @@ def get_all_documents_with_best_scores(
     
     # Sortiere nach Score (höchste zuerst)
     return sorted(result, key=lambda x: x["best_score"], reverse=True)
+
+
+def reciprocal_rank_fusion(results_list: list[list[dict]], k: int = 60) -> list[dict]:
+    """
+    Kombiniert mehrere Rankings (z.B. Semantic & BM25) ohne Gewichtungs-Bias.
+    RRF Score = Σ(1 / (k + rank)) für alle Rankings
+    
+    **Phase 2: Mathematisch fundierte Fusion - eliminiert Magic Number Weights**
+    
+    Vorteile:
+    - Robust gegen Score-Skalierung (BM25 vs. Cosine Similarity)
+    - Keine manuellen Gewichtungen nötig
+    - Bevorzugt Dokumente die in mehreren Rankings hoch stehen
+    - Industrieller Standard für Multi-Retrieval Fusion
+    
+    Args:
+        results_list: Liste von Rankings, z.B. [bm25_results, semantic_results]
+                     Jeder Entry: [{"chunk_id": 1, "document_id": 5, ...}, ...]
+        k: RRF Parameter (Standard: 60). Kontrolliert Falloff-Rate.
+           Höher = flacher (weniger Unterschied zwischen Ranks)
+    
+    Returns:
+        Fusionierte Ergebnisse sortiert nach RRF Score (höchste zuerst)
+        
+    Example:
+        >>> bm25 = [{"chunk_id": 1, "score": 5.2}, {"chunk_id": 2, "score": 3.1}]
+        >>> semantic = [{"chunk_id": 2, "score": 0.92}, {"chunk_id": 3, "score": 0.81}]
+        >>> fused = reciprocal_rank_fusion([bm25, semantic], k=60)
+        >>> # chunk_id=2 erscheint in beiden → höchster RRF Score
+    """
+    fused_scores: dict[int, float] = {}  # chunk_id -> RRF score
+    doc_data: dict[int, dict] = {}       # chunk_id -> chunk dict (vollständige Daten)
+    
+    for results in results_list:
+        for rank, hit in enumerate(results, start=1):
+            chunk_id = hit["chunk_id"]
+            
+            # RRF Score akkumulieren
+            if chunk_id not in fused_scores:
+                fused_scores[chunk_id] = 0.0
+                doc_data[chunk_id] = hit
+            
+            fused_scores[chunk_id] += 1.0 / (k + rank)
+    
+    # Sortieren nach RRF Score (höchste zuerst)
+    sorted_chunks = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+    
+    # Ergebnisse zusammenbauen mit RRF Score
+    final_results = []
+    for chunk_id, rrf_score in sorted_chunks:
+        hit = doc_data[chunk_id]
+        hit["rrf_score"] = round(rrf_score, 4)
+        hit["combined_score"] = round(rrf_score, 4)  # Für Kompatibilität mit bestehendem Code
+        final_results.append(hit)
+        
+    return final_results
 
 
 def retrieve_relevant_chunks_hybrid(
@@ -536,10 +766,14 @@ def retrieve_relevant_chunks_hybrid(
     if cache_key in _RAG_CACHE:
         return _RAG_CACHE[cache_key]
 
-    # Schwellen
-    guaranteed_threshold = 0.10            # Absolut: jedes Dokument mit Score > 10% bekommt min. 1 Slot
-    discovery_threshold = min(threshold * 0.35, 0.15)  # breites semantisches Netz
-    max_per_doc = max(2, limit // 2)           # Diversity-Cap (z.B. limit=7 → max 3 pro Dok)
+    # PHASE 3: Config-basierte Schwellenwerte (statt Hardcoding)
+    config = get_retrieval_config()
+    guaranteed_threshold = config.hybrid.guaranteed_doc_threshold
+    discovery_threshold = min(
+        threshold * config.semantic.discovery_threshold_multiplier,
+        config.semantic.min_discovery_threshold
+    )
+    max_per_doc = config.hybrid.max_chunks_per_document or max(2, limit // 2)
 
     # 1. Semantic-Suche mit niedrigerer Entdeckungs-Schwelle
     semantic_results = retrieve_relevant_chunks(
@@ -557,80 +791,191 @@ def retrieve_relevant_chunks_hybrid(
         exclude_classification=exclude_classification
     )
 
-    # 3. Alle Kandidaten zusammenführen (dedupliziert nach chunk_id)
-    all_docs_map: dict[int, dict] = {d["chunk_id"]: d for d in semantic_results.get("documents", [])}
-    for kd in keyword_docs:
-        if kd["chunk_id"] not in all_docs_map:
-            all_docs_map[kd["chunk_id"]] = kd
-    all_docs = list(all_docs_map.values())
+    semantic_debug_docs = [dict(d) for d in semantic_results.get("documents", [])]
+
+    # 3. PHASE 3: Multi-Hypothesis oder Standard RRF-Fusion
+    if config.query.enable_multi_hypothesis:
+        # Multi-Hypothesis: Parallele Query-Varianten -> mehr Rankings -> RRF
+        # Limit pro Einzel-Suche reduziert (Performance-Trade-off)
+        hyp_limit_sem = max(limit * 3, 10)   # weniger als Standard (limit*5)
+        hyp_limit_kw  = max(limit * 5, 15)   # weniger als Standard (limit*10)
+
+        hypotheses = _get_generate_query_hypotheses()(
+            query,
+            count=config.query.hypothesis_count,
+            provider=config.query.distillation_provider,
+            model=config.query.distillation_model
+        )
+
+        all_rankings: list[list[dict]] = [
+            semantic_results.get("documents", []),
+            keyword_docs,
+        ]
+        for hyp in hypotheses:
+            hyp_sem = retrieve_relevant_chunks(
+                hyp, project_key, hyp_limit_sem, discovery_threshold,
+                role_key=role_key,
+                classification_filter=classification_filter,
+                exclude_classification=exclude_classification
+            )
+            hyp_kw = _keyword_search(
+                hyp, project_key, hyp_limit_kw,
+                role_key=role_key,
+                classification_filter=classification_filter,
+                exclude_classification=exclude_classification
+            )
+            all_rankings.append(hyp_sem.get("documents", []))
+            all_rankings.append(hyp_kw)
+
+        fused_results = reciprocal_rank_fusion(
+            [r for r in all_rankings if r],
+            k=config.hybrid.rrf_k
+        )
+        # Aliase für Metadata-Merge unten (Quell-Listen aller Chunks)
+        semantic_ranking = [d for r in all_rankings[::2] for d in r]   # gerade Indizes: semantisch
+        keyword_ranking  = [d for r in all_rankings[1::2] for d in r]  # ungerade Indizes: keyword
+    else:
+        # Standard Single-Query RRF
+        semantic_ranking = semantic_results.get("documents", [])
+        keyword_ranking = keyword_docs
+        if semantic_ranking or keyword_ranking:
+            fused_results = reciprocal_rank_fusion(
+                [semantic_ranking, keyword_ranking],
+                k=config.hybrid.rrf_k
+            )
+        else:
+            fused_results = []
+    
+    # Merge vollständige Metadaten (RRF gibt nur chunk_id + scores zurück)
+    # Wir brauchen aber auch semantic similarity & keyword scores für Schwellenwert-Checks
+    all_docs_map: dict[int, dict] = {}
+    for d in semantic_ranking:
+        all_docs_map[d["chunk_id"]] = d
+    for kd in keyword_ranking:
+        cid = kd["chunk_id"]
+        if cid not in all_docs_map:
+            all_docs_map[cid] = kd
+        else:
+            # Chunk in beiden: BM25-Scores hinzufügen
+            all_docs_map[cid]["match_score"] = kd.get("match_score", 0)
+            all_docs_map[cid]["normalized_match_score"] = kd.get("normalized_match_score", 0)
+            all_docs_map[cid]["raw_bm25_score"] = kd.get("raw_bm25_score", 0)
+            all_docs_map[cid]["keyword_coverage"] = kd.get("keyword_coverage", 0)
+            all_docs_map[cid]["keyword_idf_score"] = kd.get("keyword_idf_score", 0)
+            all_docs_map[cid]["priority_hits"] = kd.get("priority_hits", 0)
+            all_docs_map[cid]["matched_terms"] = kd.get("matched_terms", [])
+    
+    # RRF Scores in all_docs_map übertragen
+    all_docs = []
+    for fused in fused_results:
+        cid = fused["chunk_id"]
+        if cid in all_docs_map:
+            chunk = all_docs_map[cid]
+            chunk["rrf_score"] = fused["rrf_score"]
+            chunk["combined_score"] = fused["combined_score"]
+            all_docs.append(chunk)
+
+    def _combined_score(d: dict) -> float:
+        """PHASE 2: RRF Score als kombinierter Score (statt Magic Number Weights)"""
+        return d.get("combined_score", d.get("rrf_score", 0))
+    
+    def _quality_score(d: dict) -> float:
+        """Original semantic/keyword score für Threshold-Checks.
+        RRF ist für Ranking, aber Schwellenwerte basieren auf absoluten Similarity-Scores."""
+        return max(d.get("similarity", 0), d.get("match_score", 0))
+
+    def _debug_entry(d: dict, source: str) -> dict:
+        return {
+            "source": source,
+            "chunk_id": d.get("chunk_id"),
+            "document_id": d.get("document_id"),
+            "filename": d.get("filename"),
+            "classification": d.get("classification"),
+            "similarity": d.get("similarity", 0.0),
+            "match_score": d.get("match_score", 0.0),
+            "normalized_match_score": d.get("normalized_match_score", d.get("match_score", 0.0)),
+            "raw_keyword_score": d.get("raw_keyword_score", d.get("raw_bm25_score", 0.0)),
+            "raw_bm25_score": d.get("raw_bm25_score", 0.0),
+            "keyword_coverage": d.get("keyword_coverage", 0.0),
+            "keyword_idf_score": d.get("keyword_idf_score", 0.0),
+            "priority_hits": d.get("priority_hits", 0),
+            "matched_terms": d.get("matched_terms", []),
+            "rrf_score": d.get("rrf_score", 0.0),
+            "quality_score": round(_quality_score(d), 3),
+            "combined_score": round(_combined_score(d), 3),
+            "text_preview": _find_relevant_window((d.get("text", "") or "").replace("\n", " "), query, 220),
+        }
 
     # 4. Dateiname-Boost: kleine Aufwertung wenn Query-Wörter im Dateinamen vorkommen
-    query_words_long = {w.lower().rstrip(":") for w in query.split() if len(w) > 3}  # Strip Satzzeichen
-    if query_words_long:
-        for d in all_docs:
-            fname_parts = set(
-                d["filename"].lower().replace(".", " ").replace("_", " ").replace("-", " ").split()
-            )
-            # Teilwort-Übereinstimmung (z.B. "preis" in "preisblatt" oder "preisstruktur")
-            # ODER gemeinsamer Präfix >= 5 Zeichen (z.B. "preisstruktur" vs "preisblatt" → "preis")
-            matched = False
-            for qw in query_words_long:
-                for fp in fname_parts:
-                    if (
-                        qw in fp or fp in qw  # Exaktes Teilwort
-                        or (len(qw) >= 5 and len(fp) >= 5 and qw[:5] == fp[:5])  # Gemeinsamer Präfix
-                    ):
-                        matched = True
+    if config.filename_boost.enable:
+        query_words_long = {w.lower().rstrip(":") for w in query.split() if len(w) > config.filename_boost.min_word_length}
+        if query_words_long:
+            for d in all_docs:
+                fname_parts = set(
+                    d["filename"].lower().replace(".", " ").replace("_", " ").replace("-", " ").split()
+                )
+                # Teilwort-Übereinstimmung (z.B. "preis" in "preisblatt" oder "preisstruktur")
+                # ODER gemeinsamer Präfix >= config Zeichen
+                matched = False
+                for qw in query_words_long:
+                    for fp in fname_parts:
+                        if (
+                            qw in fp or fp in qw  # Exaktes Teilwort
+                            or (len(qw) >= config.filename_boost.min_prefix_match
+                                and len(fp) >= config.filename_boost.min_prefix_match
+                                and qw[:config.filename_boost.min_prefix_match] == fp[:config.filename_boost.min_prefix_match])
+                        ):
+                            matched = True
+                            break
+                    if matched:
                         break
+                
                 if matched:
-                    break
-            
-            if matched:
-                score_key = "similarity" if "similarity" in d else "match_score"
-                # Erhöhter Boost: +10% statt +4%
-                d[score_key] = min(1.0, d.get(score_key, 0) + 0.10)
+                    score_key = "similarity" if "similarity" in d else "match_score"
+                    # Config-basierter Boost
+                    d[score_key] = min(1.0, d.get(score_key, 0) + config.filename_boost.boost_amount)
 
-    # 5. Pro Dokument: Chunks nach Score sortieren
+    # 5. Pro Dokument: Chunks nach RRF Score sortieren
     by_doc: dict[int, list] = {}
     for d in all_docs:
         by_doc.setdefault(d["document_id"], []).append(d)
     for did in by_doc:
-        by_doc[did].sort(key=lambda x: x.get("similarity", x.get("match_score", 0)), reverse=True)
+        by_doc[did].sort(key=_combined_score, reverse=True)
 
     # 6. Garantierter Mindest-1-Slot pro qualifizierendem Dokument
+    # WICHTIG: Schwellenwert basiert auf original quality scores, Ranking auf RRF
     guaranteed: list[dict] = []
     guaranteed_cids: set[int] = set()
-    # Sortiert nach bestem Score, damit top-Dokumente zuerst kommen
+    # Sortiert nach bestem RRF Score
     sorted_docs = sorted(
         by_doc.items(),
-        key=lambda kv: kv[1][0].get("similarity", kv[1][0].get("match_score", 0)),
+        key=lambda kv: _combined_score(kv[1][0]),
         reverse=True
     )
     for _did, chunks in sorted_docs:
         best = chunks[0]
-        if best.get("similarity", best.get("match_score", 0)) >= guaranteed_threshold:
+        # Schwellenwert-Check mit original scores (nicht RRF)
+        if _quality_score(best) >= guaranteed_threshold:
             guaranteed.append(best)
             guaranteed_cids.add(best["chunk_id"])
 
-    # 7. Pflichtenheft-Fallback: "Pflichtenheft (Projekt)" immer vertreten (wenn Score > 0.10)
+    # 7. Pflichtenheft-Fallback: "Pflichtenheft (Projekt)" immer vertreten (wenn Score > threshold)
     PFLICHTENHEFT_CLS = "Pflichtenheft (Projekt)"
-    if project_key and exclude_classification != PFLICHTENHEFT_CLS:
+    if project_key and exclude_classification != PFLICHTENHEFT_CLS and config.hybrid.pflichtenheft_fallback:
         pflicht_represented = any(c.get("classification") == PFLICHTENHEFT_CLS for c in guaranteed)
         if not pflicht_represented:
             pflicht_candidates = [
                 d for d in all_docs if d.get("classification") == PFLICHTENHEFT_CLS
             ]
             if pflicht_candidates:
-                best_pflicht = max(
-                    pflicht_candidates,
-                    key=lambda x: x.get("similarity", x.get("match_score", 0))
-                )
-                if best_pflicht.get("similarity", best_pflicht.get("match_score", 0)) > 0.10:
+                # Ranking: RRF, Threshold: original score
+                best_pflicht = max(pflicht_candidates, key=_combined_score)
+                if _quality_score(best_pflicht) > config.hybrid.pflichtenheft_min_score:
                     guaranteed.append(best_pflicht)
                     guaranteed_cids.add(best_pflicht["chunk_id"])
 
-    # Garantierte Chunks nach Score sortieren
-    guaranteed.sort(key=lambda x: x.get("similarity", x.get("match_score", 0)), reverse=True)
+    # Garantierte Chunks nach RRF Score sortieren (statt semantic/keyword)
+    guaranteed.sort(key=_combined_score, reverse=True)
 
     # 8. Qualitäts-Füllung: restliche Slots mit top-Qualitäts-Chunks (>= threshold, diversity-cap)
     per_doc_count: dict[int, int] = {}
@@ -642,18 +987,15 @@ def retrieve_relevant_chunks_hybrid(
     result_cids: set[int] = {d["chunk_id"] for d in result_docs}
 
     if len(result_docs) < limit:
-        all_sorted = sorted(
-            all_docs,
-            key=lambda x: x.get("similarity", x.get("match_score", 0)),
-            reverse=True
-        )
+        # Sortiere nach RRF Score, aber filtere nach quality threshold
+        all_sorted = sorted(all_docs, key=_combined_score, reverse=True)
         for entry in all_sorted:
             if len(result_docs) >= limit:
                 break
             cid = entry["chunk_id"]
-            score = entry.get("similarity", entry.get("match_score", 0))
-            if score < guaranteed_threshold:
-                break  # Nur Chunks über Mindest-Qualitätsschwelle
+            # Schwellenwert-Check mit original scores (nicht RRF)
+            if _quality_score(entry) < guaranteed_threshold:
+                break
             if cid in result_cids:
                 continue
             did = entry["document_id"]
@@ -662,9 +1004,19 @@ def retrieve_relevant_chunks_hybrid(
                 result_cids.add(cid)
                 per_doc_count[did] = per_doc_count.get(did, 0) + 1
 
-    # Finale Sortierung nach Score
-    result_docs.sort(key=lambda x: x.get("similarity", x.get("match_score", 0)), reverse=True)
+    # Finale Sortierung nach RRF Score
+    result_docs.sort(key=_combined_score, reverse=True)
+    for doc in result_docs:
+        doc["combined_score"] = round(_combined_score(doc), 3)
+        # Für Debug: Auch quality_score speichern
+        doc["quality_score"] = round(_quality_score(doc), 3)
     semantic_results["documents"] = result_docs[:limit]
+    semantic_results["debug"] = {
+        "query": query,
+        "semantic_candidates": [_debug_entry(d, "semantic") for d in semantic_debug_docs[:15]],
+        "keyword_candidates": [_debug_entry(d, "keyword") for d in keyword_docs[:15]],
+        "final_candidates": [_debug_entry(d, "final") for d in result_docs[:15]],
+    }
 
     _RAG_CACHE[cache_key] = semantic_results
     return semantic_results
@@ -880,18 +1232,59 @@ def retrieve_relevant_chunks(
     return results
 
 
-def format_chunk_preview(chunk_text: str, max_length: int = 200) -> str:
+def _find_relevant_window(text: str, query: str | None, max_length: int) -> str:
+    """Extrahiert nach Möglichkeit einen Ausschnitt um den ersten relevanten Query-Treffer."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    if not query:
+        return cleaned[:max_length] + "..." if len(cleaned) > max_length else cleaned
+
+    import re
+
+    def _terms(raw: str) -> list[str]:
+        stopwords = {
+            "frage", "anbieter", "bitte", "kurz", "bündig", "antworten", "antwort",
+            "konkret", "betrifft", "gilt", "gelten", "unsere", "unserer", "hier",
+            "wird", "werden", "eine", "einer", "eines", "dieses", "dieser", "auch"
+        }
+        words = re.findall(r"\b\w+\b", (raw or "").lower())
+        candidates = [w for w in words if len(w) >= 5 and w not in stopwords]
+        seen = set()
+        ordered = []
+        for item in candidates:
+            stem = item[:10]
+            if stem not in seen:
+                seen.add(stem)
+                ordered.append(stem)
+        return ordered[:12]
+
+    lowered = cleaned.lower()
+    for term in _terms(query):
+        idx = lowered.find(term)
+        if idx >= 0:
+            start = max(0, idx - max_length // 3)
+            end = min(len(cleaned), start + max_length)
+            snippet = cleaned[start:end]
+            if start > 0:
+                snippet = "..." + snippet
+            if end < len(cleaned):
+                snippet = snippet + "..."
+            return snippet
+
+    return cleaned[:max_length] + "..." if len(cleaned) > max_length else cleaned
+
+
+def format_chunk_preview(chunk_text: str, max_length: int = 200, query: str | None = None) -> str:
     """
     Formatiert einen Chunk für Preview (truncate bei max_length).
     Args:
         chunk_text: Der Chunk-Text
         max_length: Max Anzahl Zeichen
+        query: Optionaler Query-Text für Treffer-zentrierte Preview
     Returns: Gekürzter Text mit "..." falls nötig
     """
-    text = (chunk_text or "").strip()
-    if len(text) > max_length:
-        return text[:max_length] + "..."
-    return text
+    return _find_relevant_window(chunk_text, query, max_length)
 
 
 def filter_roles_by_query(query: str, project_key: str | None = None, limit: int = 3) -> list:

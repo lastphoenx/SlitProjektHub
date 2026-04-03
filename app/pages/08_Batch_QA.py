@@ -13,7 +13,7 @@ try:
 except ImportError:
     HAS_OPENPYXL = False
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -22,7 +22,41 @@ from src.m03_db import init_db, get_session, Document, DocumentChunk
 from src.m06_ui import render_global_llm_settings
 from src.m07_projects import list_projects_df, load_project, get_project_roles
 from src.m08_llm import try_models_with_messages
-from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results, get_all_documents_with_best_scores
+from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results, get_all_documents_with_best_scores, format_chunk_preview
+def render_retrieval_debug(debug_payload: dict | None, title: str = "🔎 Retrieval-Debug (BM25 / Semantic / Final)"):
+    if not debug_payload:
+        st.caption("Keine Retriever-Debugdaten verfügbar")
+        return
+
+    with st.expander(title, expanded=False):
+        query_text = debug_payload.get("query", "")
+        if query_text:
+            st.caption(f"Query: {query_text[:220]}{'...' if len(query_text) > 220 else ''}")
+
+        sections = [
+            ("keyword_candidates", "🟡 Keyword/BM25"),
+            ("semantic_candidates", "🔵 Semantic"),
+            ("final_candidates", "🟢 Final verwendet"),
+        ]
+
+        for key, label in sections:
+            rows = debug_payload.get(key, [])
+            st.markdown(f"**{label}:**")
+            if not rows:
+                st.caption("Keine Einträge")
+                continue
+            for idx, row in enumerate(rows, 1):
+                st.text(
+                    f"{idx}. {row.get('filename','?')[:34]} | cls={row.get('classification','?')[:18]} | "
+                    f"comb={row.get('combined_score',0):.3f} | sem={row.get('similarity',0):.3f} | "
+                    f"kw={row.get('normalized_match_score',0):.3f} | raw={row.get('raw_bm25_score',0):.3f} | "
+                    f"idf={row.get('keyword_idf_score',0):.3f} | cov={row.get('keyword_coverage',0):.3f} | "
+                    f"hits={row.get('priority_hits',0)}"
+                )
+                if row.get("matched_terms"):
+                    st.caption("terms: " + ", ".join(row.get("matched_terms", [])))
+                st.caption(row.get("text_preview", ""))
+
 from src.m09_docs import get_project_documents
 from src.m13_ki_detector import analyze_all_vendors, analyze_vendor_with_ai
 from sqlmodel import select
@@ -511,22 +545,54 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                 .where(DocumentChunk.document_id == selected_csv_id)
                 .order_by(DocumentChunk.chunk_index)
             ).all()
-        _first_chunk = None
+        
+        # Parse alle Chunks in ein Dict: {nr -> chunk}
+        chunks_by_nr = {}
+        parse_errors = []
+        
         for _c in _all_chunks:
             try:
                 clean_text = _strip_contextual_prefix(_c.chunk_text)
                 _cd = json.loads(clean_text)
-                if str(_cd.get("Nr", "")).strip() == str(int(_preview_frage_nr)):
-                    _first_chunk = _c
-                    break
-            except Exception:
-                pass
-        # Fallback: Array-Index wenn Nr. nicht gefunden
-        if _first_chunk is None and _all_chunks:
-            _first_chunk = _all_chunks[min(int(_preview_frage_nr) - 1, len(_all_chunks) - 1)]
+                
+                # Extrahiere Nr (robust: alle Typen unterstützen)
+                chunk_nr_raw = _cd.get("Nr", _cd.get("nr", _cd.get("NR", "")))
+                
+                if chunk_nr_raw == "" or chunk_nr_raw is None:
+                    continue  # Skip Chunks ohne Nr
+                
+                # Konvertiere zu Int (bevorzugt) oder String
+                try:
+                    chunk_nr = int(float(str(chunk_nr_raw).strip()))
+                except (ValueError, TypeError):
+                    chunk_nr = str(chunk_nr_raw).strip()
+                
+                chunks_by_nr[chunk_nr] = (_c, _cd)
+                
+            except json.JSONDecodeError as e:
+                parse_errors.append(f"Chunk #{_c.id}: JSON-Parse-Fehler")
+            except Exception as e:
+                parse_errors.append(f"Chunk #{_c.id}: {type(e).__name__}")
+        
+        # Lookup: Finde gewünschte Frage
+        target_nr = int(_preview_frage_nr)
+        
+        if target_nr in chunks_by_nr:
+            _first_chunk, _q1 = chunks_by_nr[target_nr]
+        else:
+            # Nicht gefunden: Zeige verfügbare Nummern
+            available_nrs = sorted(chunks_by_nr.keys())[:20]  # Erste 20
+            st.error(f"❌ Frage Nr. {target_nr} existiert nicht im CSV!")
+            st.info(f"Verfügbare Nummern (Auswahl): {', '.join(map(str, available_nrs))}{'...' if len(chunks_by_nr) > 20 else ''}")
+            _first_chunk = None
+        
+        # Parse-Fehler anzeigen (wenn vorhanden)
+        if parse_errors and len(parse_errors) <= 5:
+            with st.expander(f"⚠️ {len(parse_errors)} Parse-Fehler", expanded=False):
+                for err in parse_errors:
+                    st.caption(err)
+        
         if _first_chunk:
-            clean_text = _strip_contextual_prefix(_first_chunk.chunk_text)
-            _q1 = json.loads(clean_text)
             _q1_text = _q1.get("Frage", "")
             _q1_nr = _q1.get("Nr", _preview_frage_nr)
             _q1_lief = _q1.get("Lieferant", "")
@@ -538,6 +604,7 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
             _rag_prev = ""
             _rag_sources = "(RAG deaktiviert)"
             _rag_diagnostics = []
+            _rag_debug = None
             if st.session_state.get("global_rag_enabled", True):
                 _rr = retrieve_relevant_chunks_hybrid(
                     _q1_text,
@@ -547,13 +614,14 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                     exclude_classification="FAQ/Fragen-Katalog"  # CSV-Fragendatei aus RAG ausschliessen
                 )
                 _rr = deduplicate_results(_rr)
+                _rag_debug = _rr.get("debug")
                 _rag_prev = build_rag_context_from_search(_rr)
                 
                 # RAG-Quellen (gefundene Chunks)
                 if _rr.get("documents"):
                     _rag_sources = "\n".join(
                         f"  • {d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%})\n"
-                        f"    {(d.get('text','') or '').replace(chr(10),' ')[:150]}…"
+                        f"    {format_chunk_preview((d.get('text','') or '').replace(chr(10),' '), max_length=150, query=_q1_text)}"
                         for d in _rr["documents"]
                     )
                 else:
@@ -619,6 +687,8 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                                 for d in _excluded:
                                     _reason_short = d['reason'][:30] if len(d['reason']) <= 30 else d['reason'][:27] + "..."
                                     st.text(f"  {d['best_score']:>3.0%} | {d['filename'][:25]:25} | {_reason_short}")
+
+                    render_retrieval_debug(_rag_debug)
                 
                 with _pc1:
                     st.caption("**SYSTEM-PROMPT:**")
@@ -817,11 +887,17 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
             rag_context = build_rag_context_from_search(rag_results)
             # RAG-Debug: Quellen für Export-Spalte _RAG_Chunks
             result_row["_RAG_Chunks"] = " | ".join(
-                f"{d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%}): {(d.get('text','') or '')[:80].replace(chr(10),' ')}…"
+                f"{d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%}): {format_chunk_preview((d.get('text','') or '').replace(chr(10),' '), max_length=120, query=question_text)}"
                 for d in rag_results.get("documents", [])
+            )
+            result_row["_RAG_Debug"] = " | ".join(
+                f"{d.get('source','?')}:{d.get('filename','?')} comb={d.get('combined_score',0):.3f} sem={d.get('similarity',0):.3f} kw={d.get('normalized_match_score',0):.3f} raw={d.get('raw_bm25_score',0):.3f} idf={d.get('keyword_idf_score',0):.3f} cov={d.get('keyword_coverage',0):.3f} hits={d.get('priority_hits',0)}"
+                for bucket in ["keyword_candidates", "semantic_candidates", "final_candidates"]
+                for d in rag_results.get("debug", {}).get(bucket, [])[:5]
             )
         else:
             result_row["_RAG_Chunks"] = "(RAG deaktiviert)"
+            result_row["_RAG_Debug"] = "(RAG deaktiviert)"
         
         # Je nach Rollen-Modus: 1 oder N Antworten generieren
         if role_mode == "none":
@@ -997,8 +1073,8 @@ if st.session_state.get("batch_results"):
     
     results_df = pd.DataFrame(st.session_state["batch_results"])
     
-    # _RAG_Chunks: in Anzeige versteckt, aber in CSV/Excel-Export enthalten
-    display_df = results_df[[c for c in results_df.columns if c != "_RAG_Chunks"]]
+    # Interne RAG-Debugspalten in Anzeige versteckt, aber im CSV/Excel-Export enthalten
+    display_df = results_df[[c for c in results_df.columns if c not in ["_RAG_Chunks", "_RAG_Debug"]]]
 
     # Dynamische Spalten-Konfiguration je nach Rollen-Modus
     column_config = {
@@ -1020,10 +1096,12 @@ if st.session_state.get("batch_results"):
         column_config=column_config,
         key="batch_results_editor"
     )
-    # Export-DataFrame: _RAG_Chunks wieder hinzufügen
+    # Export-DataFrame: interne RAG-Debugspalten wieder hinzufügen
     export_df = edited_df.copy()
     if "_RAG_Chunks" in results_df.columns:
         export_df["_RAG_Chunks"] = results_df["_RAG_Chunks"].values
+    if "_RAG_Debug" in results_df.columns:
+        export_df["_RAG_Debug"] = results_df["_RAG_Debug"].values
     
     # Download-Button
     st.markdown("---")
