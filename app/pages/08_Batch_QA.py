@@ -493,13 +493,15 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                     _q1_text,
                     project_key=selected_project,
                     limit=st.session_state.get("global_llm_rag_top_k", 5),
-                    threshold=st.session_state.get("global_rag_similarity_threshold", 0.5)
+                    threshold=st.session_state.get("global_rag_similarity_threshold", 0.5),
+                    exclude_classification="FAQ/Fragen-Katalog"  # CSV-Fragendatei aus RAG ausschliessen
                 )
                 _rr = deduplicate_results(_rr)
                 _rag_prev = build_rag_context_from_search(_rr)
                 if _rr.get("documents"):
                     _rag_sources = "\n".join(
-                        f"  • {d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%})"
+                        f"  • {d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%})\n"
+                        f"    {(d.get('text','') or '').replace(chr(10),' ')[:150]}…"
                         for d in _rr["documents"]
                     )
                 else:
@@ -687,7 +689,8 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
                 question_text,
                 project_key=selected_project,
                 limit=rag_top_k,
-                threshold=rag_threshold
+                threshold=rag_threshold,
+                exclude_classification="FAQ/Fragen-Katalog"  # CSV-Fragendatei aus RAG ausschliessen
             )
             rag_results = deduplicate_results(rag_results)
             rag_context = build_rag_context_from_search(rag_results)

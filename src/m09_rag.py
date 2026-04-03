@@ -320,7 +320,8 @@ def retrieve_relevant_chunks_hybrid(
     limit: int = 5, 
     threshold: float = 0.5,
     role_key: str | None = None,
-    classification_filter: str | None = None
+    classification_filter: str | None = None,
+    exclude_classification: str | None = None
 ) -> dict:
     """
     Hybrid-Suche: Semantic (70%) + Keyword (30%) kombinieren.
@@ -331,7 +332,8 @@ def retrieve_relevant_chunks_hybrid(
         limit: Max Resultate pro Typ
         threshold: Min Similarity für Semantic
         role_key: Optional: Filter für Rollen-spezifische Dokumente (verwendet linked_role_keys)
-        classification_filter: Optional: Filter für Dokument-Klassifizierung
+        classification_filter: Optional: Nur Dokumente mit DIESER Klassifizierung
+        exclude_classification: Optional: Dokumente mit DIESER Klassifizierung ausschliessen
     
     Returns: Dict mit kombinierten Ergebnissen
     """
@@ -343,14 +345,16 @@ def retrieve_relevant_chunks_hybrid(
     semantic_results = retrieve_relevant_chunks(
         query, project_key, limit, threshold, 
         role_key=role_key, 
-        classification_filter=classification_filter
+        classification_filter=classification_filter,
+        exclude_classification=exclude_classification
     )
     
     # Keyword-Suche
     keyword_docs = _keyword_search(
         query, project_key, limit,
         role_key=role_key,
-        classification_filter=classification_filter
+        classification_filter=classification_filter,
+        exclude_classification=exclude_classification
     )
     
     # Hybrid: Dokumente kombinieren
@@ -380,7 +384,8 @@ def retrieve_relevant_chunks(
     limit: int = 5, 
     threshold: float = 0.5,
     role_key: str | None = None,
-    classification_filter: str | None = None
+    classification_filter: str | None = None,
+    exclude_classification: str | None = None
 ) -> dict:
     """
     Sucht die relevantesten Chunks (Rollen, Kontexte, Projekte, Tasks, Decisions, Dokumente) für eine Query.
@@ -392,7 +397,8 @@ def retrieve_relevant_chunks(
         limit: Max Anzahl Resultate pro Typ
         threshold: Min Similarity Score (0-1)
         role_key: Optional: Filter für Rollen-spezifische Dokumente
-        classification_filter: Optional: Filter für Dokument-Klassifizierung
+        classification_filter: Optional: Nur Dokumente mit DIESER Klassifizierung
+        exclude_classification: Optional: Dokumente mit DIESER Klassifizierung ausschliessen
     
     Returns: Dict mit relevanten Objekten:
         {
@@ -536,6 +542,10 @@ def retrieve_relevant_chunks(
         # Filter: Klassifizierung
         if classification_filter:
             doc_query = doc_query.where(Document.classification == classification_filter)
+        
+        # Filter: Klassifizierung ausschliessen (z.B. FAQ/Fragen-Katalog im Batch-Modus)
+        if exclude_classification:
+            doc_query = doc_query.where(Document.classification != exclude_classification)
         
         chunks = ses.exec(doc_query).all()
         
