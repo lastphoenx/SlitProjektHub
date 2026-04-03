@@ -380,7 +380,7 @@ if selected_project and selected_provider:
                                     with col1:
                                         debug_query = get_debug_query_from_sources(sources)
                                         preview = format_chunk_preview(doc.get("text", ""), max_length=200, query=debug_query)
-                                        score = doc.get('similarity', doc.get('match_score', 0))
+                                        score = min(max(doc.get('similarity', 0), doc.get('match_score', 0)), 1.0)
                                         st.markdown(f"**{doc.get('filename')}** ({score:.0%})\n\n{preview}")
                                     with col2:
                                         if st.button("👍", key=f"feedback_up_{msg['id']}_{doc.get('document_id')}_{idx}"):
@@ -559,13 +559,13 @@ Antworte prägnant, strukturiert und mit direktem Bezug zu den Projekt-Anforderu
                                     if included:
                                         st.markdown("**✅ Eingeschlossen (>= Threshold):**")
                                         for d in included:
-                                            st.text(f"  {d['best_score']:.0%} | {d['filename'][:35]}")
+                                            st.text(f"  {min(d['best_score'], 1.0):.0%} | {d['filename'][:35]}")
                                     
                                     if excluded:
                                         st.markdown("**⚠️ Ausgeschlossen:**")
                                         for d in excluded:
                                             reason_short = d['reason'][:30] if len(d['reason']) <= 30 else d['reason'][:27] + "..."
-                                            st.text(f"  {d['best_score']:>3.0%} | {d['filename'][:25]:25} | {reason_short}")
+                                            st.text(f"  {min(d['best_score'], 1.0):>3.0%} | {d['filename'][:25]:25} | {reason_short}")
                                 except Exception as diag_err:
                                     st.caption(f"Diagnostics nicht verfügbar: {str(diag_err)}")
 
@@ -578,7 +578,7 @@ Antworte prägnant, strukturiert und mit direktem Bezug zu den Projekt-Anforderu
                                         col1, col2 = st.columns([3, 1])
                                         with col1:
                                             preview = format_chunk_preview(doc.get("text", ""), max_length=300, query=user_input)
-                                            score = doc.get('similarity', doc.get('match_score', 0))
+                                            score = min(max(doc.get('similarity', 0), doc.get('match_score', 0)), 1.0)
                                             st.markdown(f"**{doc.get('filename')}** ({score:.0%})\n\n{preview}")
                                         with col2:
                                             if st.button("👍", key=f"up_{saved_msg.id}_{doc['document_id']}_{idx}"):

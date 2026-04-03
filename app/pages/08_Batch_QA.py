@@ -75,6 +75,44 @@ def _strip_contextual_prefix(chunk_text: str) -> str:
         if newline_pos > 0:
             return chunk_text[newline_pos + 1:]
     return chunk_text
+
+
+def _get_csv_field(data: dict, field_name: str, fallback="") -> str:
+    """
+    Robuste Feldextraktion aus CSV-JSON.
+    Probiert alle Case-Varianten mit/ohne Punkt, plus semantische Aliase.
+    
+    Beispiel: 
+    - field_name="Nr" findet: "Nr", "nr", "NR", "Nr.", "Nummer", "Number", "ID", "id"
+    """
+    # Standard-Varianten
+    variants = [
+        field_name,                      # "Nr"
+        field_name.lower(),              # "nr"
+        field_name.upper(),              # "NR"
+        field_name + ".",                # "Nr."
+        field_name.lower() + ".",        # "nr."
+        field_name.upper() + ".",        # "NR."
+    ]
+    
+    # Semantische Aliase für häufige Felder
+    aliases = {
+        "Nr": ["Nummer", "nummer", "NUMMER", "Number", "number", "NUMBER", "No", "no", "NO", "ID", "id", "Id"],
+        "Frage": ["Question", "question", "QUESTION", "Text", "text", "TEXT"],
+        "Lieferant": ["Anbieter", "anbieter", "ANBIETER", "Vendor", "vendor", "VENDOR", "Supplier", "supplier"],
+    }
+    
+    # Füge Aliase hinzu wenn Feld bekannt
+    if field_name in aliases:
+        variants.extend(aliases[field_name])
+    
+    for v in variants:
+        if v in data:
+            val = data[v]
+            # String-Konvertierung wenn nötig (für numerische IDs)
+            return str(val) if val is not None else fallback
+    
+    return fallback
 init_db()
 
 st.set_page_config(page_title="Fragen-Batch", page_icon="🔄", layout="wide")
@@ -555,10 +593,10 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                 clean_text = _strip_contextual_prefix(_c.chunk_text)
                 _cd = json.loads(clean_text)
                 
-                # Extrahiere Nr (robust: alle Typen unterstützen)
-                chunk_nr_raw = _cd.get("Nr", _cd.get("nr", _cd.get("NR", "")))
+                # Extrahiere Nr (robust: alle Case-Varianten mit/ohne Punkt)
+                chunk_nr_raw = _get_csv_field(_cd, "Nr")
                 
-                if chunk_nr_raw == "" or chunk_nr_raw is None:
+                if not chunk_nr_raw or chunk_nr_raw == "":
                     continue  # Skip Chunks ohne Nr
                 
                 # Konvertiere zu Int (bevorzugt) oder String
@@ -593,9 +631,9 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                     st.caption(err)
         
         if _first_chunk:
-            _q1_text = _q1.get("Frage", "")
-            _q1_nr = _q1.get("Nr", _preview_frage_nr)
-            _q1_lief = _q1.get("Lieferant", "")
+            _q1_text = _get_csv_field(_q1, "Frage", "")
+            _q1_nr = _get_csv_field(_q1, "Nr", str(_preview_frage_nr))
+            _q1_lief = _get_csv_field(_q1, "Lieferant", "")
 
             _proj_ctx = ""
             if use_project_context and proj_obj:
@@ -620,7 +658,7 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                 # RAG-Quellen (gefundene Chunks)
                 if _rr.get("documents"):
                     _rag_sources = "\n".join(
-                        f"  • {d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%})\n"
+                        f"  • {d.get('filename','?')} ({min(max(d.get('similarity', 0), d.get('match_score', 0)), 1.0):.0%})\n"
                         f"    {format_chunk_preview((d.get('text','') or '').replace(chr(10),' '), max_length=150, query=_q1_text)}"
                         for d in _rr["documents"]
                     )
@@ -680,21 +718,21 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                             if _included:
                                 st.markdown("**✅ Eingeschlossen (>= Threshold):**")
                                 for d in _included:
-                                    st.text(f"  {d['best_score']:.0%} | {d['filename'][:35]}")
+                                    st.text(f"  {min(d['best_score'], 1.0):.0%} | {d['filename'][:35]}")
                             
                             if _excluded:
                                 st.markdown("**⚠️ Ausgeschlossen:**")
                                 for d in _excluded:
                                     _reason_short = d['reason'][:30] if len(d['reason']) <= 30 else d['reason'][:27] + "..."
-                                    st.text(f"  {d['best_score']:>3.0%} | {d['filename'][:25]:25} | {_reason_short}")
+                                    st.text(f"  {min(d['best_score'], 1.0):>3.0%} | {d['filename'][:25]:25} | {_reason_short}")
 
                     render_retrieval_debug(_rag_debug)
                 
                 with _pc1:
                     st.caption("**SYSTEM-PROMPT:**")
-                    st.text_area("sys_prev", _sys_prev, height=380, key="pp_sys", disabled=True, label_visibility="collapsed")
+                    st.text_area("sys_prev", _sys_prev, height=380, key=f"pp_sys_{_q1_nr}", disabled=True, label_visibility="collapsed")
                     st.caption("**USER:**")
-                    st.text_area("usr_prev", _user_prev, height=80, key="pp_usr", disabled=True, label_visibility="collapsed")
+                    st.text_area("usr_prev", _user_prev, height=80, key=f"pp_usr_{_q1_nr}", disabled=True, label_visibility="collapsed")
 
                 st.markdown("---")
                 # Button setzt nur Flag, damit er mehrfach funktioniert (Streamlit Buttons sind nur im Klick-Moment TRUE)
@@ -860,9 +898,9 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
     for idx, question_data in enumerate(questions):
         if idx < resume_from:
             continue
-        question_text = question_data.get("Frage", "")
-        nr = question_data.get("Nr", idx+1)
-        lieferant = question_data.get("Lieferant", "")
+        question_text = _get_csv_field(question_data, "Frage", "")
+        nr = _get_csv_field(question_data, "Nr", str(idx+1))
+        lieferant = _get_csv_field(question_data, "Lieferant", "")
         
         result_row = {
             "Nr": nr,
@@ -887,7 +925,7 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
             rag_context = build_rag_context_from_search(rag_results)
             # RAG-Debug: Quellen für Export-Spalte _RAG_Chunks
             result_row["_RAG_Chunks"] = " | ".join(
-                f"{d.get('filename','?')} ({d.get('similarity', d.get('match_score',0)):.0%}): {format_chunk_preview((d.get('text','') or '').replace(chr(10),' '), max_length=120, query=question_text)}"
+                f"{d.get('filename','?')} ({min(max(d.get('similarity', 0), d.get('match_score', 0)), 1.0):.0%}): {format_chunk_preview((d.get('text','') or '').replace(chr(10),' '), max_length=120, query=question_text)}"
                 for d in rag_results.get("documents", [])
             )
             result_row["_RAG_Debug"] = " | ".join(
