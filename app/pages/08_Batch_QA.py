@@ -463,23 +463,42 @@ style_instructions = {
 # ============ PROMPT-VORSCHAU ============
 st.markdown("---")
 st.markdown("### 🔍 Prompt-Vorschau")
-st.caption("Zeigt den exakten Prompt, den das Modell für Frage 1 erhält – inkl. RAG-Chunks und Rollen-Kontext.")
-if st.button("📋 Beispiel-Prompt anzeigen (Frage 1)", key="prompt_preview_btn"):
+st.caption("Zeigt den exakten Prompt, den das Modell für eine Frage erhält – inkl. RAG-Chunks und Rollen-Kontext.")
+
+_prev_col1, _prev_col2, _prev_col3 = st.columns([1, 1, 1])
+with _prev_col1:
+    _preview_style = st.selectbox(
+        "Tonalität für Vorschau",
+        options=list(style_instructions.keys()),
+        index=list(style_instructions.keys()).index(answer_style),
+        key="pp_style_sel"
+    )
+with _prev_col2:
+    _preview_role_options = ["(wie Batch-Einstellung)"] + [r.title for r in project_roles]
+    _preview_role_sel = st.selectbox(
+        "Rolle für Vorschau",
+        options=_preview_role_options,
+        key="pp_role_sel"
+    )
+with _prev_col3:
+    _preview_frage_nr = st.number_input("Frage Nr.", min_value=1, value=1, step=1, key="pp_frage_nr")
+
+if st.button("📋 Prompt-Vorschau anzeigen", key="prompt_preview_btn"):
     st.session_state["_show_prompt_preview"] = True
 
 if st.session_state.get("_show_prompt_preview") and selected_csv_id:
     try:
         with get_session() as _prev_session:
-            _first_chunk = _prev_session.exec(
+            _all_chunks = _prev_session.exec(
                 select(DocumentChunk)
                 .where(DocumentChunk.document_id == selected_csv_id)
                 .order_by(DocumentChunk.chunk_index)
-                .limit(1)
-            ).first()
+            ).all()
+        _first_chunk = _all_chunks[min(int(_preview_frage_nr) - 1, len(_all_chunks) - 1)] if _all_chunks else None
         if _first_chunk:
             _q1 = json.loads(_first_chunk.chunk_text)
             _q1_text = _q1.get("Frage", "")
-            _q1_nr = _q1.get("Nr", 1)
+            _q1_nr = _q1.get("Nr", _preview_frage_nr)
             _q1_lief = _q1.get("Lieferant", "")
 
             _proj_ctx = ""
@@ -507,9 +526,17 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                 else:
                     _rag_sources = "(keine passenden Chunks gefunden)"
 
-            _style = style_instructions[answer_style]
-            if role_mode == "none":
+            _style = style_instructions[_preview_style]
+
+            # Rolle für Preview bestimmen: eigene Auswahl oder Batch-Einstellung
+            _prev_role_override = None
+            if _preview_role_sel != "(wie Batch-Einstellung)":
+                _prev_role_override = next((r for r in project_roles if r.title == _preview_role_sel), None)
+
+            if role_mode == "none" and not _prev_role_override:
                 _sys_prev = f"""Du bist ein technischer Berater der Fragen zu einem Pflichtenheft beantwortet.\n\n{_style}{_proj_ctx}\n\nRELEVANTE DOKUMENTE (aus Pflichtenheft):\n{_rag_prev or '(keine RAG-Ergebnisse)'}\n\nAUFGABE: Beantworte die folgende Frage präzise und vollständig basierend auf den bereitgestellten Dokumenten."""
+            elif _prev_role_override:
+                _sys_prev = f"""Du bist ein technischer Berater in der Rolle "{_prev_role_override.title}".\n\nDEINE ROLLE:\n{_prev_role_override.description or ''}\n\n{_style}{_proj_ctx}\n\nRELEVANTE DOKUMENTE (aus Pflichtenheft):\n{_rag_prev or '(keine RAG-Ergebnisse)'}\n\nAUFGABE: Beantworte die folgende Frage AUS DER PERSPEKTIVE deiner Rolle. Fokussiere dich auf die Aspekte die zu deinem Verantwortungsbereich gehören."""
             elif role_mode == "all_merged":
                 _roles_ctx = "\n".join(
                     f"- {r.title}: {r.description or '(keine Beschreibung)'}"
@@ -526,7 +553,7 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
 
             _user_prev = f"Frage von {_q1_lief} (Nr. {_q1_nr}):\n{_q1_text}"
 
-            with st.expander("📋 Beispiel-Prompt (Frage 1) — so sieht das Modell die Anfrage", expanded=True):
+            with st.expander(f"📋 Prompt-Vorschau (Frage {_q1_nr}) — so sieht das Modell die Anfrage", expanded=True):
                 _pc1, _pc2 = st.columns([3, 1])
                 with _pc2:
                     st.caption("**Verwendete RAG-Quellen:**")

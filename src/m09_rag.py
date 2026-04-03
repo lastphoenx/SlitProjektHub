@@ -16,10 +16,11 @@ EMBEDDING_DIMENSION = 1536
 
 _RAG_CACHE = {}  # Session-local cache: query_hash -> results
 
-def _get_cache_key(query: str, project_key: str | None, limit: int, threshold: float) -> str:
-    """Generiert Cache-Key aus Query-Parametern."""
+def _get_cache_key(query: str, project_key: str | None, limit: int, threshold: float,
+                   exclude_classification: str | None = None) -> str:
+    """Generiert Cache-Key aus Query-Parametern inkl. exclude_classification."""
     import hashlib
-    key_str = f"{query}|{project_key}|{limit}|{threshold}"
+    key_str = f"{query}|{project_key}|{limit}|{threshold}|{exclude_classification}"
     return hashlib.md5(key_str.encode()).hexdigest()
 
 def clear_rag_cache():
@@ -265,7 +266,8 @@ def _keyword_search(
     project_key: str | None = None, 
     limit: int = 5,
     role_key: str | None = None,
-    classification_filter: str | None = None
+    classification_filter: str | None = None,
+    exclude_classification: str | None = None
 ) -> dict:
     """
     Keyword-basierte Suche (LIKE-Match in Text).
@@ -275,6 +277,7 @@ def _keyword_search(
         limit: Max Resultate
         role_key: Optional: Filter für Rollen-spezifische Dokumente
         classification_filter: Optional: Filter für Dokument-Klassifizierung
+        exclude_classification: Optional: Dokumente mit DIESER Klassifizierung ausschliessen
     Returns: Dict mit keyword-gefundenen Chunks
     """
     keywords = query.lower().split()
@@ -291,6 +294,9 @@ def _keyword_search(
         
         if classification_filter:
             doc_query = doc_query.where(Document.classification == classification_filter)
+
+        if exclude_classification:
+            doc_query = doc_query.where(Document.classification != exclude_classification)
         
         chunks = ses.exec(doc_query).all()
         
@@ -337,7 +343,7 @@ def retrieve_relevant_chunks_hybrid(
     
     Returns: Dict mit kombinierten Ergebnissen
     """
-    cache_key = _get_cache_key(query, project_key, limit, threshold)
+    cache_key = _get_cache_key(query, project_key, limit, threshold, exclude_classification)
     if cache_key in _RAG_CACHE:
         return _RAG_CACHE[cache_key]
 
