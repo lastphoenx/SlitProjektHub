@@ -6,7 +6,9 @@ KI-gestütztes Tool zur Verwaltung von Ausschreibungsprojekten mit automatischer
 
 - **Projekte & Stammdaten**: Projekte, Rollen und Aufgaben verwalten
 - **Dokumente**: PDF, Word, CSV hochladen und durchsuchbar machen (ChromaDB, Embeddings)
-- **Fragen-Batch**: CSV mit Anbieter-Fragen einlesen → automatisch mit KI + RAG beantworten → als Excel/CSV exportieren
+- **Fragen-Batch**: CSV mit Anbieter-Fragen einlesen → automatisch mit KI + RAG beantworten → als Excel/CSV exportieren  
+  Einstellbar: Antwort-Stil, Interpretations-Haltung (neutral / wohlwollend / restriktiv), Formulierungsweise (klar & abschliessend / vage)  
+  Export-Dateiname enthält automatisch Metadaten (CSV-Name, Provider, Modell, Rollen, Stil, Haltung)
 - **KI-Erkennung**: Analysiert Anbieter-Fragen auf KI-typische Merkmale (Heuristik + optionale AI-Tiefenanalyse)
 - **Chat**: Projektbezogener Chat mit Kontext aus hochgeladenen Dokumenten
 - **Multi-Provider LLM**: OpenAI (GPT-5.x, GPT-4o), Anthropic (Claude), Mistral — umschaltbar im UI

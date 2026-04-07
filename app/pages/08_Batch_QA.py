@@ -542,11 +542,55 @@ with col2:
         index=0
     )
 
+# Antworthaltung & Formulierungsweise
+_haltung_col, _wording_col = st.columns(2)
+with _haltung_col:
+    answer_stance = st.selectbox(
+        "Interpretations-Haltung",
+        options=["(nur gemäss Rolle)", "Neutral", "Wohlwollend (erlaubend)", "Restriktiv (ablehnend)"],
+        index=0,
+        help="Wie wird Interpretationsspielraum behandelt. Standard = gemäss Rollenbeschreibung."
+    )
+    _stance_hint = {
+        "(nur gemäss Rolle)": "📋 Haltung wird durch die Rollenbeschreibung bestimmt.",
+        "Neutral": "ℹ️ Bei Spielraum: objektiv abwägen.",
+        "Wohlwollend (erlaubend)": "✅ Bei Spielraum: zugunsten des Anbieters entscheiden.",
+        "Restriktiv (ablehnend)": "🚫 Bei Spielraum: ablehnend entscheiden.",
+    }
+    st.caption(_stance_hint[answer_stance])
+
+with _wording_col:
+    answer_wording = st.selectbox(
+        "Formulierungsweise",
+        options=["(nur gemäss Rolle)", "Klar & abschliessend", "Vage & mit Weichmachern"],
+        index=1,
+        help="Wie verbindlich soll formuliert werden. Standard = gemäss Rollenbeschreibung."
+    )
+    _wording_hint = {
+        "(nur gemäss Rolle)": "📋 Formulierung wird durch die Rollenbeschreibung bestimmt.",
+        "Klar & abschliessend": "✅ Verbindlich: \"ist\", \"gilt als\", \"ist zulässig/unzulässig\". Keine Weichmacher.",
+        "Vage & mit Weichmachern": "💬 Offen: \"sollte\", \"könnte\", mit Hinweis auf Klärungsbedarf.",
+    }
+    st.caption(_wording_hint[answer_wording])
+
 # style_instructions hier definiert, damit Prompt-Vorschau und Batch-Loop darauf zugreifen können
 style_instructions = {
     "Sachlich & präzise": "Antworte sachlich, präzise und auf den Punkt.",
     "Ausführlich & erkärend": "Antworte ausführlich und erkläre alle relevanten Details.",
     "Kurz & bündig": "Antworte so kurz wie möglich, max. 2-3 Sätze."
+}
+
+stance_instructions = {
+    "(nur gemäss Rolle)": "",
+    "Neutral": " Bei Interpretationsspielraum wäge objektiv ab.",
+    "Wohlwollend (erlaubend)": " Bei Interpretationsspielraum entscheide zugunsten des Anbieters – verbindlich: \"ist zulässig, sofern…\", \"kann akzeptiert werden, wenn…\".",
+    "Restriktiv (ablehnend)": " Bei Interpretationsspielraum entscheide ablehnend: \"ist nicht zulässig\", \"gilt als unzulässige Subbeauftragung\", \"wird abgelehnt\".",
+}
+
+wording_instructions = {
+    "(nur gemäss Rolle)": "",
+    "Klar & abschliessend": " Formuliere verbindlich und direkt. Verwende \"ist\", \"gilt als\", \"wird als … verstanden\", \"ist zulässig\" oder \"ist unzulässig\". Vermeide Weichmacher wie \"sollte\", \"könnte\", \"empfehle ich\" sowie Verweise auf künftige Klärungen. Die Antwort soll Nachfragen unterbinden, nicht auslösen.",
+    "Vage & mit Weichmachern": " Formuliere offen und mit Vorbehalt. Verwende \"sollte\", \"könnte\", \"empfiehlt sich\" und weise auf möglichen Klärungsbedarf hin.",
 }
 
 # ============ PROMPT-VORSCHAU ============
@@ -673,7 +717,7 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                     exclude_classification="FAQ/Fragen-Katalog"
                 )
 
-            _style = style_instructions[_preview_style]
+            _style = style_instructions[_preview_style] + stance_instructions[answer_stance] + wording_instructions[answer_wording]
 
             # Rolle für Preview bestimmen: eigene Auswahl oder Batch-Einstellung
             _prev_role_override = None
@@ -953,7 +997,7 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
             
             system_prompt = f"""Du bist ein technischer Berater der Fragen zu einem Pflichtenheft beantwortet.
 
-{style_instructions[answer_style]}{project_context_text}
+{style_instructions[answer_style]}{stance_instructions[answer_stance]}{wording_instructions[answer_wording]}{project_context_text}
 
 RELEVANTE DOKUMENTE (aus Pflichtenheft):
 {rag_context}
@@ -990,7 +1034,7 @@ AUFGABE: Beantworte die folgende Frage präzise und vollständig basierend auf d
             
             system_prompt = f"""Du bist ein technischer Berater-Team das Fragen zu einem Pflichtenheft beantwortet.
 
-{style_instructions[answer_style]}{project_context_text}
+{style_instructions[answer_style]}{stance_instructions[answer_stance]}{wording_instructions[answer_wording]}{project_context_text}
 
 TEAM-PERSPEKTIVEN (berücksichtige alle):
 {roles_context}
@@ -1034,7 +1078,7 @@ AUFGABE: Beantworte die folgende Frage vollständig, indem du die Perspektiven A
 DEINE ROLLE:
 {role_description}
 
-{style_instructions[answer_style]}{project_context_text}
+{style_instructions[answer_style]}{stance_instructions[answer_stance]}{wording_instructions[answer_wording]}{project_context_text}
 
 RELEVANTE DOKUMENTE (aus Pflichtenheft):
 {rag_context}
@@ -1152,7 +1196,58 @@ if st.session_state.get("batch_results"):
     
     # Download-Button
     st.markdown("---")
-    
+
+    # --- Dateiname zusammenstellen ---
+    def _build_export_filename(base_suffix: str, custom_tags: str) -> str:
+        """
+        Baut einen aussagekräftigen Dateinamen aus Metadaten.
+        Format: batch_{projekt}_{provider}_{modell}_{rollen}_{stil}[_{tags}]
+        Alle Teile werden auf Dateisystem-sichere Zeichen normalisiert.
+        """
+        import re
+        def _slug(s: str, maxlen: int = 20) -> str:
+            s = (s or "").strip().lower()
+            s = re.sub(r"[^a-z0-9äöü_-]", "_", s)
+            s = re.sub(r"_+", "_", s).strip("_")
+            return s[:maxlen]
+
+        provider_slug  = _slug(st.session_state.get("global_llm_provider", "llm"), 12)
+        model_slug     = _slug(st.session_state.get("global_llm_model", "model"), 20)
+        # Rollen: Kürzel der gewählten Rollen (kommasepariert, max 3)
+        role_slugs = "-".join(_slug(r, 8) for r in (selected_roles or [])[:3]) or "norole"
+        style_slug = _slug(answer_style, 10)
+        stance_slug = _slug(answer_stance, 10) if answer_stance != "(nur gemäss Rolle)" else ""
+        wording_slug = _slug(answer_wording, 10) if answer_wording != "(nur gemäss Rolle)" else ""
+        # CSV-Dateiname (ohne Extension) als sinnvoller Bezeichner statt Projekttitel
+        csv_stem = (selected_csv.filename.rsplit(".", 1)[0]) if selected_csv else selected_project
+        csv_slug = _slug(csv_stem, 28)
+
+        parts = [p for p in ["batch", csv_slug, provider_slug, model_slug, role_slugs, style_slug, stance_slug, wording_slug] if p]
+
+        # Eigene Tags (kommasepariert eingeben)
+        if custom_tags.strip():
+            for tag in custom_tags.split(","):
+                t = _slug(tag, 15)
+                if t:
+                    parts.append(t)
+
+        return "_".join(parts) + base_suffix
+
+    st.markdown("**📁 Dateiname für Export**")
+    _fn_col1, _fn_col2 = st.columns([2, 1])
+    with _fn_col1:
+        _custom_tags = st.text_input(
+            "Eigene Tags (kommasepariert, optional)",
+            value="",
+            placeholder="z.B. v2, ohneRAG, test1",
+            help="Werden an den Dateinamen angehängt – z.B. für Versionsvergleiche",
+            key="export_custom_tags"
+        )
+    with _fn_col2:
+        _preview_name = _build_export_filename(".csv", _custom_tags)
+        st.caption("Vorschau:")
+        st.code(_preview_name, language=None)
+
     if HAS_OPENPYXL:
         col1, col2 = st.columns([1, 1])
     else:
@@ -1168,7 +1263,7 @@ if st.session_state.get("batch_results"):
         st.download_button(
             label="📥 Download als CSV",
             data=csv_buffer.getvalue(),
-            file_name=f"batch_antworten_{selected_project}.csv",
+            file_name=_build_export_filename(".csv", _custom_tags),
             mime="text/csv",
             width="stretch"
         )
@@ -1184,7 +1279,7 @@ if st.session_state.get("batch_results"):
             st.download_button(
                 label="📥 Download als Excel",
                 data=excel_buffer.getvalue(),
-                file_name=f"batch_antworten_{selected_project}.xlsx",
+                file_name=_build_export_filename(".xlsx", _custom_tags),
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 width="stretch"
             )
