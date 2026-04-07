@@ -598,23 +598,12 @@ st.markdown("---")
 st.markdown("### 🔍 Prompt-Vorschau")
 st.caption("Zeigt den exakten Prompt, den das Modell für eine Frage erhält – inkl. RAG-Chunks und Rollen-Kontext.")
 
-_prev_col1, _prev_col2, _prev_col3 = st.columns([1, 1, 1])
-with _prev_col1:
-    _preview_style = st.selectbox(
-        "Tonalität für Vorschau",
-        options=list(style_instructions.keys()),
-        index=list(style_instructions.keys()).index(answer_style),
-        key="pp_style_sel"
-    )
-with _prev_col2:
-    _preview_role_options = ["(wie Batch-Einstellung)"] + [r.title for r in project_roles]
-    _preview_role_sel = st.selectbox(
-        "Rolle für Vorschau",
-        options=_preview_role_options,
-        key="pp_role_sel"
-    )
-with _prev_col3:
-    _preview_frage_nr = st.number_input("Frage Nr.", min_value=1, value=1, step=1, key="pp_frage_nr")
+_preview_frage_nr = st.number_input("Frage Nr. für Vorschau", min_value=1, value=1, step=1, key="pp_frage_nr")
+st.caption(
+    f"ℹ️ Die Vorschau verwendet exakt die aktuellen Batch-Einstellungen — "
+    f"**{answer_style}** | **{answer_stance}** | **{answer_wording}** | "
+    f"Rollen: **{role_mode}**"
+)
 
 if st.button("📋 Prompt-Vorschau anzeigen", key="prompt_preview_btn"):
     st.session_state["_show_prompt_preview"] = True
@@ -717,17 +706,10 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                     exclude_classification="FAQ/Fragen-Katalog"
                 )
 
-            _style = style_instructions[_preview_style] + stance_instructions[answer_stance] + wording_instructions[answer_wording]
+            _style = style_instructions[answer_style] + stance_instructions[answer_stance] + wording_instructions[answer_wording]
 
-            # Rolle für Preview bestimmen: eigene Auswahl oder Batch-Einstellung
-            _prev_role_override = None
-            if _preview_role_sel != "(wie Batch-Einstellung)":
-                _prev_role_override = next((r for r in project_roles if r.title == _preview_role_sel), None)
-
-            if role_mode == "none" and not _prev_role_override:
+            if role_mode == "none":
                 _sys_prev = f"""Du bist ein technischer Berater der Fragen zu einem Pflichtenheft beantwortet.\n\n{_style}{_proj_ctx}\n\nRELEVANTE DOKUMENTE (aus Pflichtenheft):\n{_rag_prev or '(keine RAG-Ergebnisse)'}\n\nAUFGABE: Beantworte die folgende Frage präzise und vollständig basierend auf den bereitgestellten Dokumenten."""
-            elif _prev_role_override:
-                _sys_prev = f"""Du bist ein technischer Berater in der Rolle "{_prev_role_override.title}".\n\nDEINE ROLLE:\n{_prev_role_override.description or ''}\n\n{_style}{_proj_ctx}\n\nRELEVANTE DOKUMENTE (aus Pflichtenheft):\n{_rag_prev or '(keine RAG-Ergebnisse)'}\n\nAUFGABE: Beantworte die folgende Frage AUS DER PERSPEKTIVE deiner Rolle. Fokussiere dich auf die Aspekte die zu deinem Verantwortungsbereich gehören."""
             elif role_mode == "all_merged":
                 _roles_ctx = "\n".join(
                     f"- {r.title}: {r.description or '(keine Beschreibung)'}"
@@ -744,7 +726,12 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
 
             _user_prev = f"Frage von {_q1_lief} (Nr. {_q1_nr}):\n{_q1_text}"
 
-            with st.expander(f"📋 Prompt-Vorschau (Frage {_q1_nr}) — so sieht das Modell die Anfrage", expanded=True):
+            _pp_tags = " | ".join(filter(None, [
+                answer_style,
+                answer_stance if answer_stance != "(nur gemäss Rolle)" else "",
+                answer_wording if answer_wording != "(nur gemäss Rolle)" else "",
+            ]))
+            with st.expander(f"📋 Prompt-Vorschau — Frage {_q1_nr} · {_pp_tags}", expanded=True):
                 _pc1, _pc2 = st.columns([3, 1])
                 with _pc2:
                     st.caption("**Verwendete RAG-Quellen:**")
