@@ -31,14 +31,18 @@ bm25:
     - "subunternehm"      # Subunternehmen/Subunternehmende
     - "vergabe"           # Vergabeverfahren
     - "konzern"           # Konzernstrukturen
-    # Weitere domain-spezifische Begriffe hier hinzufügen
+    - "hosting"           # Hosting-Dienste
+    - "cloud"             # Cloud-Betrieb
+    - "rechenzentrum"     # Rechenzentrum / Drittanbieter-Hosting
+    - "drittanbieter"     # Externer Anbieter
+    - "infrastruktur"     # Infrastrukturleistungen
   
   # Scoring-Gewichte (für BM25-interne Berechnungen)
   scoring:
     coverage_weight: 2.0      # Keyword-Coverage Multiplikator
     idf_weight: 0.75          # IDF-Bonus Multiplikator
     priority_boost: 6.0       # Boost pro Priority-Term Hit
-    min_token_length: 10      # Min. Länge für Supporting Tokens
+    min_token_length: 4       # Min. Länge für Supporting Tokens (war 10, zu restriktiv für kurze Fachbegriffe)
 
 # ==================== SEMANTIC SEARCH ====================
 semantic:

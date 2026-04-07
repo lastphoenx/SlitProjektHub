@@ -366,6 +366,70 @@ def index_task(task_key: str, force: bool = False) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# spaCy Lazy Singleton – wird beim ersten BM25-Aufruf geladen (nicht beim Import)
+# ---------------------------------------------------------------------------
+_SPACY_NLP = None
+
+def _get_spacy_nlp():
+    """Gibt das geladene spaCy-Modell zurück (Singleton, lazy init)."""
+    global _SPACY_NLP
+    if _SPACY_NLP is None:
+        try:
+            import spacy
+            # Nur Tagger (für POS + Lemmatizer) – Parser + NER nicht nötig
+            _SPACY_NLP = spacy.load("de_core_news_sm", disable=["parser", "ner"])
+        except Exception as e:
+            print(f"⚠️ spaCy-Modell nicht ladbar ({e}) – Fallback auf einfaches Stemming")
+            _SPACY_NLP = False  # Sentinel: Fehler, nicht nochmal versuchen
+    return _SPACY_NLP if _SPACY_NLP is not False else None
+
+
+# Lazy-init für compound_split (einmalig laden)
+_COMPOUND_SPLIT_AVAILABLE: bool | None = None
+
+def _decompound(lemma: str) -> list[str]:
+    """
+    Zerlegt ein deutsches Kompositum in seine Bestandteile (zusätzlich zum Originalwort).
+    Nutzt compound_split.doc_split.get_best_split.
+
+    Regeln:
+    - Wort muss >= 8 Zeichen haben (kurze Wörter nicht splitten)
+    - Alle Teile müssen >= 4 Zeichen haben (verhindert 'Ange'+'Bot' für 'Angebot')
+    - Gibt leere Liste zurück wenn kein sinnvoller Split (Original bleibt erhalten)
+    - Lowercase, kein Lemmatizing der Teile (BM25 matcht case-insensitive)
+    """
+    global _COMPOUND_SPLIT_AVAILABLE
+
+    if _COMPOUND_SPLIT_AVAILABLE is False:
+        return []
+    if len(lemma) < 8:
+        return []
+
+    try:
+        if _COMPOUND_SPLIT_AVAILABLE is None:
+            from compound_split.doc_split import get_best_split  # noqa
+            _COMPOUND_SPLIT_AVAILABLE = True
+        from compound_split.doc_split import get_best_split
+        parts = get_best_split(lemma)
+    except Exception:
+        _COMPOUND_SPLIT_AVAILABLE = False
+        return []
+
+    if len(parts) <= 1:
+        return []  # Kein Split gefunden
+
+    parts_lower = [p.lower()[:-1]  # Fugen-s entfernen ("Ausschreibungs" -> "ausschreibung")
+                   if p.lower().endswith('s') and len(p) > 5 else p.lower()
+                   for p in parts]
+
+    # Qualitäts-Filter: alle Teile >= 4 Zeichen
+    if any(len(p) < 4 for p in parts_lower):
+        return []
+
+    return parts_lower
+
+
 def _keyword_search(
     query: str, 
     project_key: str | None = None, 
@@ -416,46 +480,44 @@ def _keyword_search(
     
     def tokenize(text: str) -> list[str]:
         """
-        Tokenisiert Text mit einfachem German Stemming.
+        Tokenisiert Text via spaCy-Lemmatisierung (de_core_news_sm).
         
-        - Lowercase
-        - Nur Buchstaben/Zahlen
-        - Stopwords raus
-        - Min 3 Zeichen
-        - Stemming: Entferne häufige deutsche Suffixe
+        - Volltext-Analyse mit POS-Tagging für kontextuelle Lemmas
+        - Lowercase Lemmas
+        - Stopwords (spaCy + custom) raus
+        - Nur Alpha-Tokens, min 3 Zeichen
+        - Fallback auf einfaches Suffix-Stemming wenn spaCy nicht verfügbar
         """
-        text = text.lower()
-        # Split on non-alphanumeric, keep words
-        words = re.findall(r'\b\w+\b', text)
+        nlp = _get_spacy_nlp()
         
-        # German Stemmer (einfache Version)
-        def stem_german(word: str) -> str:
-            """Entfernt häufige deutsche Suffixe."""
-            # Lange Wörter: mehrstufiges Stemming
-            if len(word) >= 10:
-                # Entferne lange Suffixe zuerst
-                for suffix in ['ende', 'enden', 'ender', 'enden', 'ungen', 'schaft', 'heit', 'keit']:
-                    if word.endswith(suffix):
-                        word = word[:-len(suffix)]
-                        break
-            
-            # Kurze Suffixe für alle Wörter >= 5 Zeichen
-            if len(word) >= 5:
-                for suffix in ['en', 'er', 'em', 'es', 'end', 'ung']:
-                    if word.endswith(suffix):
-                        word = word[:-len(suffix)]
-                        break
-            
-            return word
-        
-        # Filter: min 3 chars, no stopwords, dann stemmen
-        tokens = []
-        for w in words:
-            if len(w) >= 3 and w not in STOPWORDS:
-                stemmed = stem_german(w)
-                tokens.append(stemmed)
-        
-        return tokens
+        if nlp is not None:
+            # spaCy-Pfad: Volltext → POS + Lemma
+            doc = nlp(text[:25000])  # Safety-Cap für sehr lange Chunks
+            tokens = []
+            for token in doc:
+                if not token.is_alpha:
+                    continue
+                lemma = token.lemma_.lower()
+                if len(lemma) < 3:
+                    continue
+                if lemma in STOPWORDS or token.is_stop:
+                    continue
+                tokens.append(lemma)
+                # Decompounding: nur bei Nomen/Eigennamen (Komposita sind im Deutschen
+                # fast ausschliesslich Substantive; verhindert seltsame Verb-Splits)
+                if token.pos_ in ("NOUN", "PROPN"):
+                    for part in _decompound(lemma):
+                        if part not in STOPWORDS and part not in tokens:
+                            tokens.append(part)
+            return tokens
+        else:
+            # Fallback: einfaches Regex-Stemming (kein spaCy verfügbar)
+            words = re.findall(r'\b[a-zA-ZäöüÄÖÜß]+\b', text.lower())
+            tokens = []
+            for w in words:
+                if len(w) >= 3 and w not in STOPWORDS:
+                    tokens.append(w)
+            return tokens
 
     # PHASE 3: Priority Terms aus Config laden (statt hardcoded)
     config = get_retrieval_config()
@@ -586,6 +648,12 @@ def _keyword_search(
                     })
         
         results.sort(key=lambda x: x["match_score"], reverse=True)
+        
+        # Normalisiere match_score auf [0,1] relativ zum besten Treffer im Batch
+        if results:
+            max_score = results[0]["match_score"]
+            for r in results:
+                r["normalized_match_score"] = round(r["match_score"] / max_score, 3) if max_score > 0 else 0.0
         
         return results[:limit]
 
@@ -1193,6 +1261,14 @@ def retrieve_relevant_chunks(
         
         chunks = ses.exec(doc_query).all()
 
+        # Pre-fetch alle Dokumente (für Metadata) – 'chunk.document' ist kein Relationship
+        chunk_doc_ids = list(set(c.document_id for c in chunks))
+        docs_by_id: dict[int, Document] = {}
+        if chunk_doc_ids:
+            docs_by_id = {d.id: d for d in ses.exec(
+                select(Document).where(Document.id.in_(chunk_doc_ids))
+            ).all()}
+
         doc_scores = []
         for chunk in chunks:
             if not chunk.embedding:
@@ -1201,7 +1277,9 @@ def retrieve_relevant_chunks(
                 embedding = json.loads(chunk.embedding)
                 similarity = _cosine_similarity(query_embedding, embedding)
                 if similarity >= threshold:
-                    doc = chunk.document
+                    doc = docs_by_id.get(chunk.document_id)
+                    if not doc:
+                        continue
                     doc_scores.append({
                         "chunk_id": chunk.id,
                         "document_id": doc.id,

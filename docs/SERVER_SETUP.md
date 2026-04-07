@@ -16,9 +16,11 @@ In Proxmox: Ubuntu 24.04 LXC, empfohlene Ressourcen:
 
 | Ressource | Minimum | Empfohlen |
 |-----------|---------|-----------|
-| RAM | 1 GB | 2 GB |
+| RAM | 2 GB | 4 GB |
 | Disk | 10 GB | 20 GB |
 | vCPU | 1 | 2 |
+
+> **RAM-Hinweis**: spaCy `de_core_news_sm` belegt beim ersten BM25-Aufruf ~200 MB RAM (Singleton, bleibt danach geladen). Minimum daher 2 GB.
 
 ---
 
@@ -33,6 +35,7 @@ cd /opt/slitprojekthub
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python -m spacy download de_core_news_sm
 
 cp .env.example .env
 nano .env   # API Keys eintragen

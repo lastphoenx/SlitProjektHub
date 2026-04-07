@@ -928,8 +928,17 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
                 f"{d.get('filename','?')} ({min(max(d.get('similarity', 0), d.get('match_score', 0)), 1.0):.0%}): {format_chunk_preview((d.get('text','') or '').replace(chr(10),' '), max_length=120, query=question_text)}"
                 for d in rag_results.get("documents", [])
             )
+            _bucket_labels = {"keyword_candidates": "kw", "semantic_candidates": "sem", "final_candidates": "final"}
             result_row["_RAG_Debug"] = " | ".join(
-                f"{d.get('source','?')}:{d.get('filename','?')} comb={d.get('combined_score',0):.3f} sem={d.get('similarity',0):.3f} kw={d.get('normalized_match_score',0):.3f} raw={d.get('raw_bm25_score',0):.3f} idf={d.get('keyword_idf_score',0):.3f} cov={d.get('keyword_coverage',0):.3f} hits={d.get('priority_hits',0)}"
+                (
+                    lambda src, d: (
+                        f"[{src}] {d.get('filename','?')} "
+                        f"terms=[{','.join(d.get('matched_terms') or [])}] "
+                        f"comb={d.get('combined_score',0):.3f} sem={d.get('similarity',0):.3f} "
+                        f"kw={d.get('normalized_match_score',0):.3f} raw={d.get('raw_bm25_score',0):.3f} "
+                        f"idf={d.get('keyword_idf_score',0):.3f} cov={d.get('keyword_coverage',0):.3f} hits={d.get('priority_hits',0)}"
+                    )
+                )(src=_bucket_labels.get(bucket, bucket), d=d)
                 for bucket in ["keyword_candidates", "semantic_candidates", "final_candidates"]
                 for d in rag_results.get("debug", {}).get(bucket, [])[:5]
             )

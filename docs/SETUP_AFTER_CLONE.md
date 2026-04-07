@@ -45,7 +45,14 @@ source .venv/bin/activate
 # Dependencies installieren
 pip install --upgrade pip
 pip install -r requirements.txt
+
+# Deutsches spaCy-Sprachmodell herunterladen (für BM25-Lemmatisierung)
+python -m spacy download de_core_news_sm
 ```
+
+> **Warum `spacy download` separat?**  
+> spaCy-Sprachmodelle sind eigenständige Packages, die von PyPI nicht über `requirements.txt` installiert werden können. Der Befehl lädt `de_core_news_sm` (~15 MB) von `download.spacy.io` herunter und registriert es lokal.  
+> Ohne dieses Modell fällt das RAG-System automatisch auf einfaches Regex-Tokenizing zurück – die App startet trotzdem, aber die BM25-Suchqualität ist deutlich schlechter.
 
 ### 3. Environment Variables konfigurieren
 

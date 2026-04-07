@@ -32,9 +32,12 @@ cd SlitProjektHub
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+python -m spacy download de_core_news_sm
 copy .env.example .env
 # .env öffnen und API-Keys eintragen
 ```
+
+> **Hinweis `de_core_news_sm`**: Das deutsche spaCy-Sprachmodell (~15 MB) wird für die BM25-Lemmatisierung benötigt. Es wird **nicht** über `requirements.txt` installiert, sondern mit dem separaten `spacy download`-Befehl. Ohne dieses Modell läuft das RAG-System im Fallback-Modus (einfaches Regex-Tokenizing).
 
 ## Starten
 
