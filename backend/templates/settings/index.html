@@ -1,4 +1,4 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 
 {% block content %}
 <div class="page-header">
@@ -8,23 +8,17 @@
   </div>
 </div>
 
-<div style="max-width:720px"
-     x-data="{
-       provider: '{{ provider }}',
-       model: '{{ model }}',
-       temperature: {{ temperature }},
-       rag_top_k: {{ rag_top_k }},
-       rag_chunk_size: {{ rag_chunk_size }},
-       rag_threshold: {{ rag_similarity_threshold }},
-       rag_enabled: {{ 'true' if rag_enabled else 'false' }},
-       allModels: {{ all_models_json | safe }},
-       get models() { return this.allModels[this.provider] || [] }
-     }">
-
-  <form hx-post="/settings"
-        hx-target="#settings-form-wrap"
-        hx-swap="innerHTML"
-        id="settings-form-wrap">
+<div style="max-width:720px" x-data="{
+  testing: false,
+  testConnection() {
+    this.testing = true;
+    document.getElementById('conn-test-result').innerHTML = '';
+    fetch('/settings/test-connection?provider=' + $store.ki.provider)
+      .then(r => r.text())
+      .then(html => { document.getElementById('conn-test-result').innerHTML = html; this.testing = false; })
+      .catch(() => { document.getElementById('conn-test-result').innerHTML = '<span style=color:var(--color-danger)>Verbindungsfehler</span>'; this.testing = false; });
+  }
+}">
 
   <!-- ── Provider & Modell ─────────────────────────────────────────── -->
   <div class="card" style="margin-bottom:1.25rem">
@@ -37,46 +31,50 @@
 
       <div>
         <label class="form-label">KI-Provider</label>
-        <select name="provider" class="form-select" x-model="provider" @change="model = models[0] || ''">
-          {% for p in providers %}
-          <option value="{{ p }}" {% if p == provider %}selected{% endif %}>{{ p }}</option>
-          {% endfor %}
+        <select class="form-select"
+                @change="
+                  $store.ki.provider = $event.target.value;
+                  $store.ki.model = ($store.ki.allModels[$store.ki.provider] || [])[0] || '';
+                  $store.ki.save();
+                  testConnection();
+                ">
+          <template x-for="p in $store.ki.providers" :key="p">
+            <option :value="p" x-text="p" :selected="p === $store.ki.provider"></option>
+          </template>
         </select>
-        <!-- Provider status badges -->
-        {% for p, configured in provider_status.items() %}
-        <span x-show="provider === '{{ p }}'"
-              style="font-size:.75rem;margin-top:.3rem;display:flex;align-items:center;gap:.25rem;color:{% if configured %}var(--color-success){% else %}var(--color-danger){% endif %}">
-          {% if configured %}
-          <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
-          {{ p }} API-Key konfiguriert
-          {% else %}
-          <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          {{ p }} API-Key fehlt (.env)
-          {% endif %}
-        </span>
-        {% endfor %}
+
+        <!-- Key status badge -->
+        <template x-for="p in $store.ki.providers" :key="'badge-'+p">
+          <span x-show="p === $store.ki.provider"
+                :style="'font-size:.75rem;margin-top:.35rem;display:flex;align-items:center;gap:.3rem;color:' + ($store.ki.keyStatus[p] ? 'var(--color-success)' : 'var(--color-danger)')">
+            <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" x-show="$store.ki.keyStatus[p]"><path d="M20 6L9 17l-5-5"/></svg>
+            <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" x-show="!$store.ki.keyStatus[p]"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <span x-text="$store.ki.keyStatus[p] ? p.toUpperCase() + ' API-Key konfiguriert' : p.toUpperCase() + ' API-Key fehlt (.env)'"></span>
+          </span>
+        </template>
       </div>
 
       <div>
         <label class="form-label">Modell</label>
-        <select name="model" class="form-select" x-model="model">
-          <template x-for="m in models" :key="m">
-            <option :value="m" :selected="m === model" x-text="m"></option>
+        <select class="form-select"
+                @change="$store.ki.model = $event.target.value; $store.ki.save()">
+          <template x-for="m in ($store.ki.allModels[$store.ki.provider] || [])" :key="m">
+            <option :value="m" x-text="m" :selected="m === $store.ki.model"></option>
           </template>
         </select>
       </div>
     </div>
 
     <!-- Connection test -->
-    <div style="display:flex;align-items:center;gap:.75rem">
+    <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
       <button type="button" class="btn btn-secondary btn-sm"
-              :hx-get="'/settings/test-connection?provider=' + provider"
-              hx-target="#conn-test-result"
-              hx-swap="innerHTML"
-              hx-indicator="#conn-spinner">
-        <svg id="conn-spinner" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="htmx-indicator" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
-        Verbindung testen
+              :disabled="testing"
+              @click="testConnection()">
+        <svg x-show="testing" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+        <svg x-show="!testing" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        <span x-text="testing ? 'Teste…' : 'Verbindung testen'"></span>
       </button>
+
       <span id="conn-test-result" style="font-size:.82rem"></span>
     </div>
   </div>
@@ -87,12 +85,14 @@
 
     <div class="form-group">
       <label class="form-label">
-        Temperatur: <strong x-text="temperature.toFixed(1)"></strong>
-        <span class="text-muted" style="font-weight:400;margin-left:.4rem;font-size:.78rem">(0 = präzise, 1 = kreativ)</span>
+        Temperatur: <strong x-text="$store.ki.temperature.toFixed(1)"></strong>
+        <span class="text-muted" style="font-weight:400;margin-left:.4rem;font-size:.78rem">(0 = präzise, 2 = sehr kreativ)</span>
       </label>
-      <input type="range" name="temperature" min="0" max="1" step="0.1"
-             x-model.number="temperature"
-             style="width:100%;max-width:320px" />
+      <input type="range" min="0" max="2" step="0.1"
+             :value="$store.ki.temperature"
+             @input="$store.ki.temperature = parseFloat($event.target.value)"
+             @change="$store.ki.save()"
+             style="width:100%;max-width:320px;accent-color:var(--color-primary)" />
     </div>
   </div>
 
@@ -100,80 +100,106 @@
   <div class="card" style="margin-bottom:1.5rem">
     <h2 style="font-size:.95rem;font-weight:700;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem">
       RAG-Einstellungen
-      <!-- RAG toggle -->
       <span style="margin-left:auto;display:flex;align-items:center;gap:.5rem;font-weight:400;font-size:.82rem">
         <span class="text-muted">RAG aktiv</span>
         <label style="position:relative;display:inline-block;width:38px;height:20px;cursor:pointer">
-          <input type="checkbox" name="rag_enabled_check" x-model="rag_enabled"
+          <input type="checkbox"
+                 :checked="$store.ki.rag_enabled"
+                 @change="$store.ki.rag_enabled = $event.target.checked; $store.ki.save()"
                  style="opacity:0;width:0;height:0">
-          <span :style="'display:block;position:absolute;inset:0;border-radius:20px;background:'+( rag_enabled ? 'var(--color-primary)' : 'var(--color-border)')+';transition:.25s'">
-            <span :style="'position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;transition:.25s;left:'+(rag_enabled?'21px':'3px')"></span>
+          <span :style="'display:block;position:absolute;inset:0;border-radius:20px;background:'+($store.ki.rag_enabled ? 'var(--color-primary)' : 'var(--color-border)')+';transition:.25s'">
+            <span :style="'position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;transition:.25s;left:'+($store.ki.rag_enabled?'21px':'3px')"></span>
           </span>
         </label>
       </span>
     </h2>
 
-    <!-- hidden field to submit boolean -->
-    <input type="hidden" name="rag_enabled" :value="rag_enabled ? 'true' : 'false'">
-
-    <div :style="rag_enabled ? '' : 'opacity:.4;pointer-events:none'">
-
+    <div :style="$store.ki.rag_enabled ? '' : 'opacity:.4;pointer-events:none'">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem">
 
         <div class="form-group">
           <label class="form-label">
-            RAG-Kontexte (Top-K): <strong x-text="rag_top_k"></strong>
+            RAG-Kontexte (Top-K): <strong x-text="$store.ki.rag_top_k"></strong>
             <span class="text-muted" style="font-size:.75rem;font-weight:400"> Chunks</span>
           </label>
-          <input type="range" name="rag_top_k" min="1" max="20" step="1"
-                 x-model.number="rag_top_k" style="width:100%" />
+          <input type="range" min="1" max="25" step="1"
+                 :value="$store.ki.rag_top_k"
+                 @input="$store.ki.rag_top_k = parseInt($event.target.value)"
+                 @change="$store.ki.save()"
+                 style="width:100%;accent-color:var(--color-primary)" />
         </div>
 
         <div class="form-group">
           <label class="form-label">
-            Chunk-Größe: <strong x-text="rag_chunk_size"></strong>
+            Chunk-Größe: <strong x-text="$store.ki.rag_chunk_size"></strong>
             <span class="text-muted" style="font-size:.75rem;font-weight:400"> Zeichen</span>
           </label>
-          <input type="range" name="rag_chunk_size" min="200" max="4000" step="100"
-                 x-model.number="rag_chunk_size" style="width:100%" />
+          <input type="range" min="200" max="5000" step="100"
+                 :value="$store.ki.rag_chunk_size"
+                 @input="$store.ki.rag_chunk_size = parseInt($event.target.value)"
+                 @change="$store.ki.save()"
+                 style="width:100%;accent-color:var(--color-primary)" />
         </div>
 
         <div class="form-group">
           <label class="form-label">
-            Similarity-Threshold: <strong x-text="rag_threshold.toFixed(2)"></strong>
+            Similarity-Threshold: <strong x-text="$store.ki.rag_similarity_threshold.toFixed(2)"></strong>
+            <span class="text-muted" style="font-size:.75rem;font-weight:400"> (<span x-text="($store.ki.rag_similarity_threshold*100).toFixed(0)+'%'"></span>)</span>
           </label>
-          <input type="range" name="rag_similarity_threshold" min="0.1" max="0.9" step="0.05"
-                 x-model.number="rag_threshold" style="width:100%" />
+          <input type="range" min="0.1" max="0.9" step="0.05"
+                 :value="$store.ki.rag_similarity_threshold"
+                 @input="$store.ki.rag_similarity_threshold = parseFloat($event.target.value)"
+                 @change="$store.ki.save()"
+                 style="width:100%;accent-color:var(--color-primary)" />
         </div>
 
       </div>
 
       <details style="margin-top:.75rem">
-        <summary class="text-muted" style="cursor:pointer;font-size:.8rem">Was bedeuten diese Werte?</summary>
-        <div style="font-size:.78rem;color:var(--color-text-muted);margin-top:.5rem;line-height:1.6">
-          <strong>RAG-Kontexte (Top-K):</strong> Wie viele Dokument-Chunks dem LLM als Kontext übergeben werden. Mehr = mehr Kontext, aber auch mehr Token-Verbrauch.<br>
-          <strong>Chunk-Größe:</strong> Wie groß ein Textabschnitt beim Ingestion ist (in Zeichen). Kleinere Chunks = präzisere Suche; grössere = mehr Zusammenhang.<br>
-          <strong>Similarity-Threshold:</strong> Mindest-Ähnlichkeitsscore (0–1) damit ein Chunk als Treffer gilt. Niedriger = mehr Treffer; höher = nur sehr relevante.
+        <summary class="text-muted" style="cursor:pointer;font-size:.8rem;list-style:none;display:flex;align-items:center;gap:.3rem">
+          <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          Was bedeuten diese Werte?
+        </summary>
+        <div style="font-size:.78rem;color:var(--color-text-muted);margin-top:.5rem;line-height:1.6;display:flex;flex-direction:column;gap:.6rem">
+          <div>
+            <strong style="color:var(--color-text)">RAG-Kontexte (Top-K): <code x-text="$store.ki.rag_top_k"></code></strong><br>
+            Anzahl der Dokument-Chunks die als Kontext eingefügt werden.
+            <ul style="margin:.2rem 0 0 1rem"><li><strong>5:</strong> Schnell, Budget-freundlich</li><li><strong>7: ✅ Optimal</strong> (3-5 verschiedene Dokumente dank Diversity-Filter)</li><li><strong>10+:</strong> Sehr detailliert, aber mehr Tokens</li></ul>
+          </div>
+          <div>
+            <strong style="color:var(--color-text)">Chunk-Größe: <code x-text="$store.ki.rag_chunk_size"></code></strong><br>
+            Zeichenzahl pro Dokument-Abschnitt beim Upload.
+            <ul style="margin:.2rem 0 0 1rem"><li><strong>800-1000:</strong> Für kurze FAQ/Snippets</li><li><strong>1200: ✅ Optimal</strong> für Pflichtenheft (2-4 Absätze)</li><li><strong>2000+:</strong> Für sehr lange Fliesstexte</li></ul>
+          </div>
+          <div>
+            <strong style="color:var(--color-text)">Similarity-Threshold: <code x-text="($store.ki.rag_similarity_threshold*100).toFixed(0)+'%'"></code></strong><br>
+            Mindest-Ähnlichkeit zwischen Frage und Dokument-Chunk.
+            <ul style="margin:.2rem 0 0 1rem"><li><strong>0.60:</strong> Sehr hohe Präzision, wenig Recall</li><li><strong>0.45: ✅ Balance</strong> – findet Relevantes, filtert Noise</li><li><strong>0.30:</strong> Viel Recall, aber irrelevante Chunks möglich</li></ul>
+            💡 Bei "zu wenig Kontext" → auf 0.35 senken &nbsp;|&nbsp; Bei "zu viel Irrelevantes" → auf 0.55 erhöhen
+          </div>
+          <div>
+            <strong style="color:var(--color-text)">Temperatur: <code x-text="$store.ki.temperature.toFixed(1)"></code></strong><br>
+            Kreativität vs. Faktentreue der KI-Antworten.
+            <ul style="margin:.2rem 0 0 1rem"><li><strong>0.0-0.3:</strong> Deterministisch, sehr faktisch (Code, Fakten)</li><li><strong>0.7: ✅ Optimal</strong> für Pflichtenheft (variabel aber korrekt)</li><li><strong>1.0+:</strong> Kreativ, Brainstorming (Risiko: Halluzinationen)</li></ul>
+            💡 Für Marketing/Storytelling → 1.0 &nbsp;|&nbsp; Für technische Spezifikationen → 0.3-0.5
+          </div>
         </div>
       </details>
     </div>
   </div>
 
-  <!-- ── Save button ───────────────────────────────────────────────── -->
+  <!-- ── Save indicator (auto-save via $store.ki.save()) ───────────── -->
   <div style="display:flex;align-items:center;gap:1rem">
-    <button type="submit" class="btn btn-primary">
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-      Einstellungen speichern
-    </button>
-    {% if saved is defined and saved %}
-    <span style="color:var(--color-success);font-size:.85rem;display:flex;align-items:center;gap:.3rem">
+    <span style="font-size:.82rem;color:var(--color-text-muted)">
+      Einstellungen werden automatisch gespeichert.
+    </span>
+    <span x-show="$store.ki.saved" x-transition
+          style="color:var(--color-success);font-size:.85rem;display:flex;align-items:center;gap:.3rem">
       <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
       Gespeichert
     </span>
-    {% endif %}
   </div>
 
-  </form>
 </div>
 
 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
