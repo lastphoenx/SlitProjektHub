@@ -1102,10 +1102,17 @@ async def taskgen_page(request: Request, role_key: str | None = None):
             if r["key"] == role_key:
                 sel_role = r
                 break
+    import json as _json
+    roles_json = _json.dumps([
+        {k: (v if v is not None else "") for k, v in r.items()
+         if k in ("key", "title", "short_code", "description", "responsibilities")}
+        for r in roles
+    ], ensure_ascii=False)
     return templates.TemplateResponse("taskgen/index.html", {
         "request": request,
         "active_page": "taskgen",
         "roles": roles,
+        "roles_json": roles_json,
         "sel_role": sel_role,
         "providers": providers_available() or ["openai"],
         "all_models_json": _all_models_json(),

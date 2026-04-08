@@ -4,132 +4,175 @@
 {% block topbar_title %}Task-Generator{% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <div>
-    <h1 class="page-title">KI Task-Generator</h1>
-    <p class="page-subtitle">Aufgaben aus Rollen-Verantwortlichkeiten automatisch generieren lassen</p>
-  </div>
-</div>
-
-<div style="display:grid;grid-template-columns:320px 1fr;gap:1.5rem;align-items:start" x-data="{
+<div style="max-width:900px" x-data="{
+  rolesData: {{ roles_json | safe }},
+  search: '',
   role_key: '{{ sel_role.key if sel_role else '' }}',
-  min_per_resp: 2,
-  max_per_resp: 5,
-  generating: false
+  min_per_resp: 3,
+  max_per_resp: 7,
+  generating: false,
+  get filteredRoles() {
+    if (!this.search.trim()) return this.rolesData;
+    const q = this.search.toLowerCase();
+    return this.rolesData.filter(r =>
+      (r.title||'').toLowerCase().includes(q) ||
+      (r.short_code||'').toLowerCase().includes(q) ||
+      (r.description||'').toLowerCase().includes(q) ||
+      (r.responsibilities||'').toLowerCase().includes(q)
+    );
+  },
+  get selectedRole() {
+    return this.rolesData.find(r => r.key === this.role_key) || null;
+  },
+  get responsibilities() {
+    const r = this.selectedRole;
+    if (!r || !r.responsibilities) return [];
+    return r.responsibilities.split('\n')
+      .map(l => l.replace(/^[-*]\s*/, '').trim())
+      .filter(l => l.length > 0);
+  }
 }">
 
-  <!-- ── Left column: Config ─────────────────── -->
-  <div>
+  <!-- RAG info banner -->
+  <div style="background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);border-radius:.5rem;padding:.6rem .9rem;margin-bottom:1.25rem;font-size:.8rem;color:var(--color-text-muted);display:flex;align-items:flex-start;gap:.5rem">
+    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color:#3b82f6;flex-shrink:0;margin-top:.1rem"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span><strong>RAG-Nutzung:</strong> Task-Gen durchsucht <strong>NUR</strong> Dokumente mit Klassifizierung 'Pflichtenheft (Rolle)', die dieser Rolle zugeordnet sind (via 'Zugehörige Rollen' beim Upload). Allgemeine Projekt-Dokumente werden NICHT verwendet.</span>
+  </div>
 
-    <!-- Role selector -->
-    <div class="card" style="margin-bottom:1rem">
-      <h2 style="font-size:.9rem;font-weight:700;margin-bottom:.85rem;color:var(--color-text-muted)">ROLLE AUSWÄHLEN</h2>
+  <!-- ── Step 1: Rolle auswählen ──────────────────────────────────── -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <h2 style="font-size:1.1rem;font-weight:700;margin-bottom:1rem;display:flex;align-items:center;gap:.6rem">
+      <span style="display:inline-flex;align-items:center;justify-content:center;width:1.6rem;height:1.6rem;border-radius:50%;background:var(--color-primary);color:#fff;font-size:.8rem;font-weight:700;flex-shrink:0">1</span>
+      Rolle auswählen
+    </h2>
 
-      <label class="form-label">Rolle</label>
-      <select name="role_key" id="tg-role-key" class="form-select" x-model="role_key">
-        <option value="">— Rolle wählen —</option>
-        {% for r in roles %}
-        <option value="{{ r.key }}" {% if sel_role and sel_role.key == r.key %}selected{% endif %}>
-          {{ r.title }}{% if r.short_code %} ({{ r.short_code }}){% endif %}
-        </option>
-        {% endfor %}
-      </select>
+    <label class="form-label" style="font-size:.78rem;color:var(--color-text-muted)">Suche (durchsucht alle Felder)</label>
+    <input type="text" class="form-input" style="margin-bottom:.75rem"
+           placeholder="Titel, Kürzel, Beschreibung, Verantwortlichkeiten..."
+           x-model="search">
 
-      <!-- Responsibilities preview -->
-      <div id="resp-preview" style="margin-top:.85rem">
-        {% if sel_role and sel_role.responsibilities %}
-        <div style="font-size:.8rem;color:var(--color-text-muted);margin-bottom:.3rem">Verantwortlichkeiten:</div>
-        <pre style="font-size:.78rem;white-space:pre-wrap;margin:0;padding:.6rem;background:var(--color-bg);border:1px solid var(--color-border);border-radius:.375rem;max-height:180px;overflow-y:auto">{{ sel_role.responsibilities }}</pre>
-        {% endif %}
-      </div>
+    <label class="form-label">Rolle</label>
+    <select class="form-select" x-model="role_key">
+      <option value="">— Rolle wählen —</option>
+      <template x-for="r in filteredRoles" :key="r.key">
+        <option :value="r.key"
+                x-text="(r.short_code ? r.short_code + ' - ' : '') + r.title"></option>
+      </template>
+    </select>
+
+    <!-- Count badge -->
+    <div x-show="role_key && responsibilities.length > 0" x-transition
+         style="margin-top:.75rem;padding:.45rem .75rem;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.3);border-radius:.375rem;font-size:.82rem;display:flex;align-items:center;gap:.4rem">
+      🗒 <strong x-text="responsibilities.length"></strong>&nbsp;Verantwortlichkeiten gefunden
     </div>
 
-    <!-- Generation params (Min/Max per responsibility) -->
-    <div class="card" style="margin-bottom:1rem">
-      <h2 style="font-size:.9rem;font-weight:700;margin-bottom:.85rem;color:var(--color-text-muted)">AUFGABEN PRO VERANTWORTLICHKEIT</h2>
+    <!-- Collapsible responsibilities preview -->
+    <details x-show="responsibilities.length > 0" style="margin-top:.75rem">
+      <summary style="cursor:pointer;font-size:.83rem;color:var(--color-text-muted);list-style:none;display:flex;align-items:center;gap:.35rem;user-select:none">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        Verantwortlichkeiten anzeigen
+      </summary>
+      <ul style="margin:.6rem 0 0 1.2rem;padding:0;font-size:.83rem;line-height:1.7;color:var(--color-text)">
+        <template x-for="resp in responsibilities" :key="resp">
+          <li x-text="resp"></li>
+        </template>
+      </ul>
+    </details>
+  </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-        <div>
-          <label class="form-label" style="display:flex;justify-content:space-between">
-            <span>Minimum</span>
-            <span x-text="min_per_resp" style="font-weight:600"></span>
-          </label>
-          <input type="range" name="min_per_resp" min="1" max="10" step="1"
-                 class="form-range" x-model.number="min_per_resp" style="accent-color:var(--color-primary)">
-        </div>
-        <div>
-          <label class="form-label" style="display:flex;justify-content:space-between">
-            <span>Maximum</span>
-            <span x-text="max_per_resp" style="font-weight:600"></span>
-          </label>
-          <input type="range" name="max_per_resp" min="1" max="15" step="1"
-                 class="form-range" x-model.number="max_per_resp" style="accent-color:var(--color-primary)">
-        </div>
-      </div>
-    </div>
+  <!-- ── Step 2: Generierungs-Einstellungen ───────────────────────── -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <h2 style="font-size:1.1rem;font-weight:700;margin-bottom:1rem;display:flex;align-items:center;gap:.6rem">
+      <span style="display:inline-flex;align-items:center;justify-content:center;width:1.6rem;height:1.6rem;border-radius:50%;background:var(--color-primary);color:#fff;font-size:.8rem;font-weight:700;flex-shrink:0">2</span>
+      Generierungs-Einstellungen
+    </h2>
 
-    <!-- KI settings info (read-only from sidebar) -->
-    <div class="card" style="margin-bottom:1rem;padding:.65rem .85rem;background:var(--color-surface-2)">
-      <div style="font-size:.72rem;color:var(--color-text-muted);font-weight:600;letter-spacing:.04em;margin-bottom:.4rem">AKTIVE KI-EINSTELLUNGEN</div>
-      <div style="font-size:.8rem;display:flex;flex-direction:column;gap:.2rem">
-        <span><span style="color:var(--color-text-muted)">Provider:</span> <span x-text="$store.ki.provider" style="font-weight:600"></span></span>
-        <span><span style="color:var(--color-text-muted)">Modell:</span> <span x-text="$store.ki.model || 'Standard'" style="font-weight:600"></span></span>
-        <span><span style="color:var(--color-text-muted)">Temp:</span> <span x-text="$store.ki.temperature.toFixed(1)" style="font-weight:600"></span></span>
-        <span><span style="color:var(--color-text-muted)">RAG:</span> <span x-text="$store.ki.rag_enabled ? 'aktiv' : 'deaktiviert'" :style="$store.ki.rag_enabled ? 'color:var(--color-success);font-weight:600' : 'font-weight:600'"></span></span>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;align-items:start;margin-bottom:1.25rem">
+
+      <!-- KI info -->
+      <div>
+        <div class="form-label">KI-Einstellungen</div>
+        <div style="font-size:.85rem;color:var(--color-text-muted);margin-top:.2rem"
+             x-text="$store.ki.provider + ' \u2192 ' + ($store.ki.model || 'Standard') + ' (T=' + $store.ki.temperature.toFixed(1) + ')'"></div>
       </div>
-      <div style="font-size:.68rem;color:var(--color-text-muted);margin-top:.5rem">
-        → Ändern über das KI-Panel in der Sidebar
+
+      <!-- Min tasks per responsibility -->
+      <div>
+        <div class="form-label">Min. Aufgaben pro Verantwortlichkeit</div>
+        <div style="display:flex;align-items:center;gap:.75rem;margin-top:.35rem">
+          <button type="button"
+                  style="width:28px;height:28px;border:1px solid var(--color-border);border-radius:.375rem;background:var(--color-surface-2);color:var(--color-text);font-size:1.1rem;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0"
+                  @click="min_per_resp = Math.max(1, min_per_resp - 1)">&#8722;</button>
+          <span x-text="min_per_resp" style="font-size:1.6rem;font-weight:700;min-width:2rem;text-align:center;line-height:1"></span>
+          <button type="button"
+                  style="width:28px;height:28px;border:1px solid var(--color-border);border-radius:.375rem;background:var(--color-surface-2);color:var(--color-text);font-size:1.1rem;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0"
+                  @click="min_per_resp = Math.min(max_per_resp, min_per_resp + 1)">&#43;</button>
+        </div>
       </div>
+
+      <!-- Max tasks per responsibility -->
+      <div>
+        <div class="form-label">Max. Aufgaben pro Verantwortlichkeit</div>
+        <div style="display:flex;align-items:center;gap:.75rem;margin-top:.35rem">
+          <button type="button"
+                  style="width:28px;height:28px;border:1px solid var(--color-border);border-radius:.375rem;background:var(--color-surface-2);color:var(--color-text);font-size:1.1rem;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0"
+                  @click="max_per_resp = Math.max(min_per_resp, max_per_resp - 1)">&#8722;</button>
+          <span x-text="max_per_resp" style="font-size:1.6rem;font-weight:700;min-width:2rem;text-align:center;line-height:1"></span>
+          <button type="button"
+                  style="width:28px;height:28px;border:1px solid var(--color-border);border-radius:.375rem;background:var(--color-surface-2);color:var(--color-text);font-size:1.1rem;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0"
+                  @click="max_per_resp = Math.min(20, max_per_resp + 1)">&#43;</button>
+        </div>
+      </div>
+
     </div>
 
     <!-- Generate button -->
-    <button
-      class="btn btn-primary"
-      style="width:100%;justify-content:center"
-      :disabled="!role_key || generating"
-      @click.prevent="
-        if (!role_key) return;
-        generating = true;
-        const fd = new FormData();
-        fd.append('role_key', role_key);
-        fd.append('provider', $store.ki.provider);
-        fd.append('model', $store.ki.model || '');
-        fd.append('temperature', $store.ki.temperature);
-        fd.append('min_per_resp', min_per_resp);
-        fd.append('max_per_resp', max_per_resp);
-        fd.append('rag_enabled', $store.ki.rag_enabled ? 'true' : 'false');
-        htmx.ajax('POST', '/taskgen/generate', {
-          values: Object.fromEntries(fd),
-          target: '#taskgen-results',
-          swap: 'innerHTML'
-        }).then(() => { generating = false; });
-      ">
+    <button class="btn btn-primary"
+            style="width:100%;justify-content:center;padding:.75rem;font-size:1rem"
+            :disabled="!role_key || generating"
+            @click.prevent="
+              if (!role_key) return;
+              generating = true;
+              const fd = new FormData();
+              fd.append('role_key', role_key);
+              fd.append('provider', $store.ki.provider);
+              fd.append('model', $store.ki.model || '');
+              fd.append('temperature', $store.ki.temperature);
+              fd.append('min_per_resp', min_per_resp);
+              fd.append('max_per_resp', max_per_resp);
+              fd.append('rag_enabled', $store.ki.rag_enabled ? 'true' : 'false');
+              htmx.ajax('POST', '/taskgen/generate', {
+                values: Object.fromEntries(fd),
+                target: '#taskgen-results',
+                swap: 'innerHTML'
+              }).then(() => { generating = false; });
+            ">
       <template x-if="!generating">
         <span style="display:flex;align-items:center;gap:.5rem">
-          <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           Aufgaben generieren
         </span>
       </template>
       <template x-if="generating">
         <span style="display:flex;align-items:center;gap:.5rem">
-          <svg class="spin" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
-          Generiere…
+          <svg class="spin" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+          Generiere&#x2026;
         </span>
       </template>
     </button>
+  </div>
 
-  </div><!-- /left column -->
-
-  <!-- ── Right column: Results ─────────────────── -->
+  <!-- ── Results ───────────────────────────────────────────────────── -->
   <div id="taskgen-results">
-    <div class="card" style="text-align:center;padding:3rem 1rem;color:var(--color-text-muted)">
+    <div x-show="!role_key" class="card"
+         style="text-align:center;padding:3rem 1rem;color:var(--color-text-muted)">
       <svg width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="margin:0 auto .75rem"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-      <p style="font-size:.9rem">Wähle eine Rolle und starte die Generierung</p>
-      <p style="font-size:.78rem;margin-top:.4rem">KI-Einstellungen im linken Menü unter <strong>KI-Einstellungen</strong></p>
+      <p style="font-size:.9rem">W&#228;hle eine Rolle und starte die Generierung</p>
+      <p style="font-size:.78rem;margin-top:.4rem">KI-Einstellungen &#252;ber das KI-Panel in der Sidebar anpassen</p>
     </div>
   </div>
 
-</div><!-- /grid -->
+</div>
 
 <style>
 @keyframes spin { to { transform: rotate(360deg); } }
