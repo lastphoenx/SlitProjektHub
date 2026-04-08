@@ -1,0 +1,46 @@
+﻿{% if history %}
+  {% for msg in history %}
+    {% if msg.role == "user" %}
+    <div style="display:flex;justify-content:flex-end">
+      <div>
+        <div class="chat-bubble chat-bubble-user" style="white-space:pre-wrap">{{ msg.content }}</div>
+        <div class="chat-meta" style="text-align:right">{{ msg.timestamp[:16] if msg.timestamp else '' }}</div>
+      </div>
+    </div>
+    {% else %}
+    <div style="display:flex;justify-content:flex-start">
+      <div style="max-width:90%">
+        <div class="chat-bubble chat-bubble-ai" style="white-space:pre-wrap">{{ msg.content }}</div>
+        <div class="chat-meta">
+          {% if msg.model_name %}{{ msg.model_name }}{% endif %}
+          {% if msg.model_temperature is not none %} · T={{ msg.model_temperature }}{% endif %}
+          · {{ msg.timestamp[:16] if msg.timestamp else '' }}
+        </div>
+        {% if msg.rag_sources %}
+        <div class="chat-rag-sources">
+          📚 Quellen:
+          {% for src in msg.rag_sources[:3] %}
+            {{ src.get('filename', '?') }} ({{ "%.0f%%" | format(src.get('similarity', 0) * 100) }}){% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  {% endfor %}
+{% else %}
+  <p class="text-muted" style="text-align:center;padding:3rem 1rem">
+    <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="display:block;margin:0 auto .75rem;opacity:.4"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+    Noch keine Nachrichten. Schreibe etwas, um zu starten.
+  </p>
+{% endif %}
+
+<!-- OOB: update session_id in the form -->
+<input id="active-session-id" name="session_id" type="hidden" value="{{ session_id }}" hx-swap-oob="true">
+
+<script>
+  (function() {
+    var el = document.getElementById('chat-messages');
+    if (el) el.scrollTop = el.scrollHeight;
+  })();
+</script>

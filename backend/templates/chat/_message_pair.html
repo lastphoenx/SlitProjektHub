@@ -1,0 +1,32 @@
+﻿<!-- User message -->
+<div style="display:flex;justify-content:flex-end">
+  <div>
+    <div class="chat-bubble chat-bubble-user" style="white-space:pre-wrap">{{ user_message }}</div>
+    <div class="chat-meta" style="text-align:right">{{ timestamp }}</div>
+  </div>
+</div>
+
+<!-- AI message -->
+<div style="display:flex;justify-content:flex-start">
+  <div style="max-width:90%">
+    <div class="chat-bubble chat-bubble-ai {% if error %}chat-bubble-error{% endif %}" style="white-space:pre-wrap">{{ ai_response }}</div>
+    <div class="chat-meta">
+      {% if model %}{{ model }}{% endif %}
+      {% if temperature is not none %} · T={{ temperature }}{% endif %}
+      · {{ timestamp }}
+      {% if rag_sources %} · RAG {% endif %}
+    </div>
+    {% if rag_sources %}
+    <div class="chat-rag-sources">
+      📚 Quellen:
+      {% for src in rag_sources[:3] %}
+        {{ src.get('filename', '?') }} ({{ "%.0f%%" | format(src.get('similarity', 0) * 100) }}){% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<style>
+  .chat-bubble-error { border-color: var(--color-danger) !important; color: var(--color-danger) !important; }
+</style>

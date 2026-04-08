@@ -25,8 +25,13 @@ from src.m07_tasks import list_tasks_df, load_task, upsert_task, soft_delete_tas
 from src.m07_projects import list_projects_df, load_project, upsert_project, soft_delete_project
 from src.m07_contexts import list_contexts_df, load_context, upsert_context, soft_delete_context
 from src.m03_db import get_session, Project, Role, Task, Context
-from src.m08_llm import providers_available, generate_role_text, generate_summary
+from src.m08_llm import (providers_available, generate_role_text, generate_summary,
+                          try_models_with_messages, get_available_models, AVAILABLE_MODELS,
+                          generate_role_details, generate_project_details)
+from src.m10_chat import save_message, load_history, find_latest_session_for_project, build_project_map
+from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results
 from sqlmodel import select
+import uuid as _uuid
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -679,6 +684,274 @@ async def contexts_delete(key: str):
     response = HTMLResponse(content="")
     response.headers["HX-Toast"] = json.dumps({"message": "Kontext gelöscht", "type": "success"})
     return response
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# HTML Routes — Chat
+# ════════════════════════════════════════════════════════════════════════════
+
+def _all_models_json() -> str:
+    """Returns AVAILABLE_MODELS as JSON string for use in JS."""
+    result = {p: list(m.keys()) for p, m in AVAILABLE_MODELS.items()}
+    return json.dumps(result)
+
+
+def _default_provider() -> str:
+    avail = providers_available()
+    return avail[0] if avail else "openai"
+
+
+@app.get("/chat", response_class=HTMLResponse)
+async def chat_page(request: Request, project_key: str | None = None, provider: str | None = None):
+    projects = _projects_list()
+    # Pick defaults
+    sel_project = project_key or (projects[0]["key"] if projects else "")
+    providers = providers_available() or ["openai"]
+    sel_provider = provider or providers[0]
+    sel_model = get_available_models(sel_provider)[0] if get_available_models(sel_provider) else ""
+    # Find existing session for this project+provider
+    session_id = ""
+    if sel_project and sel_provider:
+        session_id = find_latest_session_for_project(sel_provider, sel_project) or str(_uuid.uuid4())
+    return templates.TemplateResponse("chat/index.html", {
+        "request": request,
+        "projects": projects,
+        "providers": providers,
+        "sel_project": sel_project,
+        "sel_provider": sel_provider,
+        "sel_model": sel_model,
+        "session_id": session_id,
+        "all_models_json": _all_models_json(),
+        "active_page": "chat",
+    })
+
+
+@app.get("/chat/history", response_class=HTMLResponse)
+async def chat_history(
+    request: Request,
+    project_key: str = "",
+    provider: str = "openai",
+):
+    history = []
+    session_id = ""
+    if project_key and provider:
+        session_id = find_latest_session_for_project(provider, project_key) or str(_uuid.uuid4())
+        if session_id:
+            history = load_history(provider, session_id)
+    return templates.TemplateResponse("chat/_history.html", {
+        "request": request,
+        "history": history,
+        "session_id": session_id,
+    })
+
+
+@app.post("/chat/send", response_class=HTMLResponse)
+async def chat_send(
+    request: Request,
+    project_key: str = Form(""),
+    session_id: str = Form(""),
+    provider: str = Form("openai"),
+    model: str = Form(""),
+    temperature: float = Form(0.7),
+    rag_enabled: str = Form("true"),
+    message: str = Form(""),
+):
+    if not message.strip():
+        raise HTTPException(status_code=400, detail="Leere Nachricht")
+    if not session_id:
+        session_id = str(_uuid.uuid4())
+
+    use_rag = rag_enabled.lower() in ("true", "1", "on", "yes")
+
+    # Save user message
+    save_message(
+        provider=provider,
+        session_id=session_id,
+        role="user",
+        content=message.strip(),
+        project_key=project_key or None,
+        model_name=model or None,
+        model_temperature=temperature,
+    )
+
+    # Build system prompt
+    project_map = ""
+    proj_body = ""
+    proj_title = project_key or "Unbekanntes Projekt"
+    if project_key:
+        try:
+            proj_obj, proj_body = load_project(project_key)
+            if proj_obj:
+                proj_title = proj_obj.title
+                project_map = build_project_map(project_key, query=message.strip())
+        except Exception:
+            pass
+
+    # RAG retrieval
+    rag_section = ""
+    rag_sources: list[dict] = []
+    if use_rag and project_key:
+        try:
+            rag_results = retrieve_relevant_chunks_hybrid(
+                message.strip(),
+                project_key=project_key,
+                limit=7,
+                threshold=0.45,
+            )
+            rag_results = deduplicate_results(rag_results)
+            rag_text = build_rag_context_from_search(rag_results)
+            if rag_text:
+                rag_section = f"\n\n{rag_text}"
+            docs = rag_results.get("documents", [])
+            rag_sources = [{"filename": d.get("filename", ""), "similarity": d.get("similarity", 0)} for d in docs[:5]]
+        except Exception:
+            pass
+
+    system_prompt = f"""Du bist ein erfahrener Projekt-Assistent für "{proj_title}".
+
+PROJEKT-STRUKTUR:
+{project_map or "(Keine Strukturdaten verfügbar)"}
+
+PROJEKT-BRIEF:
+{proj_body or "(Kein Projektbeschrieb vorhanden)"}
+{rag_section}
+
+Antworte prägnant, strukturiert und mit direktem Bezug zu den Projekt-Anforderungen. Antworte auf Deutsch."""
+
+    # Build chat history for context
+    prev_history = load_history(provider, session_id)
+    messages_for_llm = [{"role": m["role"], "content": m["content"]} for m in prev_history]
+    messages_for_llm.append({"role": "user", "content": message.strip()})
+
+    # Call LLM
+    used_model: list = []
+    ai_response = None
+    error_text = None
+    try:
+        ai_response = try_models_with_messages(
+            provider=provider,
+            system=system_prompt,
+            messages=messages_for_llm,
+            max_tokens=2000,
+            temperature=temperature,
+            model=model or None,
+            _used_model=used_model,
+        )
+    except Exception as e:
+        error_text = str(e)
+
+    actual_model = used_model[0] if used_model else model
+
+    if ai_response:
+        save_message(
+            provider=provider,
+            session_id=session_id,
+            role="assistant",
+            content=ai_response,
+            project_key=project_key or None,
+            model_name=actual_model,
+            model_temperature=temperature,
+            rag_sources=rag_sources or None,
+        )
+    else:
+        ai_response = error_text or "Keine Antwort vom KI-Modell erhalten."
+
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%H:%M")
+
+    return templates.TemplateResponse("chat/_message_pair.html", {
+        "request": request,
+        "user_message": message.strip(),
+        "ai_response": ai_response,
+        "model": actual_model or model,
+        "temperature": temperature,
+        "rag_sources": rag_sources,
+        "timestamp": timestamp,
+        "error": error_text is not None and ai_response == error_text,
+    })
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# HTML Routes — KI-Vorschlag (Roles + Projects + Contexts)
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.post("/roles/ai-suggest", response_class=HTMLResponse)
+async def roles_ai_suggest(
+    request: Request,
+    ai_description: str = Form(""),
+    role_key: str = Form(""),
+    provider: str = Form("openai"),
+    model: str = Form(""),
+    temperature: float = Form(0.7),
+):
+    if not ai_description.strip():
+        return HTMLResponse('<p class="text-muted" style="font-size:.8rem;padding:.5rem 0">Bitte Beschreibung eingeben.</p>')
+    try:
+        title, short_code, responsibilities, qualifications, expertise, prose = generate_role_details(
+            provider=provider,
+            description=ai_description.strip(),
+            role_key=role_key or None,
+            model=model or None,
+            temperature=temperature,
+        )
+    except Exception as e:
+        return HTMLResponse(f'<p style="color:var(--color-danger);font-size:.8rem">Fehler: {e}</p>')
+
+    # Return JS that fills the form fields
+    return HTMLResponse(f"""<script>
+(function(){{
+  var s = v => v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  var f = (id, val) => {{ var el = document.getElementById(id); if(el) el.value = val; }};
+  f('r-title', {json.dumps(title)});
+  f('r-short-code', {json.dumps(short_code or "")});
+  f('r-responsibilities', {json.dumps(responsibilities or "")});
+  f('r-qualifications', {json.dumps(qualifications or "")});
+  f('r-expertise', {json.dumps(expertise or "")});
+  f('r-body', {json.dumps(prose or "")});
+}})();
+</script>
+<p style="color:var(--color-success);font-size:.8rem;padding:.25rem 0">
+  <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:inline;vertical-align:middle"><path d="M20 6L9 17l-5-5"/></svg>
+  KI-Vorschlag eingefügt!
+</p>""")
+
+
+@app.post("/projects/ai-suggest", response_class=HTMLResponse)
+async def projects_ai_suggest(
+    request: Request,
+    ai_description: str = Form(""),
+    project_key: str = Form(""),
+    provider: str = Form("openai"),
+    model: str = Form(""),
+    temperature: float = Form(0.7),
+):
+    if not ai_description.strip():
+        return HTMLResponse('<p class="text-muted" style="font-size:.8rem;padding:.5rem 0">Bitte Beschreibung eingeben.</p>')
+    try:
+        title, short_code, short_title, description, body_md = generate_project_details(
+            provider=provider,
+            description=ai_description.strip(),
+            project_key=project_key or None,
+            model=model or None,
+            temperature=temperature,
+        )
+    except Exception as e:
+        return HTMLResponse(f'<p style="color:var(--color-danger);font-size:.8rem">Fehler: {e}</p>')
+
+    return HTMLResponse(f"""<script>
+(function(){{
+  var f = (id, val) => {{ var el = document.getElementById(id); if(el) el.value = val; }};
+  f('f-title', {json.dumps(title)});
+  f('f-short-code', {json.dumps(short_code or "")});
+  f('f-short-title', {json.dumps(short_title or "")});
+  f('f-description', {json.dumps(description or "")});
+  f('f-body', {json.dumps(body_md or "")});
+}})();
+</script>
+<p style="color:var(--color-success);font-size:.8rem;padding:.25rem 0">
+  <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:inline;vertical-align:middle"><path d="M20 6L9 17l-5-5"/></svg>
+  KI-Vorschlag eingefügt!
+</p>""")
 
 
 # ════════════════════════════════════════════════════════════════════════════
