@@ -21,7 +21,7 @@ os.chdir(ROOT)  # DB-Pfad Referenz
 
 # ── Src imports ────────────────────────────────────────────────────────────
 from src.m07_roles import list_roles_df, load_role, upsert_role, soft_delete_role, function_suggestions
-from src.m07_tasks import list_tasks_df, load_task, upsert_task
+from src.m07_tasks import list_tasks_df, load_task, upsert_task, soft_delete_task
 from src.m07_projects import list_projects_df, load_project, upsert_project, soft_delete_project
 from src.m07_contexts import list_contexts_df
 from src.m03_db import get_session, Project, Role, Task, Context
@@ -382,6 +382,173 @@ async def roles_delete(key: str):
         raise HTTPException(status_code=404, detail="Rolle nicht gefunden")
     response = HTMLResponse(content="")
     response.headers["HX-Toast"] = json.dumps({"message": "Rolle gelöscht", "type": "success"})
+    return response
+
+
+# ── Tasks helper ─────────────────────────────────────────────────────────
+
+def _tasks_list(role_filter: str | None = None) -> list[dict]:
+    df = list_tasks_df(include_deleted=False, include_metadata=True)
+    if df is None or df.empty:
+        return []
+    records = df.rename(columns={
+        "Key": "key",
+        "Titel": "title",
+        "KurzTitel": "short_title",
+        "Kürzel": "short_code",
+        "Funktion": "function",
+        "Beschreibung": "description",
+        "Quell-Rolle": "source_role_key",
+        "Verantwortlichkeit": "source_responsibility",
+    }).to_dict("records")
+    if role_filter:
+        records = [r for r in records if r.get("source_role_key") == role_filter]
+    return records
+
+
+def _roles_for_select() -> list[dict]:
+    """Alle nicht-gelöschten Rollen als {key, title} für Select-Dropdowns."""
+    df = list_roles_df(include_deleted=False)
+    if df is None or df.empty:
+        return []
+    return (
+        df[["Key", "Rollenbezeichnung"]]
+        .rename(columns={"Key": "key", "Rollenbezeichnung": "title"})
+        .to_dict("records")
+    )
+
+
+# ── Tasks HTML views ──────────────────────────────────────────────────────
+
+@app.get("/tasks", response_class=HTMLResponse)
+async def tasks_page(request: Request, role: str | None = None):
+    return templates.TemplateResponse("tasks/index.html", {
+        "request": request,
+        "active_page": "tasks",
+        "tasks": _tasks_list(role_filter=role),
+        "roles": _roles_for_select(),
+        "active_role_filter": role or "",
+    })
+
+
+@app.get("/tasks/new", response_class=HTMLResponse)
+async def tasks_new_form(request: Request, role_key: str = ""):
+    return templates.TemplateResponse("tasks/_form.html", {
+        "request": request,
+        "task": None,
+        "body_text": "",
+        "roles": _roles_for_select(),
+        "preselect_role": role_key,
+    })
+
+
+@app.get("/tasks/{key}/edit", response_class=HTMLResponse)
+async def tasks_edit_form(request: Request, key: str):
+    task_obj, body = load_task(key)
+    if not task_obj:
+        raise HTTPException(status_code=404, detail="Aufgabe nicht gefunden")
+    task = {
+        "key": task_obj.key,
+        "title": task_obj.title,
+        "short_title": task_obj.short_title or "",
+        "short_code": task_obj.short_code or "",
+        "description": task_obj.description or "",
+        "source_role_key": task_obj.source_role_key or "",
+        "source_responsibility": task_obj.source_responsibility or "",
+    }
+    return templates.TemplateResponse("tasks/_form.html", {
+        "request": request,
+        "task": task,
+        "body_text": body,
+        "roles": _roles_for_select(),
+        "preselect_role": task_obj.source_role_key or "",
+    })
+
+
+@app.get("/tasks/{key}/confirm-delete", response_class=HTMLResponse)
+async def tasks_confirm_delete(request: Request, key: str):
+    task_obj, _ = load_task(key)
+    if not task_obj:
+        raise HTTPException(status_code=404, detail="Aufgabe nicht gefunden")
+    return templates.TemplateResponse("tasks/_confirm_delete.html", {
+        "request": request,
+        "task": task_obj,
+    })
+
+
+@app.post("/tasks", response_class=HTMLResponse)
+async def tasks_create(
+    request: Request,
+    title: str = Form(...),
+    short_title: str = Form(""),
+    short_code: str = Form(""),
+    description: str = Form(""),
+    source_role_key: str = Form(""),
+    body_text: str = Form(""),
+):
+    try:
+        upsert_task(
+            title=title.strip(),
+            body_text=body_text,
+            short_title=short_title.strip() or None,
+            short_code=short_code.strip() or None,
+            description=description.strip() or None,
+            source_role_key=source_role_key.strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    response = templates.TemplateResponse("tasks/_table.html", {
+        "request": request,
+        "tasks": _tasks_list(),
+        "roles": _roles_for_select(),
+    })
+    response.headers["HX-Toast"] = json.dumps({"message": f'Aufgabe "{title}" erstellt', "type": "success"})
+    return response
+
+
+@app.put("/tasks/{key}", response_class=HTMLResponse)
+async def tasks_update(
+    request: Request,
+    key: str,
+    title: str = Form(...),
+    short_title: str = Form(""),
+    short_code: str = Form(""),
+    description: str = Form(""),
+    source_role_key: str = Form(""),
+    body_text: str = Form(""),
+):
+    task_obj, _ = load_task(key)
+    if not task_obj:
+        raise HTTPException(status_code=404, detail="Aufgabe nicht gefunden")
+    try:
+        upsert_task(
+            key=key,
+            title=title.strip(),
+            body_text=body_text,
+            short_title=short_title.strip() or None,
+            short_code=short_code.strip() or None,
+            description=description.strip() or None,
+            source_role_key=source_role_key.strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    response = templates.TemplateResponse("tasks/_table.html", {
+        "request": request,
+        "tasks": _tasks_list(),
+        "roles": _roles_for_select(),
+    })
+    response.headers["HX-Toast"] = json.dumps({"message": f'Aufgabe "{title}" gespeichert', "type": "success"})
+    return response
+
+
+@app.delete("/tasks/{key}", response_class=HTMLResponse)
+async def tasks_delete(key: str):
+    if not soft_delete_task(key):
+        raise HTTPException(status_code=404, detail="Aufgabe nicht gefunden")
+    response = HTMLResponse(content="")
+    response.headers["HX-Toast"] = json.dumps({"message": "Aufgabe gelöscht", "type": "success"})
     return response
 
 

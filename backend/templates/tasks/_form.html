@@ -1,0 +1,140 @@
+﻿<!-- Drawer backdrop -->
+<div class="drawer-backdrop" id="drawer-backdrop" onclick="closeDrawer()"></div>
+
+<!-- Drawer panel -->
+<div class="drawer drawer-wide" id="main-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+
+  <!-- Fixed header -->
+  <div class="drawer-header">
+    <h2 class="drawer-title" id="drawer-title">
+      {% if task %}Aufgabe bearbeiten{% else %}Neue Aufgabe{% endif %}
+    </h2>
+    <div class="flex items-center gap-2">
+      {% if task %}
+        <span class="badge badge-neutral font-mono" style="font-size:.75rem">{{ task.key }}</span>
+      {% endif %}
+      <button class="btn btn-ghost btn-icon" onclick="closeDrawer()" title="Schließen">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Scrollable body -->
+  <div class="drawer-body">
+    <form
+      id="task-form"
+      {% if task %}
+        hx-put="/tasks/{{ task.key }}"
+      {% else %}
+        hx-post="/tasks"
+      {% endif %}
+      hx-target="#tasks-table"
+      hx-swap="innerHTML"
+      hx-on::after-request="if(event.detail.successful) closeDrawer()"
+    >
+
+      <div class="drawer-cols">
+
+        <!-- Left: Core metadata -->
+        <div class="drawer-cols-meta">
+
+          <div class="form-group">
+            <label class="form-label" for="t-title">Aufgabentitel *</label>
+            <input id="t-title" class="form-input" type="text" name="title" required
+                   value="{{ task.title if task else '' }}"
+                   placeholder="z. B. Projektstrukturplan erstellen" autofocus />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="t-short-title">Kurztitel</label>
+            <input id="t-short-title" class="form-input" type="text" name="short_title" maxlength="50"
+                   value="{{ task.short_title if task else '' }}"
+                   placeholder="Kompakter Alternativtitel (max. 50 Zeichen)" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="t-short-code">Kürzel</label>
+            <input id="t-short-code" class="form-input font-mono" type="text" name="short_code" maxlength="14"
+                   value="{{ task.short_code if task else '' }}"
+                   placeholder="z. B. PSP-01"
+                   style="text-transform:uppercase"
+                   oninput="this.value=this.value.toUpperCase()" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="t-source-role">Quell-Rolle</label>
+            <select id="t-source-role" class="form-select" name="source_role_key">
+              <option value="">— Keine Rollenzuordnung —</option>
+              {% for r in roles %}
+                <option value="{{ r.key }}"
+                  {% if task and task.source_role_key == r.key %}selected
+                  {% elif preselect_role == r.key %}selected
+                  {% endif %}>
+                  {{ r.title }} ({{ r.key }})
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="t-description">Kurzbeschreibung</label>
+            <textarea id="t-description" class="form-textarea" name="description" rows="3"
+                      placeholder="1-2 Sätze zur Aufgabe …">{{ task.description if task else '' }}</textarea>
+          </div>
+
+          <div class="form-group" style="flex:1">
+            <label class="form-label" for="t-source-resp">Quell-Verantwortlichkeit</label>
+            <textarea id="t-source-resp" class="form-textarea" name="source_responsibility"
+                      style="min-height:100px;resize:vertical"
+                      placeholder="Aus welcher Verantwortlichkeit der Rolle wurde diese Aufgabe abgeleitet?">{{ task.source_responsibility if task else '' }}</textarea>
+          </div>
+
+        </div><!-- /left -->
+
+        <!-- Right: Full Markdown editor -->
+        <div class="drawer-cols-editor">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.35rem">
+            <label class="form-label" for="t-body" style="margin:0">Aufgabenbeschreibung (Markdown)</label>
+            <span class="text-muted" style="font-size:.75rem">Markdown unterstützt</span>
+          </div>
+          <textarea
+            id="t-body"
+            class="form-textarea editor-fill font-mono"
+            name="body_text"
+            placeholder="# Aufgabentitel&#10;&#10;## Ziel&#10;Beschreibe das Ziel der Aufgabe …&#10;&#10;## Schritte&#10;1. Schritt 1&#10;2. Schritt 2&#10;&#10;## Ergebnis / Deliverable&#10;Was wird am Ende produziert?"
+            style="font-size:.82rem;line-height:1.6;tab-size:2"
+          >{{ body_text or '' }}</textarea>
+        </div><!-- /right -->
+
+      </div><!-- /drawer-cols -->
+
+    </form>
+  </div><!-- /drawer-body -->
+
+  <!-- Fixed footer -->
+  <div class="drawer-footer">
+    <button type="button" class="btn btn-secondary" onclick="closeDrawer()">
+      Abbrechen
+    </button>
+    <button type="submit" form="task-form" class="btn btn-primary">
+      <span class="htmx-indicator">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+      </span>
+      {% if task %}Speichern{% else %}Erstellen{% endif %}
+    </button>
+  </div>
+
+</div><!-- /drawer -->
+
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+
+<script>
+  requestAnimationFrame(() => {
+    document.getElementById('main-drawer').classList.add('drawer-open');
+  });
+  function closeDrawer() {
+    const d = document.getElementById('main-drawer');
+    if (d) d.classList.remove('drawer-open');
+    setTimeout(() => document.getElementById('modal-slot').innerHTML = '', 300);
+  }
+</script>
