@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import os
 import re
 
@@ -410,73 +410,62 @@ def generate_chunk_keywords(
     model: str = "gpt-4o-mini",
 ) -> list[str]:
     """
-    Generiert BM25-Suchbegriffe für einen Dokumenten-Chunk (Index-time Enrichment).
+    Generiert BM25-Suchbegriffe fuer einen Dokumenten-Chunk (Index-time Enrichment).
 
-    Statt den Rohtext zu indexieren, beschreibt eine LLM-generierte Keyword-Liste
-    INHALTLICH was im Chunk steht — unabhängig von Dokumentnamen, Kapitelbezeichnungen
-    oder Verfahrenskontext.
+    Fuer Q&A-Chunks (JSON mit 'Frage'-Feld): Keywords werden aus der Frage extrahiert,
+    da der Nutzer nach dem Inhalt der Frage sucht, nicht nach Metadaten.
+    Fuer regulaere Textchunks: Keywords aus dem Gesamttext.
 
-    Returns: Liste von 5-10 Fachbegriffen (lowercase), leer bei Fehler.
+    Returns: Liste von 5-8 Fachbegriffen (lowercase), leer bei Fehler.
     """
+    import json as _json
+
+    # Q&A-Format erkennen: Keywords aus der Frage, nicht aus JSON-Metadaten
+    text_for_keywords = chunk_text
+    try:
+        data = _json.loads(chunk_text)
+        if isinstance(data, dict) and "Frage" in data:
+            text_for_keywords = str(data["Frage"])
+    except (ValueError, TypeError):
+        pass
+
     system_prompt = (
-        "Du bist ein neutraler Experte für Informations-Extraktion.\n\n"
-        "AUFGABE: Extrahiere 5-10 Schlüsselwörter, die das spezifische 'Signal' des Textes "
-        "maximieren und das 'Hintergrundrauschen' minimieren.\n\n"
-        "LOGIK:\n"
-        "1. SIGNAL (Extrahieren): Spezifische Fachterme, technische Details, eindeutige Regeln "
-        "oder Fakten, die diesen Abschnitt UNIKAT innerhalb einer großen Sammlung machen.\n"
-        "2. RAUSCHEN (Ignorieren): Begriffe, die nur das Medium, den Dokumententyp, den "
-        "formalen Rahmen oder den übergeordneten Prozess beschreiben. Lösche Wörter, die "
-        "typischerweise in fast jedem Dokument der vorliegenden Sammlung vorkommen könnten.\n\n"
-        "ZIEL: Erzeuge Suchbegriffe, mit denen ein Nutzer exakt diesen inhaltlichen Kern findet, "
-        "ohne hunderte andere Dokumente desselben Rahmens als Treffer zu erhalten.\n\n"
-        "FORMAT: NUR ein valides JSON-Array von Strings (Grundform, lowercase, keine "
-        "Komposita-Zerlegung — 'subunternehmen' bleibt 'subunternehmen', nicht ['sub','unternehmen']). "
-        "Keine Erklärung.\n"
-        "BEISPIEL-STRUKTUR: [\"spezifischer_term_1\", \"spezifischer_term_2\"]"
+        "Du bist ein Experte fuer Informations-Retrieval. Aus einem Text extrahierst du "
+        "genau die Begriffe, die diesen Text von Tausenden aehnlichen Texten im selben "
+        "Korpus UNTERSCHEIDEN.\n\n"
+        "SIGNAL vs. RAUSCHEN:\n"
+        "RAUSCHEN (nie als Keyword): Omnipraesente Woerter, die in fast jedem Text des Korpus "
+        "vorkommen -- z.B. Dokumenttypen, Projektnamen, Kapitelreferenzen, Verfahrensbegriffe "
+        "wie Pflichtenheft, Ausschreibung, Anfrage, Anhang, Kapitel.\n"
+        "SIGNAL (als Keyword): Fachliche Konzepte, technische Spezifika, konkrete Regelungen "
+        "oder Tatbestaende, die nur in wenigen Texten auftauchen.\n\n"
+        "ANALOGIE -- Werkstatthandbuch, Abschnitt 'Zuendkerzen Golf 4':\n"
+        "Keywords: ['zuendkerze', 'elektrodenabstand', 'drehmoment', 'anzugsmoment']\n"
+        "Verboten: ['handbuch', 'werkstatt', 'kapitel', 'fahrzeug', 'golf'] "
+        "(das ganze Buch handelt davon)\n\n"
+        "Antworte NUR mit einem JSON-Array aus 5-8 deutschen Strings (lowercase). "
+        "Keine Komposita-Zerlegung. Keine Erklaerung."
     )
+
     try:
         result = try_models_with_messages(
             provider=provider,
             system=system_prompt,
-            messages=[{"role": "user", "content": chunk_text[:2000]}],  # max 2000 Zeichen
+            messages=[{"role": "user", "content": text_for_keywords[:1500]}],
             max_tokens=120,
             temperature=0.0,
             model=model,
         )
         if not result:
             return []
-        # JSON-Array aus Antwort extrahieren (robust gegen Markdown-Code-Blöcke)
-        import re as _re
-        match = _re.search(r'\[.*?\]', result, _re.DOTALL)
+        match = re.search(r'\[.*?\]', result, re.DOTALL)
         if not match:
             return []
-        import json as _json
         keywords = _json.loads(match.group())
         return [str(k).lower().strip() for k in keywords if k and str(k).strip()]
     except Exception:
         return []
-    try:
-        result = try_models_with_messages(
-            provider=provider,
-            system=system_prompt,
-            messages=[{"role": "user", "content": chunk_text[:2000]}],  # max 2000 Zeichen
-            max_tokens=120,
-            temperature=0.0,
-            model=model,
-        )
-        if not result:
-            return []
-        # JSON-Array aus Antwort extrahieren (robust gegen Markdown-Code-Blöcke)
-        import re as _re
-        match = _re.search(r'\[.*?\]', result, _re.DOTALL)
-        if not match:
-            return []
-        import json as _json
-        keywords = _json.loads(match.group())
-        return [str(k).lower().strip() for k in keywords if k and str(k).strip()]
-    except Exception:
-        return []
+
 
 
 def generate_query_hypotheses(

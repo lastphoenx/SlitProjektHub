@@ -30,6 +30,8 @@ def main():
     parser = argparse.ArgumentParser(description="Seed retrieval_keywords for DocumentChunks")
     parser.add_argument("--project-key", help="Nur Chunks dieses Projekts verarbeiten")
     parser.add_argument("--dry-run", action="store_true", help="Keine DB-Schreiboperationen")
+    parser.add_argument("--limit", type=int, default=0, help="Max. Anzahl Chunks verarbeiten (0 = alle)")
+    parser.add_argument("--force", action="store_true", help="Auch bereits geseedete Chunks neu verarbeiten")
     parser.add_argument("--batch-size", type=int, default=10, help="Chunks pro Batch (default: 10)")
     parser.add_argument("--provider", default="openai", help="LLM Provider (default: openai)")
     parser.add_argument("--model", default="gpt-4o-mini", help="LLM Model (default: gpt-4o-mini)")
@@ -39,13 +41,13 @@ def main():
     init_db()
 
     with get_session() as ses:
-        # Chunks laden die noch kein retrieval_keywords haben
         q = (
             select(DocumentChunk)
             .join(Document, DocumentChunk.document_id == Document.id)
             .where(Document.is_deleted == False)
-            .where(DocumentChunk.retrieval_keywords == None)
         )
+        if not args.force:
+            q = q.where(DocumentChunk.retrieval_keywords == None)
         if args.project_key:
             q = q.join(
                 ProjectDocumentLink,
@@ -54,15 +56,25 @@ def main():
 
         chunks = ses.exec(q).all()
 
+    if args.limit > 0:
+        chunks = chunks[:args.limit]
+
     total = len(chunks)
     if total == 0:
-        print("Alle Chunks haben bereits retrieval_keywords. Nichts zu tun.")
+        print("Alle Chunks haben bereits retrieval_keywords. Nichts zu tun. (--force um neu zu seeden)")
+        return
+
+    if args.dry_run:
+        sample = chunks[:5]
+        print(f"[DRY-RUN] {total} Chunks zu verarbeiten. Zeige Sample ({len(sample)}) — keine DB-Writes.\n")
+        for chunk in sample:
+            text_preview = (chunk.chunk_text or "")[:80].replace("\n", " ")
+            print(f"Chunk {chunk.id} | {text_preview}...")
+            keywords = generate_chunk_keywords(chunk.chunk_text or "", provider=args.provider, model=args.model)
+            print(f"  → {keywords}\n")
         return
 
     print(f"Zu verarbeiten: {total} Chunks")
-    if args.dry_run:
-        print("[DRY-RUN] Keine Schreiboperationen.")
-
     ok = 0
     err = 0
 
@@ -83,13 +95,12 @@ def main():
 
         print(f"  → {keywords}")
 
-        if not args.dry_run:
-            with get_session() as ses:
-                db_chunk = ses.get(DocumentChunk, chunk.id)
-                if db_chunk:
-                    db_chunk.retrieval_keywords = json.dumps(keywords, ensure_ascii=False)
-                    ses.add(db_chunk)
-                    ses.commit()
+        with get_session() as ses:
+            db_chunk = ses.get(DocumentChunk, chunk.id)
+            if db_chunk:
+                db_chunk.retrieval_keywords = json.dumps(keywords, ensure_ascii=False)
+                ses.add(db_chunk)
+                ses.commit()
         ok += 1
 
         if args.delay > 0 and i < total:
