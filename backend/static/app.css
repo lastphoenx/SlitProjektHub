@@ -160,12 +160,12 @@ tbody tr:hover td { background: rgba(255,255,255,.025); }
 }
 .empty-state svg { opacity: 0.3; margin-bottom: 0.75rem; }
 
-/* ── Modal overlay ── */
+/* ── Modal overlay (small confirmations only) ── */
 .modal-backdrop {
   position: fixed; inset: 0;
   background: rgba(0,0,0,.65);
-  backdrop-filter: blur(2px);
-  z-index: 40;
+  backdrop-filter: blur(3px);
+  z-index: 50;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -176,9 +176,7 @@ tbody tr:hover td { background: rgba(255,255,255,.025); }
   border-radius: var(--radius-lg);
   padding: 1.75rem;
   width: 100%;
-  max-width: 560px;
-  max-height: 90vh;
-  overflow-y: auto;
+  max-width: 440px;
 }
 .modal-header {
   display: flex;
@@ -187,6 +185,88 @@ tbody tr:hover td { background: rgba(255,255,255,.025); }
   margin-bottom: 1.25rem;
 }
 .modal-title { font-size: 1rem; font-weight: 700; }
+
+/* ── Drawer (Slide-Over) — for all create/edit forms ── */
+.drawer-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.5);
+  backdrop-filter: blur(2px);
+  z-index: 50;
+}
+.drawer {
+  position: fixed;
+  top: 0; right: 0;
+  width: min(680px, 95vw);
+  height: 100vh;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  box-shadow: -8px 0 32px rgba(0,0,0,.4);
+  z-index: 51;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 280ms cubic-bezier(.25,.46,.45,.94);
+}
+.drawer.drawer-open { transform: translateX(0); }
+
+.drawer-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.drawer-title { font-size: 1rem; font-weight: 700; }
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+  /* scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+.drawer-body::-webkit-scrollbar { width: 6px; }
+.drawer-body::-webkit-scrollbar-track { background: transparent; }
+.drawer-body::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+
+.drawer-footer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+/* Drawer 2-column layout for wide forms */
+.drawer-cols {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 1.5rem;
+  height: 100%;
+}
+.drawer-cols-meta { display: flex; flex-direction: column; gap: 0; }
+.drawer-cols-editor { display: flex; flex-direction: column; }
+.drawer-cols-editor .editor-fill {
+  flex: 1;
+  resize: none;
+  min-height: calc(100vh - 220px);
+}
+
+/* Wider drawer for complex forms */
+.drawer-wide {
+  width: min(960px, 95vw);
+}
+
+@media (max-width: 700px) {
+  .drawer { width: 100vw; }
+  .drawer-cols { grid-template-columns: 1fr; }
+  .drawer-cols-editor .editor-fill { min-height: 300px; }
+}
 
 /* ── Form ── */
 .form-group { margin-bottom: 1rem; }

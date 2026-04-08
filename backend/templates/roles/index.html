@@ -49,13 +49,11 @@
 
 {% block extra_scripts %}
 <script>
-document.addEventListener('click', function(e) {
-  if (e.target.classList.contains('modal-backdrop')) {
-    document.getElementById('modal-slot').innerHTML = '';
-  }
-});
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') document.getElementById('modal-slot').innerHTML = '';
+  if (e.key === 'Escape') {
+    if (typeof closeDrawer === 'function') closeDrawer();
+    else document.getElementById('modal-slot').innerHTML = '';
+  }
 });
 </script>
 {% endblock %}
