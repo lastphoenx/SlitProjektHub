@@ -1,0 +1,698 @@
+﻿{% extends "base.html" %}
+{% block title %}Batch QA — SlitProjektHub{% endblock %}
+{% block topbar_title %}Batch QA{% endblock %}
+
+{% block content %}
+<script>
+window.__bqaProjects = {{ projects | tojson | safe }};
+</script>
+<div x-data="batchQA()" x-init="init()" style="max-width:1100px">
+
+<!-- ══════════════════════════════════════════════════════════════════
+     STEP 1 — Projekt
+═══════════════════════════════════════════════════════════════════ -->
+<div class="card" style="margin-bottom:1.1rem">
+  <h2 class="step-heading">
+    <span class="step-num">1</span>Projekt auswählen
+  </h2>
+  <label class="form-label">Projekt</label>
+  <select class="form-select" style="max-width:400px"
+          x-model="project_key"
+          @change="onProjectChange()">
+    <option value="">— Projekt wählen —</option>
+    {% for p in projects %}
+    <option value="{{ p.key }}">{{ p.title }}</option>
+    {% endfor %}
+  </select>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     STEP 2 — CSV Dokument
+═══════════════════════════════════════════════════════════════════ -->
+<div class="card" style="margin-bottom:1.1rem" x-show="project_key" x-cloak>
+  <h2 class="step-heading">
+    <span class="step-num">2</span>CSV-Dokument (Fragen-Katalog)
+  </h2>
+  <div style="display:flex;align-items:flex-end;gap:.75rem;flex-wrap:wrap">
+    <div style="flex:1;min-width:200px">
+      <label class="form-label">CSV-Dokument</label>
+      <select class="form-select" x-model="csv_doc_id" @change="onCsvChange()" id="bqa-csv-select">
+        <option value="">— wird geladen… —</option>
+        {# filled via HTMX #}
+      </select>
+    </div>
+    <div x-show="csv_doc_id" x-cloak>
+      <span class="badge-muted" x-text="csv_row_count ? csv_row_count + ' Zeilen' : ''"></span>
+    </div>
+  </div>
+  <!-- HTMX target for CSV options -->
+  <div id="bqa-csv-opts" style="display:none"></div>
+  <!-- Checkpoint info -->
+  <div id="bqa-checkpoint" style="margin-top:.6rem"></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     STEP 3 — KI-Erkennung (optional)
+═══════════════════════════════════════════════════════════════════ -->
+<div class="card" style="margin-bottom:1.1rem" x-show="csv_doc_id" x-cloak>
+  <h2 class="step-heading">
+    <span class="step-num">3</span>KI-Erkennung (optional)
+    <span class="badge-muted" style="margin-left:.5rem;font-size:.72rem">heuristisch, kein API-Aufruf</span>
+  </h2>
+  <button class="btn btn-secondary" style="margin-bottom:.75rem"
+          :disabled="ki_analyzing"
+          @click="runKiAnalysis()">
+    <template x-if="ki_analyzing">
+      <span class="spinner-sm"></span>
+    </template>
+    <template x-if="!ki_analyzing">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    </template>
+    Fragen analysieren
+  </button>
+  <div id="bqa-ki-analysis"></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     STEP 4 — Rollen
+═══════════════════════════════════════════════════════════════════ -->
+<div class="card" style="margin-bottom:1.1rem" x-show="csv_doc_id" x-cloak>
+  <h2 class="step-heading">
+    <span class="step-num">4</span>Rollen-Modus
+  </h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.5rem;margin-bottom:.9rem">
+    <template x-for="opt in roleModeOptions" :key="opt.val">
+      <label :class="'role-mode-card' + (role_mode === opt.val ? ' selected' : '')"
+             @click="role_mode = opt.val">
+        <input type="radio" name="role_mode" :value="opt.val" x-model="role_mode" style="display:none">
+        <span style="font-weight:600;font-size:.85rem" x-text="opt.label"></span>
+        <span style="font-size:.75rem;color:var(--color-text-muted)" x-text="opt.desc"></span>
+      </label>
+    </template>
+  </div>
+
+  <!-- Role picker (shown for individual / single) -->
+  <div x-show="role_mode !== 'none'" x-cloak>
+    <div id="bqa-roles-list">
+      <!-- filled via HTMX -->
+      <p class="text-muted small">Rollen werden geladen…</p>
+    </div>
+    <template x-if="role_mode === 'all_merged' || role_mode === 'individual'">
+      <p style="font-size:.78rem;color:var(--color-text-muted);margin-top:.4rem">
+        Alle ausgewählten Rollen werden verwendet.
+      </p>
+    </template>
+    <template x-if="role_mode === 'single'">
+      <p style="font-size:.78rem;color:var(--color-text-muted);margin-top:.4rem">
+        Nur die erste ausgewählte Rolle wird verwendet.
+      </p>
+    </template>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     STEP 5 — Einstellungen
+═══════════════════════════════════════════════════════════════════ -->
+<div class="card" style="margin-bottom:1.1rem" x-show="csv_doc_id" x-cloak>
+  <h2 class="step-heading">
+    <span class="step-num">5</span>Antwort-Einstellungen
+  </h2>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;flex-wrap:wrap">
+
+    <div>
+      <label class="form-label">Antwortstil</label>
+      <select class="form-select" x-model="answer_style">
+        <option>Sachlich &amp; präzise</option>
+        <option>Ausführlich &amp; erkärend</option>
+        <option>Kurz &amp; bündig</option>
+      </select>
+    </div>
+
+    <div>
+      <label class="form-label">Standpunkt</label>
+      <select class="form-select" x-model="answer_stance">
+        <option>(nur gemäss Rolle)</option>
+        <option>Neutral</option>
+        <option>Wohlwollend (erlaubend)</option>
+        <option>Restriktiv (ablehnend)</option>
+      </select>
+    </div>
+
+    <div>
+      <label class="form-label">Formulierung</label>
+      <select class="form-select" x-model="answer_wording">
+        <option>(nur gemäss Rolle)</option>
+        <option>Klar &amp; abschliessend</option>
+        <option>Vage &amp; mit Weichmachern</option>
+      </select>
+    </div>
+
+  </div>
+
+  <div style="margin-top:.8rem;display:flex;align-items:center;gap:.6rem">
+    <input type="checkbox" id="bqa-use-ctx" x-model="use_project_context"
+           style="accent-color:var(--color-primary)">
+    <label for="bqa-use-ctx" style="font-size:.85rem;cursor:pointer">
+      Projektkontext einbeziehen (Titel + Beschreibung im System-Prompt)
+    </label>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     STEP 6 — Prompt-Vorschau
+═══════════════════════════════════════════════════════════════════ -->
+<div class="card" style="margin-bottom:1.1rem" x-show="csv_doc_id" x-cloak>
+  <h2 class="step-heading">
+    <span class="step-num">6</span>Prompt-Vorschau &amp; RAG-Diagnostik
+  </h2>
+  <div style="display:flex;align-items:flex-end;gap:.75rem;margin-bottom:.75rem;flex-wrap:wrap">
+    <div>
+      <label class="form-label">Frage Nr.</label>
+      <input type="number" class="form-input" style="width:90px" min="1"
+             x-model.number="preview_nr">
+    </div>
+    <button class="btn btn-secondary"
+            :disabled="preview_loading || !csv_doc_id"
+            @click="runPromptPreview()">
+      <template x-if="preview_loading"><span class="spinner-sm"></span></template>
+      <template x-if="!preview_loading">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><eye/></svg>
+      </template>
+      Vorschau laden
+    </button>
+  </div>
+  <div id="bqa-prompt-preview"></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     STEP 7 — Batch ausführen
+═══════════════════════════════════════════════════════════════════ -->
+<div class="card" style="margin-bottom:1.1rem" x-show="csv_doc_id" x-cloak>
+  <h2 class="step-heading">
+    <span class="step-num">7</span>Batch ausführen
+  </h2>
+
+  <!-- KI info line -->
+  <div style="font-size:.8rem;color:var(--color-text-muted);margin-bottom:.8rem;display:flex;align-items:center;gap:.4rem">
+    <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+    <span>Provider: <strong x-text="$store.ki.provider"></strong></span>
+    <span>·</span>
+    <span>Modell: <strong x-text="$store.ki.model || '(Standard)'"></strong></span>
+    <span>·</span>
+    <span>Temp: <strong x-text="$store.ki.temperature.toFixed(1)"></strong></span>
+    <span>·</span>
+    <span>RAG: <strong x-text="$store.ki.rag_enabled ? 'aktiv (Top-'+$store.ki.rag_top_k+', ≥'+($store.ki.rag_similarity_threshold*100).toFixed(0)+'%)' : 'deaktiviert'"></strong></span>
+  </div>
+
+  <!-- Start / Stop controls -->
+  <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin-bottom:.9rem">
+    <button class="btn btn-primary"
+            :disabled="batch_running || !csv_doc_id || !project_key"
+            @click="startBatch()">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Batch starten
+    </button>
+    <button class="btn btn-danger" x-show="batch_running" @click="stopBatch()">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+      Abbrechen
+    </button>
+  </div>
+
+  <!-- Progress bar -->
+  <div x-show="batch_running || batch_done" x-cloak style="margin-bottom:.75rem">
+    <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:.25rem">
+      <span x-text="'Frage ' + batch_current + ' von ' + batch_total + (batch_current_lief ? ' — ' + batch_current_lief : '')"></span>
+      <span x-text="batch_total > 0 ? Math.round(batch_current/batch_total*100)+'%' : '0%'"></span>
+    </div>
+    <div style="height:6px;background:var(--color-border);border-radius:3px;overflow:hidden">
+      <div style="height:100%;background:var(--color-primary);transition:width .3s"
+           :style="'width:' + (batch_total > 0 ? Math.round(batch_current/batch_total*100) : 0) + '%'"></div>
+    </div>
+  </div>
+
+  <!-- Live preview (last 3 answers) -->
+  <div x-show="batch_results.length > 0" x-cloak>
+    <div style="font-size:.78rem;font-weight:600;color:var(--color-text-muted);margin-bottom:.4rem">
+      Letzte Antworten (Live-Vorschau)
+    </div>
+    <div style="max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:.5rem">
+      <template x-for="(r, i) in batch_results.slice(-3)" :key="i">
+        <div style="border:1px solid var(--color-border);border-radius:.375rem;padding:.6rem .75rem;background:var(--color-surface)">
+          <div style="font-size:.72rem;color:var(--color-text-muted);margin-bottom:.25rem">
+            Nr. <strong x-text="r.Nr"></strong>
+            <span x-show="r.Lieferant"> · <span x-text="r.Lieferant"></span></span>
+          </div>
+          <div style="font-size:.8rem;font-style:italic;color:var(--color-text-muted);margin-bottom:.3rem;line-height:1.35" x-text="r.Frage ? r.Frage.substring(0,120)+'…' : ''"></div>
+          <template x-for="col in answerColumns(r)" :key="col">
+            <div>
+              <span style="font-size:.7rem;font-weight:600;color:var(--color-primary)" x-text="col" x-show="col !== 'Antwort'"></span>
+              <div style="font-size:.82rem;line-height:1.4;white-space:pre-wrap;max-height:100px;overflow:hidden" x-text="r[col]"></div>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+    <div x-show="batch_done" x-cloak style="margin-top:.5rem;font-size:.82rem;color:var(--color-success);display:flex;align-items:center;gap:.4rem">
+      <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+      Batch abgeschlossen — <strong x-text="batch_results.length"></strong> Antworten
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div x-show="batch_error" x-cloak style="color:var(--color-danger);font-size:.85rem;padding:.5rem;background:rgba(239,68,68,.1);border-radius:.375rem;margin-top:.5rem">
+    <strong>Fehler:</strong> <span x-text="batch_error"></span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     STEP 8 — Ergebnisse & Export
+═══════════════════════════════════════════════════════════════════ -->
+<div class="card" x-show="batch_done && batch_results.length > 0" x-cloak style="margin-bottom:1.1rem">
+  <h2 class="step-heading">
+    <span class="step-num">8</span>Ergebnisse &amp; Export
+  </h2>
+
+  <!-- Column info -->
+  <div style="font-size:.78rem;color:var(--color-text-muted);margin-bottom:.75rem">
+    <span x-text="batch_results.length + ' Zeilen'"></span>
+    · <span x-text="displayColumns().join(', ')"></span>
+    <span style="margin-left:.5rem;font-style:italic">(RAG-Debug-Spalten sind nur im Export enthalten)</span>
+  </div>
+
+  <!-- Results table -->
+  <div style="overflow-x:auto;max-height:420px;overflow-y:auto;border:1px solid var(--color-border);border-radius:.375rem">
+    <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+      <thead>
+        <tr>
+          <template x-for="col in displayColumns()" :key="col">
+            <th style="position:sticky;top:0;background:var(--color-surface-2);padding:.4rem .6rem;text-align:left;font-weight:600;border-bottom:2px solid var(--color-border);white-space:nowrap" x-text="col"></th>
+          </template>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="(row, ri) in batch_results" :key="ri">
+          <tr :style="ri%2===0 ? '' : 'background:var(--color-surface)'">
+            <template x-for="col in displayColumns()" :key="col">
+              <td style="padding:.35rem .6rem;vertical-align:top;border-bottom:1px solid var(--color-border)" x-text="row[col] || ''"></td>
+            </template>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Export controls -->
+  <div style="margin-top:.9rem;display:flex;align-items:flex-end;gap:.75rem;flex-wrap:wrap">
+    <div>
+      <label class="form-label">Datei-Tag (optional)</label>
+      <input type="text" class="form-input" style="width:200px" placeholder="z.B. v2, final…"
+             x-model="export_tag">
+    </div>
+    <button class="btn btn-secondary" @click="exportCSV()">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      CSV herunterladen
+    </button>
+  </div>
+  <div style="font-size:.75rem;color:var(--color-text-muted);margin-top:.4rem">
+    Exportdatei enthält alle Spalten inkl. _RAG_Chunks und _RAG_Debug.
+    Dateiname: <code x-text="buildExportFilename()+'.csv'"></code>
+  </div>
+</div>
+
+</div><!-- /x-data -->
+
+<style>
+.step-heading {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-bottom: .9rem;
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+}
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: .8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.badge-muted {
+  display: inline-block;
+  padding: .15rem .5rem;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-size: .75rem;
+  color: var(--color-text-muted);
+}
+.role-mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  padding: .65rem .8rem;
+  border: 1.5px solid var(--color-border);
+  border-radius: .5rem;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.role-mode-card:hover { border-color: var(--color-primary); background: rgba(99,102,241,.06); }
+.role-mode-card.selected { border-color: var(--color-primary); background: rgba(99,102,241,.12); }
+.spinner-sm {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255,255,255,.3);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.text-muted { color: var(--color-text-muted); }
+.small { font-size: .82rem; }
+</style>
+
+<script>
+function batchQA() {
+  return {
+    // Step 1
+    project_key: '',
+    // Step 2
+    csv_doc_id: '',
+    csv_row_count: 0,
+    // Step 3
+    ki_analyzing: false,
+    // Step 4
+    role_mode: 'all_merged',
+    selected_roles: [],
+    roleModeOptions: [
+      { val: 'all_merged', label: 'Alle zusammen',
+        desc: 'Alle Rollen kombiniert in einer Antwort' },
+      { val: 'individual', label: 'Einzeln',
+        desc: 'Eine separate Antwort-Spalte pro Rolle' },
+      { val: 'single', label: 'Eine Rolle',
+        desc: 'Genau eine Rolle, eine Antwort-Spalte' },
+      { val: 'none', label: 'Ohne Rolle',
+        desc: 'Generisch ohne Rollenkontext' },
+    ],
+    // Step 5
+    answer_style: 'Sachlich & präzise',
+    answer_stance: '(nur gemäss Rolle)',
+    answer_wording: 'Klar & abschliessend',
+    use_project_context: true,
+    // Step 6
+    preview_nr: 1,
+    preview_loading: false,
+    // Step 7
+    batch_running: false,
+    batch_done: false,
+    batch_error: '',
+    batch_current: 0,
+    batch_total: 0,
+    batch_current_lief: '',
+    batch_results: [],
+    _es: null,
+    // Step 8
+    export_tag: '',
+
+    init() {
+      // nothing to init
+    },
+
+    onProjectChange() {
+      this.csv_doc_id = '';
+      this.csv_row_count = 0;
+      this.batch_results = [];
+      this.batch_done = false;
+      this.batch_error = '';
+      if (!this.project_key) return;
+      // Load CSV docs via HTMX-style fetch
+      this._fetchCsvDocs();
+      this._fetchRoles();
+      document.getElementById('bqa-checkpoint').innerHTML = '';
+      document.getElementById('bqa-ki-analysis').innerHTML = '';
+      document.getElementById('bqa-prompt-preview').innerHTML = '';
+    },
+
+    onCsvChange() {
+      this.batch_results = [];
+      this.batch_done = false;
+      this.batch_error = '';
+      document.getElementById('bqa-ki-analysis').innerHTML = '';
+      document.getElementById('bqa-prompt-preview').innerHTML = '';
+      if (this.csv_doc_id) this._checkCheckpoint();
+    },
+
+    _fetchCsvDocs() {
+      const fd = new FormData();
+      fd.append('project_key', this.project_key);
+      fetch('/batch-qa/csv-docs', { method: 'POST', body: fd })
+        .then(r => r.text())
+        .then(html => {
+          const sel = document.getElementById('bqa-csv-select');
+          if (!sel) return;
+          // Replace all options except the first placeholder
+          const first = sel.options[0];
+          sel.innerHTML = '';
+          sel.appendChild(first);
+          const tmp = document.createElement('div');
+          tmp.innerHTML = html;
+          tmp.querySelectorAll('option').forEach(o => sel.appendChild(o));
+        });
+    },
+
+    _fetchRoles() {
+      const fd = new FormData();
+      fd.append('project_key', this.project_key);
+      fetch('/batch-qa/roles', { method: 'POST', body: fd })
+        .then(r => r.text())
+        .then(html => {
+          const el = document.getElementById('bqa-roles-list');
+          if (el) el.innerHTML = html;
+        });
+    },
+
+    _checkCheckpoint() {
+      const fd = new FormData();
+      fd.append('project_key', this.project_key);
+      fd.append('csv_doc_id', this.csv_doc_id);
+      fetch('/batch-qa/checkpoint-info', { method: 'POST', body: fd })
+        .then(r => r.text())
+        .then(html => {
+          const el = document.getElementById('bqa-checkpoint');
+          if (el) el.innerHTML = html;
+        });
+    },
+
+    runKiAnalysis() {
+      if (!this.csv_doc_id) return;
+      this.ki_analyzing = true;
+      document.getElementById('bqa-ki-analysis').innerHTML = '<span class="text-muted small">Analysiert…</span>';
+      const fd = new FormData();
+      fd.append('csv_doc_id', this.csv_doc_id);
+      fetch('/batch-qa/ki-analyze', { method: 'POST', body: fd })
+        .then(r => r.text())
+        .then(html => {
+          document.getElementById('bqa-ki-analysis').innerHTML = html;
+          this.ki_analyzing = false;
+        })
+        .catch(() => { this.ki_analyzing = false; });
+    },
+
+    runPromptPreview() {
+      if (!this.csv_doc_id || !this.project_key) return;
+      this.preview_loading = true;
+      document.getElementById('bqa-prompt-preview').innerHTML = '<span class="text-muted small">Lade…</span>';
+      const fd = new FormData();
+      fd.append('project_key', this.project_key);
+      fd.append('csv_doc_id', this.csv_doc_id);
+      fd.append('frage_nr', this.preview_nr);
+      fd.append('role_mode', this.role_mode);
+      fd.append('role_keys', this._getSelectedRoleKeys());
+      fd.append('use_project_context', this.use_project_context ? 'true' : 'false');
+      fd.append('answer_style', this.answer_style);
+      fd.append('answer_stance', this.answer_stance);
+      fd.append('answer_wording', this.answer_wording);
+      fetch('/batch-qa/prompt-preview', { method: 'POST', body: fd })
+        .then(r => r.text())
+        .then(html => {
+          document.getElementById('bqa-prompt-preview').innerHTML = html;
+          this.preview_loading = false;
+        })
+        .catch(() => { this.preview_loading = false; });
+    },
+
+    _getSelectedRoleKeys() {
+      const container = document.getElementById('bqa-roles-list');
+      if (!container) return '';
+      return Array.from(container.querySelectorAll('input[type=checkbox]:checked'))
+        .map(cb => cb.value).join(',');
+    },
+
+    startBatch() {
+      if (!this.csv_doc_id || !this.project_key) return;
+      this.batch_running = true;
+      this.batch_done = false;
+      this.batch_error = '';
+      this.batch_current = 0;
+      this.batch_total = 0;
+      this.batch_current_lief = '';
+      this.batch_results = [];
+
+      const params = new URLSearchParams({
+        project_key: this.project_key,
+        csv_doc_id: this.csv_doc_id,
+        role_mode: this.role_mode,
+        role_keys: this._getSelectedRoleKeys(),
+        use_project_context: this.use_project_context,
+        answer_style: this.answer_style,
+        answer_stance: this.answer_stance,
+        answer_wording: this.answer_wording,
+        provider: this.$store.ki.provider,
+        model: this.$store.ki.model,
+        temperature: this.$store.ki.temperature,
+        rag_enabled: this.$store.ki.rag_enabled,
+        rag_top_k: this.$store.ki.rag_top_k,
+        rag_threshold: this.$store.ki.rag_similarity_threshold,
+      });
+
+      const es = new EventSource('/batch-qa/stream?' + params.toString());
+      this._es = es;
+
+      es.addEventListener('resume', evt => {
+        const d = JSON.parse(evt.data);
+        this.batch_current = d.from;
+        this.batch_total = d.total;
+      });
+
+      es.addEventListener('progress', evt => {
+        const d = JSON.parse(evt.data);
+        this.batch_current = d.current;
+        this.batch_total = d.total;
+        this.batch_current_lief = d.lieferant || '';
+      });
+
+      es.addEventListener('result', evt => {
+        const row = JSON.parse(evt.data);
+        this.batch_results.push(row);
+      });
+
+      es.addEventListener('done', evt => {
+        this.batch_running = false;
+        this.batch_done = true;
+        es.close();
+        this._es = null;
+        document.getElementById('bqa-checkpoint').innerHTML = '';
+      });
+
+      es.addEventListener('error', evt => {
+        if (evt.data) {
+          try { this.batch_error = JSON.parse(evt.data).message; } catch { this.batch_error = evt.data; }
+        } else {
+          this.batch_error = this.batch_running ? 'Verbindung unterbrochen.' : '';
+        }
+        this.batch_running = false;
+        es.close();
+        this._es = null;
+      });
+    },
+
+    stopBatch() {
+      if (this._es) { this._es.close(); this._es = null; }
+      this.batch_running = false;
+      this.batch_error = 'Manuell abgebrochen.';
+    },
+
+    answerColumns(row) {
+      return Object.keys(row).filter(k => k.startsWith('Antwort') && !k.startsWith('_'));
+    },
+
+    displayColumns() {
+      if (!this.batch_results.length) return [];
+      const all = new Set();
+      this.batch_results.forEach(r => Object.keys(r).forEach(k => all.add(k)));
+      return Array.from(all).filter(k => !k.startsWith('_'));
+    },
+
+    buildExportFilename() {
+      const project = this.project_key || 'proj';
+      const csv = this.csv_doc_id || 'csv';
+      const prov = (this.$store.ki.provider || 'ai').replace(/\s+/g, '-');
+      const mdl = (this.$store.ki.model || 'model').replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 20);
+      const roles = this.role_mode === 'none' ? 'no-role' : (this._getSelectedRoleKeys().replace(/,/g, '_') || 'all');
+      const style = this.answer_style.replace(/[^a-zA-Z]/g, '');
+      const tag = this.export_tag ? '_' + this.export_tag.replace(/[^a-zA-Z0-9_-]/g, '') : '';
+      return `batch_${project}_${csv}_${prov}_${mdl}_${roles}_${style}${tag}`;
+    },
+
+    exportCSV() {
+      if (!this.batch_results.length) return;
+      const allKeys = [];
+      const seen = new Set();
+      this.batch_results.forEach(row => {
+        Object.keys(row).forEach(k => { if (!seen.has(k)) { seen.add(k); allKeys.push(k); } });
+      });
+      const esc = v => '"' + String(v || '').replace(/"/g, '""') + '"';
+      const header = allKeys.map(esc).join(',');
+      const rows = this.batch_results.map(row => allKeys.map(k => esc(row[k] || '')).join(','));
+      const csvContent = [header, ...rows].join('\r\n');
+      const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = this.buildExportFilename() + '.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+
+    // Trigger AI deep analysis for a vendor (called from _ki_analysis.html partial)
+    runKiAiAnalysis(vendor) {
+      const target = document.getElementById('bqa-ki-ai-' + vendor.replace(/\s+/g,'_'));
+      if (!target) return;
+      target.innerHTML = '<span class="text-muted small">KI analysiert…</span>';
+      const fd = new FormData();
+      fd.append('csv_doc_id', this.csv_doc_id);
+      fd.append('vendor', vendor);
+      fd.append('provider', this.$store.ki.provider);
+      fd.append('model', this.$store.ki.model);
+      fetch('/batch-qa/ki-ai-analyze', { method: 'POST', body: fd })
+        .then(r => r.text())
+        .then(html => { target.innerHTML = html; })
+        .catch(e => { target.innerHTML = `<span style="color:var(--color-danger)">Fehler: ${e}</span>`; });
+    },
+
+    deleteCheckpoint() {
+      const fd = new FormData();
+      fd.append('project_key', this.project_key);
+      fd.append('csv_doc_id', this.csv_doc_id);
+      fetch('/batch-qa/checkpoint-delete', { method: 'POST', body: fd })
+        .then(() => { document.getElementById('bqa-checkpoint').innerHTML = ''; });
+    },
+
+    // Called from preview partial to run single LLM call
+    runPreviewLLM(sysp, userp) {
+      const target = document.getElementById('bqa-preview-answer');
+      if (!target) return;
+      target.innerHTML = '<span class="text-muted small"><span class="spinner-sm"></span> Antwort wird generiert…</span>';
+      const fd = new FormData();
+      fd.append('sys_prompt', sysp);
+      fd.append('user_prompt', userp);
+      fd.append('provider', this.$store.ki.provider);
+      fd.append('model', this.$store.ki.model);
+      fd.append('temperature', this.$store.ki.temperature);
+      fetch('/batch-qa/run-preview-llm', { method: 'POST', body: fd })
+        .then(r => r.text())
+        .then(html => { target.innerHTML = html; })
+        .catch(e => { target.innerHTML = `<span style="color:var(--color-danger)">Fehler: ${e}</span>`; });
+    },
+  };
+}
+</script>
+{% endblock %}

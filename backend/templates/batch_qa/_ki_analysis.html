@@ -1,0 +1,119 @@
+﻿{% set r = ki_result %}
+<!-- Summary metrics -->
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:.6rem;margin-bottom:.9rem">
+  <div class="metric-card">
+    <div class="metric-label">Fragen total</div>
+    <div class="metric-value">{{ r.total_questions }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Anbieter</div>
+    <div class="metric-value">{{ r.total_vendors }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Ø KI-Score</div>
+    <div class="metric-value" style="color:{{ 'var(--color-danger)' if r.overall_ki_score >= 0.6 else ('var(--color-warning)' if r.overall_ki_score >= 0.4 else 'var(--color-success)') }}">
+      {{ "%.0f"|format(r.overall_ki_score * 100) }}%
+    </div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">KI-Anbieter</div>
+    <div class="metric-value" style="color:{{ 'var(--color-danger)' if r.ki_vendors_count > 0 else 'var(--color-success)' }}">
+      {{ r.ki_vendors_count }}/{{ r.total_vendors }}
+    </div>
+  </div>
+</div>
+
+<!-- Ranking table -->
+<div style="overflow-x:auto;border:1px solid var(--color-border);border-radius:.375rem;margin-bottom:.75rem">
+  <table style="width:100%;border-collapse:collapse;font-size:.75rem">
+    <thead>
+      <tr style="background:var(--color-surface-2)">
+        <th class="th">Anbieter</th>
+        <th class="th" title="KI-Gesamtscore 0–100%">KI-Score</th>
+        <th class="th" title="Kapitelreferenzen (z.B. '3.2')">Strukturrefs</th>
+        <th class="th" title="KI-typische Floskeln">KI-Floskeln</th>
+        <th class="th" title="Übergangsphrasing">Übergänge</th>
+        <th class="th" title="Uniforme Satzeinstiege">Einstiege</th>
+        <th class="th" title="Bullet-Unterlisten">Bullets</th>
+        <th class="th" title="Erschöpfende Aufzählungen">Aufzähl.</th>
+        <th class="th" title="Informelle Marker (negativer Indikator)">Informal↓</th>
+        <th class="th" title="Satzlängen-Burstiness">Burstiness</th>
+        <th class="th" title="Fragenvolumen-Signal">Volumen</th>
+        <th class="th" title="Ø Zeichenlänge">Ø Länge</th>
+        <th class="th">Urteil</th>
+        <th class="th">KI-Analyse</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for vendor, vr in r.ranking %}
+      {% set score = vr.ki_score %}
+      {% set score_color = 'var(--color-danger)' if score >= 0.6 else ('var(--color-warning,#f59e0b)' if score >= 0.4 else 'var(--color-success)') %}
+      <tr style="{{ 'background:rgba(239,68,68,.05)' if score >= 0.6 else '' }}">
+        <td class="td" style="font-weight:600">{{ vendor }}</td>
+        <td class="td" style="font-weight:700;color:{{ score_color }}">
+          {{ "%.0f"|format(score * 100) }}%
+        </td>
+        <td class="td">{{ "%.0f"|format(vr.structural_refs_ratio * 100) }}%</td>
+        <td class="td">{{ "%.0f"|format(vr.ki_phrases_ratio * 100) }}%</td>
+        <td class="td">{{ "%.0f"|format(vr.transition_phrases_ratio * 100) }}%</td>
+        <td class="td">{{ "%.0f"|format(vr.uniform_openers_ratio * 100) }}%</td>
+        <td class="td">{{ "%.0f"|format(vr.bullet_sublists_ratio * 100) }}%</td>
+        <td class="td">{{ "%.0f"|format(vr.exhaustive_enum_ratio * 100) }}%</td>
+        <td class="td">{{ "%.0f"|format(vr.informal_markers_ratio * 100) }}%</td>
+        <td class="td">{{ "%.0f"|format(vr.sentence_burstiness_score * 100) }}%</td>
+        <td class="td">{{ "%.0f"|format(vr.volume_signal * 100) if vr.volume_signal is defined else '–' }}%</td>
+        <td class="td">{{ "%.0f"|format(vr.avg_length) }}</td>
+        <td class="td">
+          <span style="font-size:.72rem">
+            {{ vr.verdict_emoji if vr.verdict_emoji else '' }}
+            {{ vr.verdict if vr.verdict else '–' }}
+          </span>
+        </td>
+        <td class="td">
+          <div id="bqa-ki-ai-{{ vendor | replace(' ', '_') }}">
+            <button class="btn-xs"
+                    onclick="document.querySelector('[x-data]').__x.$data.runKiAiAnalysis('{{ vendor }}')">
+              KI-Analyse
+            </button>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Explanation collapsible -->
+<details style="font-size:.78rem;color:var(--color-text-muted)">
+  <summary style="cursor:pointer;display:flex;align-items:center;gap:.35rem;padding:.2rem 0">
+    <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    Wie wird der KI-Score berechnet?
+  </summary>
+  <div style="margin-top:.5rem;padding:.6rem;background:var(--color-bg);border:1px solid var(--color-border);border-radius:.375rem">
+    <p>Gewichteter Score aus Heuristik-Signalen (nur Textanalyse, kein API-Aufruf):</p>
+    <table style="width:100%;border-collapse:collapse;margin-top:.4rem">
+      <tr><th class="th" style="width:60%">Signal</th><th class="th">Gewicht</th></tr>
+      <tr><td class="td">KI-Floskeln (Handlungsaufforderungen)</td><td class="td">20%</td></tr>
+      <tr><td class="td">Strukturreferenzen (Kapitel X.Y)</td><td class="td">15%</td></tr>
+      <tr><td class="td">Uniforme Satzeinstiege</td><td class="td">12%</td></tr>
+      <tr><td class="td">Übergangsphrasing</td><td class="td">10%</td></tr>
+      <tr><td class="td">Burstiness (Satzlängen-Uniformität)</td><td class="td">10%</td></tr>
+      <tr><td class="td">Fragelängen-Uniformität</td><td class="td">8%</td></tr>
+      <tr><td class="td">Volumen-Signal</td><td class="td">10%</td></tr>
+      <tr><td class="td">Bullet-Unterlisten</td><td class="td">8%</td></tr>
+      <tr><td class="td">Erschöpfende Aufzählungen</td><td class="td">7%</td></tr>
+      <tr><td class="td">Informelle Marker (negativ)</td><td class="td">−Malus</td></tr>
+    </table>
+    <p style="margin-top:.5rem"><strong>Schwellenwerte:</strong> &lt;40% = menschlich, 40–60% = unklar, &gt;60% = KI-verdächtig</p>
+  </div>
+</details>
+
+<style>
+.metric-card { background:var(--color-surface-2);border:1px solid var(--color-border);border-radius:.5rem;padding:.5rem .7rem;text-align:center; }
+.metric-label { font-size:.68rem;color:var(--color-text-muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase; }
+.metric-value { font-size:1.3rem;font-weight:700;margin-top:.15rem; }
+.th { padding:.3rem .5rem;text-align:left;font-weight:600;border-bottom:2px solid var(--color-border);white-space:nowrap; }
+.td { padding:.3rem .5rem;border-bottom:1px solid var(--color-border);vertical-align:top; }
+.btn-xs { font-size:.72rem;padding:.2rem .5rem;border:1px solid var(--color-border);border-radius:.3rem;background:var(--color-surface-2);cursor:pointer;white-space:nowrap; }
+.btn-xs:hover { background:var(--color-surface);border-color:var(--color-primary); }
+</style>

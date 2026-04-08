@@ -1296,6 +1296,579 @@ async def settings_test_connection(request: Request, provider: str = "openai"):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# HTML Routes — Batch QA
+# ════════════════════════════════════════════════════════════════════════════
+
+from src.m09_docs import get_project_documents
+from src.m13_ki_detector import analyze_all_vendors, analyze_vendor_with_ai
+from src.m03_db import DocumentChunk, Document
+from src.m07_projects import get_project_roles
+from src.m09_rag import get_all_documents_with_best_scores, format_chunk_preview
+from fastapi.responses import StreamingResponse
+from sqlmodel import select as _select_bqa
+import asyncio as _asyncio
+import pathlib as _pathlib
+
+
+def _strip_contextual_prefix(chunk_text: str) -> str:
+    """Remove [CSV | filename | Frage X]\n prefix from chunk text."""
+    if chunk_text.startswith("["):
+        nl = chunk_text.find("\n")
+        if nl > 0:
+            return chunk_text[nl + 1:]
+    return chunk_text
+
+
+def _get_csv_field(data: dict, field_name: str, fallback: str = "") -> str:
+    """Robust field lookup with aliases and case variants."""
+    variants = [field_name, field_name.lower(), field_name.upper(),
+                field_name + ".", field_name.lower() + "."]
+    aliases = {
+        "Nr": ["Nummer", "nummer", "Number", "number", "No", "no", "ID", "id"],
+        "Frage": ["Question", "question", "Text", "text", "Frage.", "Frage?"],
+        "Lieferant": ["Anbieter", "anbieter", "Vendor", "vendor", "Supplier", "supplier"],
+    }
+    if field_name in aliases:
+        variants.extend(aliases[field_name])
+    for v in variants:
+        if v in data:
+            val = data[v]
+            return str(val) if val is not None else fallback
+    return fallback
+
+
+def _style_text(answer_style: str, answer_stance: str, answer_wording: str) -> str:
+    style_map = {
+        "Sachlich & präzise": "Antworte sachlich, präzise und auf den Punkt.",
+        "Ausführlich & erkärend": "Antworte ausführlich und erkläre alle relevanten Details.",
+        "Kurz & bündig": "Antworte so kurz wie möglich, max. 2-3 Sätze.",
+    }
+    stance_map = {
+        "(nur gemäss Rolle)": "",
+        "Neutral": " Bei Interpretationsspielraum wäge objektiv ab.",
+        "Wohlwollend (erlaubend)": " Bei Interpretationsspielraum entscheide zugunsten des Anbieters.",
+        "Restriktiv (ablehnend)": " Bei Interpretationsspielraum entscheide ablehnend.",
+    }
+    wording_map = {
+        "(nur gemäss Rolle)": "",
+        "Klar & abschliessend": ' Formuliere verbindlich: "ist", "gilt als", "ist zulässig/unzulässig". Keine Weichmacher.',
+        "Vage & mit Weichmachern": ' Formuliere offen: "sollte", "könnte", mit Klärungsvorbehalt.',
+    }
+    return style_map.get(answer_style, "") + stance_map.get(answer_stance, "") + wording_map.get(answer_wording, "")
+
+
+def _load_bqa_questions(csv_doc_id: int) -> list[dict]:
+    """Load and parse all question-rows from a CSV DocumentChunk."""
+    rows = []
+    with get_session() as session:
+        chunks = session.exec(
+            _select_bqa(DocumentChunk)
+            .where(DocumentChunk.document_id == csv_doc_id)
+            .order_by(DocumentChunk.chunk_index)
+        ).all()
+    for c in chunks:
+        try:
+            rows.append(json.loads(_strip_contextual_prefix(c.chunk_text)))
+        except Exception:
+            pass
+    return rows
+
+
+@app.get("/batch-qa", response_class=HTMLResponse)
+async def batch_qa_page(request: Request):
+    s = _load_settings_ctx()
+    projects = _projects_list()
+    return templates.TemplateResponse("batch_qa/index.html", {
+        "request": request,
+        "active_page": "batch-qa",
+        "projects": projects,
+        "settings": s,
+    })
+
+
+@app.post("/batch-qa/csv-docs", response_class=HTMLResponse)
+async def batch_qa_csv_docs(request: Request, project_key: str = Form("")):
+    """HTMX: returns CSV-doc <option> tags for the selected project."""
+    csv_docs = []
+    if project_key:
+        try:
+            csv_docs = [d for d in get_project_documents(project_key)
+                        if d.filename.lower().endswith(".csv")]
+        except Exception:
+            pass
+    return templates.TemplateResponse("batch_qa/_csv_docs.html", {
+        "request": request, "csv_docs": csv_docs,
+    })
+
+
+@app.post("/batch-qa/roles", response_class=HTMLResponse)
+async def batch_qa_roles_partial(request: Request, project_key: str = Form("")):
+    """HTMX: returns roles for the selected project."""
+    roles = []
+    if project_key:
+        try:
+            roles = get_project_roles(project_key) or []
+        except Exception:
+            pass
+    return templates.TemplateResponse("batch_qa/_roles.html", {
+        "request": request, "roles": roles,
+    })
+
+
+@app.post("/batch-qa/ki-analyze", response_class=HTMLResponse)
+async def batch_qa_ki_analyze(request: Request, csv_doc_id: int = Form(0)):
+    """Heuristic KI analysis on all questions in a CSV document."""
+    if not csv_doc_id:
+        return HTMLResponse('<p class="text-muted small">Keine CSV ausgewählt.</p>')
+    try:
+        questions = _load_bqa_questions(csv_doc_id)
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert-error text-sm">DB-Fehler: {e}</div>')
+    if not questions:
+        return HTMLResponse('<p class="text-muted small">Keine Fragen in der CSV gefunden.</p>')
+    try:
+        ki_result = analyze_all_vendors(questions)
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert-error text-sm">KI-Analyse Fehler: {e}</div>')
+    return templates.TemplateResponse("batch_qa/_ki_analysis.html", {
+        "request": request,
+        "ki_result": ki_result,
+        "vendor_count": len(ki_result.get("ranking", [])),
+        "csv_doc_id": csv_doc_id,
+    })
+
+
+@app.post("/batch-qa/ki-ai-analyze", response_class=HTMLResponse)
+async def batch_qa_ki_ai_analyze(
+    request: Request,
+    csv_doc_id: int = Form(0),
+    vendor: str = Form(""),
+    provider: str = Form("openai"),
+    model: str = Form(""),
+):
+    """AI deep analysis for one vendor."""
+    try:
+        all_rows = _load_bqa_questions(csv_doc_id)
+    except Exception as e:
+        return HTMLResponse(f'<span class="text-danger">DB-Fehler: {e}</span>')
+    vendor_qs = [
+        str(q.get("Frage", "")).strip()
+        for q in all_rows
+        if str(q.get("Lieferant", "")).strip() == vendor and str(q.get("Frage", "")).strip()
+    ]
+    if not vendor_qs:
+        return HTMLResponse(f'<span class="text-danger">Keine Fragen für „{vendor}" gefunden.</span>')
+    try:
+        ai_res = analyze_vendor_with_ai(
+            questions=vendor_qs, vendor=vendor,
+            provider=provider, model=model or None, temperature=0.2,
+        )
+    except Exception as e:
+        return HTMLResponse(f'<span class="text-danger">AI-Analyse Fehler: {e}</span>')
+    return templates.TemplateResponse("batch_qa/_ki_ai_result.html", {
+        "request": request, "vendor": vendor, "ai_res": ai_res,
+    })
+
+
+@app.post("/batch-qa/prompt-preview", response_class=HTMLResponse)
+async def batch_qa_prompt_preview(
+    request: Request,
+    project_key: str = Form(""),
+    csv_doc_id: int = Form(0),
+    frage_nr: int = Form(1),
+    role_mode: str = Form("all_merged"),
+    role_keys: str = Form(""),
+    use_project_context: bool = Form(True),
+    answer_style: str = Form("Sachlich & präzise"),
+    answer_stance: str = Form("(nur gemäss Rolle)"),
+    answer_wording: str = Form("Klar & abschliessend"),
+):
+    s = _load_settings_ctx()
+    style_txt = _style_text(answer_style, answer_stance, answer_wording)
+
+    # Load specific question
+    error = None
+    question_data = None
+    try:
+        rows = _load_bqa_questions(csv_doc_id)
+        chunks_by_nr: dict = {}
+        for cd in rows:
+            nr_raw = _get_csv_field(cd, "Nr")
+            try:
+                nr = int(float(str(nr_raw).strip()))
+            except Exception:
+                nr = str(nr_raw).strip()
+            chunks_by_nr[nr] = cd
+        question_data = chunks_by_nr.get(frage_nr) or chunks_by_nr.get(str(frage_nr))
+        if not question_data:
+            available = sorted(chunks_by_nr.keys())[:20]
+            error = f"Frage Nr. {frage_nr} nicht gefunden. Verfügbare Nrn: {', '.join(map(str, available))}"
+    except Exception as e:
+        error = str(e)
+
+    if error:
+        return HTMLResponse(f'<div style="color:var(--color-danger);padding:.75rem">{error}</div>')
+
+    q_text = _get_csv_field(question_data, "Frage")
+    q_nr = _get_csv_field(question_data, "Nr", str(frage_nr))
+    q_lief = _get_csv_field(question_data, "Lieferant")
+
+    proj_ctx = ""
+    if use_project_context:
+        po, _ = load_project(project_key)
+        if po:
+            proj_ctx = f"\n\nPROJEKT: {po.title}\nBESCHREIBUNG: {po.description or '—'}"
+
+    # RAG
+    rag_ctx = ""
+    rag_sources_html = "(RAG deaktiviert)"
+    rag_debug = None
+    rag_diagnostics = []
+    rag_threshold = float(s.get("rag_similarity_threshold", 0.45))
+    if s.get("rag_enabled", True):
+        try:
+            rr = retrieve_relevant_chunks_hybrid(
+                q_text, project_key=project_key,
+                limit=int(s.get("rag_top_k", 5)),
+                threshold=rag_threshold,
+                exclude_classification="FAQ/Fragen-Katalog",
+            )
+            rr = deduplicate_results(rr)
+            rag_debug = rr.get("debug")
+            rag_ctx = build_rag_context_from_search(rr)
+            docs = rr.get("documents", [])
+            rag_sources_html = "\n".join(
+                f"• {d.get('filename','?')} ({min(max(d.get('similarity',0),d.get('match_score',0)),1.0):.0%})\n  "
+                + format_chunk_preview((d.get('text','') or '').replace('\n',' '), max_length=150, query=q_text)
+                for d in docs
+            ) or "(keine passenden Chunks)"
+            rag_diagnostics = get_all_documents_with_best_scores(
+                q_text, project_key=project_key,
+                threshold=rag_threshold,
+                exclude_classification="FAQ/Fragen-Katalog",
+            )
+        except Exception:
+            pass
+
+    sel_role_keys = [k.strip() for k in role_keys.split(",") if k.strip()]
+    proj_roles = get_project_roles(project_key) or []
+
+    def _build_sys(role_obj=None, roles_list=None):
+        if role_mode == "none":
+            return f"Du bist ein technischer Berater.\n\n{style_txt}{proj_ctx}\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}\n\nAUFGABE: Beantworte die Frage präzise."
+        elif role_mode == "all_merged":
+            rc = "\n".join(f"- {r.title}: {r.description or ''}" for r in (roles_list or []))
+            return f"Du bist ein technisches Berater-Team.\n\n{style_txt}{proj_ctx}\n\nTEAM-PERSPEKTIVEN:\n{rc}\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}\n\nAUFGABE: Beantworte kombiniert."
+        else:
+            ro = role_obj
+            if ro:
+                return f'Du bist Berater in der Rolle "{ro.title}".\n\nDEINE ROLLE:\n{ro.description or ""}\n\n{style_txt}{proj_ctx}\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or "(keine)"}\n\nAUFGABE: Beantworte aus deiner Rollenperspektive.'
+            return "Du bist ein technischer Berater."
+
+    relevant_roles = [r for r in proj_roles if r.key in sel_role_keys]
+    sys_prompt = _build_sys(
+        role_obj=relevant_roles[0] if role_mode == "single" and relevant_roles else None,
+        roles_list=relevant_roles,
+    )
+    user_prompt = f"Frage von {q_lief} (Nr. {q_nr}):\n{q_text}"
+
+    return templates.TemplateResponse("batch_qa/_prompt_preview.html", {
+        "request": request,
+        "sys_prompt": sys_prompt,
+        "user_prompt": user_prompt,
+        "rag_sources_html": rag_sources_html,
+        "rag_diagnostics": rag_diagnostics,
+        "rag_debug": rag_debug,
+        "rag_threshold": rag_threshold,
+        "q_nr": q_nr,
+        "project_key": project_key,
+        "csv_doc_id": csv_doc_id,
+        "role_mode": role_mode,
+        "role_keys": role_keys,
+        "use_project_context": use_project_context,
+    })
+
+
+@app.post("/batch-qa/run-preview-llm", response_class=HTMLResponse)
+async def batch_qa_run_preview_llm(
+    request: Request,
+    sys_prompt: str = Form(""),
+    user_prompt: str = Form(""),
+    provider: str = Form("openai"),
+    model: str = Form(""),
+    temperature: float = Form(0.7),
+):
+    """Single LLM call for the prompt-preview step."""
+    if not sys_prompt or not user_prompt:
+        return HTMLResponse('<span style="color:var(--color-danger)">Kein Prompt.</span>')
+    try:
+        used: list = []
+        answer = try_models_with_messages(
+            provider=provider, system=sys_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            max_tokens=2000, temperature=temperature,
+            model=model or None, _used_model=used,
+        )
+        used_model = used[0] if used else model
+    except Exception as e:
+        return HTMLResponse(f'<div style="color:var(--color-danger)">Fehler: {e}</div>')
+    return templates.TemplateResponse("batch_qa/_preview_answer.html", {
+        "request": request,
+        "answer": answer or "(Keine Antwort)",
+        "used_model": used_model,
+    })
+
+
+@app.post("/batch-qa/checkpoint-info", response_class=HTMLResponse)
+async def batch_qa_checkpoint_info(
+    request: Request,
+    project_key: str = Form(""),
+    csv_doc_id: str = Form(""),
+):
+    cp = _pathlib.Path("data") / f"batch_checkpoint_{project_key}_{csv_doc_id}.json"
+    if not cp.exists():
+        return HTMLResponse("")
+    try:
+        saved = json.loads(cp.read_text(encoding="utf-8"))
+        meta = saved.get("__meta__", {})
+        n = len(saved.get("results", []))
+        return templates.TemplateResponse("batch_qa/_checkpoint_info.html", {
+            "request": request, "cp_n": n, "cp_meta": meta,
+            "project_key": project_key, "csv_doc_id": csv_doc_id,
+        })
+    except Exception:
+        return HTMLResponse("")
+
+
+@app.post("/batch-qa/checkpoint-delete", response_class=HTMLResponse)
+async def batch_qa_checkpoint_delete(
+    project_key: str = Form(""),
+    csv_doc_id: str = Form(""),
+):
+    cp = _pathlib.Path("data") / f"batch_checkpoint_{project_key}_{csv_doc_id}.json"
+    try:
+        cp.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return HTMLResponse("")
+
+
+@app.get("/batch-qa/stream")
+async def batch_qa_stream(
+    request: Request,
+    project_key: str = "",
+    csv_doc_id: int = 0,
+    role_mode: str = "all_merged",
+    role_keys: str = "",
+    use_project_context: bool = True,
+    answer_style: str = "Sachlich & präzise",
+    answer_stance: str = "(nur gemäss Rolle)",
+    answer_wording: str = "Klar & abschliessend",
+    provider: str = "openai",
+    model: str = "",
+    temperature: float = 0.7,
+    rag_enabled: bool = True,
+    rag_top_k: int = 5,
+    rag_threshold: float = 0.45,
+):
+    """
+    SSE stream for batch execution. Events:
+      progress {current, total, nr, lieferant}
+      resume   {from, total}
+      result   <JSON row incl. _RAG_Chunks, _RAG_Debug>
+      done     {count}
+      error    {message}
+    """
+    style_txt = _style_text(answer_style, answer_stance, answer_wording)
+    sel_role_keys = [k.strip() for k in role_keys.split(",") if k.strip()]
+    current_meta = {
+        "project": project_key, "csv_id": str(csv_doc_id),
+        "provider": provider, "model": model,
+        "role_mode": role_mode, "roles": sorted(sel_role_keys),
+    }
+    cp_path = _pathlib.Path("data") / f"batch_checkpoint_{project_key}_{csv_doc_id}.json"
+
+    async def gen():
+        # ── Load questions ─────────────────────────────────────────────────
+        try:
+            questions = _load_bqa_questions(csv_doc_id)
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+            return
+        if not questions:
+            yield f"event: error\ndata: {json.dumps({'message': 'Keine Fragen in der CSV gefunden.'})}\n\n"
+            return
+
+        # ── Checkpoint resume ──────────────────────────────────────────────
+        results: list[dict] = []
+        resume_from = 0
+        if cp_path.exists():
+            try:
+                saved = json.loads(cp_path.read_text(encoding="utf-8"))
+                if isinstance(saved, dict) and "results" in saved:
+                    sm = saved.get("__meta__", {})
+                    if (sm.get("project") == project_key
+                            and str(sm.get("csv_id")) == str(csv_doc_id)
+                            and sm.get("provider") == provider
+                            and sm.get("model") == model
+                            and sm.get("role_mode") == role_mode
+                            and sorted(sm.get("roles", [])) == sorted(sel_role_keys)):
+                        results = saved["results"]
+                        resume_from = len(results)
+                        yield f"event: resume\ndata: {json.dumps({'from': resume_from, 'total': len(questions)})}\n\n"
+            except Exception:
+                pass
+
+        # ── Project context ────────────────────────────────────────────────
+        proj_ctx = ""
+        if use_project_context:
+            try:
+                po, _ = load_project(project_key)
+                if po:
+                    proj_ctx = f"\n\nPROJEKT: {po.title}\nBESCHREIBUNG: {po.description or '—'}"
+            except Exception:
+                pass
+
+        proj_roles = get_project_roles(project_key) or []
+
+        # ── Per-question loop ──────────────────────────────────────────────
+        for idx, q_data in enumerate(questions):
+            if idx < resume_from:
+                continue
+            if await request.is_disconnected():
+                return
+
+            q_text = _get_csv_field(q_data, "Frage", "")
+            nr = _get_csv_field(q_data, "Nr", str(idx + 1))
+            lieferant = _get_csv_field(q_data, "Lieferant", "")
+
+            yield f"event: progress\ndata: {json.dumps({'current': idx+1, 'total': len(questions), 'nr': nr, 'lieferant': lieferant})}\n\n"
+
+            row: dict = {"Nr": nr, "Lieferant": lieferant, "Frage": q_text}
+
+            # RAG
+            rag_ctx = ""
+            if rag_enabled:
+                try:
+                    rr = retrieve_relevant_chunks_hybrid(
+                        q_text, project_key=project_key,
+                        limit=rag_top_k, threshold=rag_threshold,
+                        exclude_classification="FAQ/Fragen-Katalog",
+                    )
+                    rr = deduplicate_results(rr)
+                    rag_ctx = build_rag_context_from_search(rr)
+                    row["_RAG_Chunks"] = " | ".join(
+                        f"{d.get('filename','?')} ({min(max(d.get('similarity',0),d.get('match_score',0)),1.0):.0%}): "
+                        + format_chunk_preview((d.get('text','') or '').replace('\n',' '), max_length=120, query=q_text)
+                        for d in rr.get("documents", [])
+                    )
+                    dbg = rr.get("debug", {})
+                    parts = []
+                    for bk, lbl in [("keyword_candidates","kw"),("semantic_candidates","sem"),("final_candidates","final")]:
+                        for d in dbg.get(bk, [])[:5]:
+                            parts.append(
+                                f"[{lbl}] {d.get('filename','?')} "
+                                f"comb={d.get('combined_score',0):.3f} "
+                                f"sem={d.get('similarity',0):.3f} "
+                                f"kw={d.get('normalized_match_score',0):.3f} "
+                                f"raw={d.get('raw_bm25_score',0):.3f} "
+                                f"idf={d.get('keyword_idf_score',0):.3f} "
+                                f"cov={d.get('keyword_coverage',0):.3f} "
+                                f"hits={d.get('priority_hits',0)} "
+                                f"terms=[{','.join(d.get('matched_terms') or [])}]"
+                            )
+                    row["_RAG_Debug"] = " | ".join(parts)
+                except Exception as rag_err:
+                    row["_RAG_Chunks"] = f"RAG-Fehler: {rag_err}"
+                    row["_RAG_Debug"] = ""
+            else:
+                row["_RAG_Chunks"] = "(RAG deaktiviert)"
+                row["_RAG_Debug"] = "(RAG deaktiviert)"
+
+            # Build system prompt
+            def _build_sys(role_obj=None, roles_list=None):
+                if role_mode == "none":
+                    return (f"Du bist ein technischer Berater.\n\n{style_txt}{proj_ctx}"
+                            f"\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}"
+                            f"\n\nAUFGABE: Beantworte die Frage präzise.")
+                elif role_mode == "all_merged":
+                    rc = "\n".join(f"- {r.title}: {r.description or ''}" for r in (roles_list or []))
+                    return (f"Du bist ein technisches Berater-Team.\n\n{style_txt}{proj_ctx}"
+                            f"\n\nTEAM-PERSPEKTIVEN:\n{rc}"
+                            f"\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}"
+                            f"\n\nAUFGABE: Beantworte kombiniert.")
+                else:
+                    if role_obj:
+                        return (f'Du bist Berater in der Rolle "{role_obj.title}".'
+                                f"\n\nDEINE ROLLE:\n{role_obj.description or ''}"
+                                f"\n\n{style_txt}{proj_ctx}"
+                                f"\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}"
+                                f"\n\nAUFGABE: Beantworte aus deiner Rollenperspektive.")
+                    return "Du bist ein technischer Berater."
+
+            sel_roles = [r for r in proj_roles if r.key in sel_role_keys]
+            user_msg = f"Frage von {lieferant} (Nr. {nr}):\n{q_text}"
+
+            if role_mode in ("none", "all_merged"):
+                sp = _build_sys(roles_list=sel_roles)
+                try:
+                    used: list = []
+                    ans = try_models_with_messages(
+                        provider=provider, system=sp,
+                        messages=[{"role": "user", "content": user_msg}],
+                        max_tokens=2000, temperature=temperature,
+                        model=model or None, _used_model=used,
+                    ) or "[Keine Antwort]"
+                except Exception as e:
+                    ans = f"[Fehler: {e}]"
+                row["Antwort"] = ans
+            else:
+                if not sel_roles:
+                    row["Antwort"] = "[Keine Rolle ausgewählt]"
+                for ro in sel_roles:
+                    sp = _build_sys(role_obj=ro)
+                    try:
+                        used = []
+                        ans = try_models_with_messages(
+                            provider=provider, system=sp,
+                            messages=[{"role": "user", "content": user_msg}],
+                            max_tokens=2000, temperature=temperature,
+                            model=model or None, _used_model=used,
+                        ) or "[Keine Antwort]"
+                    except Exception as e:
+                        ans = f"[Fehler: {e}]"
+                    col = "Antwort" if role_mode == "single" else f"Antwort_{ro.title}"
+                    row[col] = ans
+
+            results.append(row)
+
+            # Save checkpoint
+            try:
+                _pathlib.Path("data").mkdir(exist_ok=True)
+                cp_path.write_text(
+                    json.dumps({"__meta__": current_meta, "results": results},
+                               ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+
+            yield f"event: result\ndata: {json.dumps(row, ensure_ascii=False)}\n\n"
+            await _asyncio.sleep(0)
+
+        # Clean checkpoint on success
+        try:
+            cp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        yield f"event: done\ndata: {json.dumps({'count': len(results)})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # JSON REST API (bleibt erhalten für externe Clients / Swagger)
 # ════════════════════════════════════════════════════════════════════════════
 

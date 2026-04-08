@@ -1,0 +1,5 @@
+﻿{% for d in csv_docs %}
+<option value="{{ d.id }}" data-rows="{{ d.chunk_count or '' }}">{{ d.filename }} {% if d.chunk_count %}({{ d.chunk_count }} Zeilen){% endif %}</option>
+{% else %}
+<option value="" disabled>Keine CSV-Dokumente in diesem Projekt</option>
+{% endfor %}

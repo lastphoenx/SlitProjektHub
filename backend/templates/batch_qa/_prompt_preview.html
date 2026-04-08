@@ -1,0 +1,129 @@
+﻿<div style="display:flex;flex-direction:column;gap:.75rem">
+
+  <!-- System prompt -->
+  <div>
+    <label style="font-size:.75rem;font-weight:600;color:var(--color-text-muted);letter-spacing:.04em;display:block;margin-bottom:.25rem">SYSTEM-PROMPT (Frage Nr. {{ q_nr }})</label>
+    <textarea class="form-input" id="bqa-sys-prompt" readonly
+              style="min-height:120px;font-size:.78rem;font-family:var(--font-mono,monospace);resize:vertical;width:100%">{{ sys_prompt }}</textarea>
+  </div>
+
+  <!-- User prompt -->
+  <div>
+    <label style="font-size:.75rem;font-weight:600;color:var(--color-text-muted);letter-spacing:.04em;display:block;margin-bottom:.25rem">USER-PROMPT</label>
+    <textarea class="form-input" id="bqa-user-prompt" readonly
+              style="min-height:60px;font-size:.78rem;font-family:var(--font-mono,monospace);resize:vertical;width:100%">{{ user_prompt }}</textarea>
+  </div>
+
+  <!-- RAG Sources -->
+  <div>
+    <label style="font-size:.75rem;font-weight:600;color:var(--color-text-muted);letter-spacing:.04em;display:block;margin-bottom:.25rem">RAG-QUELLEN</label>
+    <pre style="background:var(--color-surface-2);border:1px solid var(--color-border);border-radius:.375rem;padding:.6rem .75rem;font-size:.75rem;white-space:pre-wrap;max-height:150px;overflow-y:auto;margin:0">{{ rag_sources_html }}</pre>
+  </div>
+
+  <!-- RAG Diagnostik -->
+  {% if rag_diagnostics %}
+  <details style="font-size:.78rem">
+    <summary style="cursor:pointer;display:flex;align-items:center;gap:.35rem;padding:.2rem 0;color:var(--color-text-muted)">
+      <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      RAG-Diagnostik (alle Dokumente mit Best-Scores)
+    </summary>
+    <div style="overflow-x:auto;border:1px solid var(--color-border);border-radius:.375rem;margin-top:.4rem">
+      <table style="width:100%;border-collapse:collapse;font-size:.73rem">
+        <thead>
+          <tr style="background:var(--color-surface-2)">
+            <th class="th-sm">Dokument</th>
+            <th class="th-sm">Best-Score</th>
+            <th class="th-sm">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in rag_diagnostics %}
+          {% set score = d.best_score or d.score or 0 %}
+          {% set included = score >= rag_threshold %}
+          <tr style="{{ 'background:rgba(34,197,94,.06)' if included else '' }}">
+            <td class="td-sm">{{ d.filename or d.get('document_filename','?') }}</td>
+            <td class="td-sm" style="font-weight:600;color:{{ 'var(--color-success)' if included else 'var(--color-text-muted)' }}">
+              {{ "%.3f"|format(score) }}
+            </td>
+            <td class="td-sm">
+              {% if included %}
+              <span style="color:var(--color-success);font-weight:600">✓ eingeschlossen</span>
+              {% else %}
+              <span style="color:var(--color-text-muted)">— threshold {{ "%.2f"|format(rag_threshold) }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- RAG Debug (BM25 / Semantic / Final) -->
+  {% if rag_debug %}
+  <details style="font-size:.72rem">
+    <summary style="cursor:pointer;display:flex;align-items:center;gap:.35rem;padding:.2rem 0;color:var(--color-text-muted)">
+      <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      Debug: BM25 / Semantic / Final Kandidaten
+    </summary>
+    {% for section_key, section_label in [('keyword_candidates','BM25 Kandidaten'),('semantic_candidates','Semantic Kandidaten'),('final_candidates','Final (nach Deduplizierung)')] %}
+    {% if rag_debug.get(section_key) %}
+    <div style="margin-top:.5rem">
+      <div style="font-weight:600;color:var(--color-text-muted);font-size:.7rem;margin-bottom:.25rem">{{ section_label }}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:.7rem">
+        <thead>
+          <tr style="background:var(--color-surface-2)">
+            <th class="th-sm">Datei</th>
+            <th class="th-sm">Comb</th>
+            <th class="th-sm">Sem</th>
+            <th class="th-sm">KW</th>
+            <th class="th-sm">Raw BM25</th>
+            <th class="th-sm">IDF</th>
+            <th class="th-sm">Cov</th>
+            <th class="th-sm">Hits</th>
+            <th class="th-sm">Terms</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in rag_debug[section_key][:10] %}
+          <tr>
+            <td class="td-sm" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ d.filename or '' }}">{{ d.filename or '?' }}</td>
+            <td class="td-sm" style="font-weight:600">{{ "%.3f"|format(d.combined_score or 0) }}</td>
+            <td class="td-sm">{{ "%.3f"|format(d.similarity or 0) }}</td>
+            <td class="td-sm">{{ "%.3f"|format(d.normalized_match_score or 0) }}</td>
+            <td class="td-sm">{{ "%.2f"|format(d.raw_bm25_score or 0) }}</td>
+            <td class="td-sm">{{ "%.3f"|format(d.keyword_idf_score or 0) }}</td>
+            <td class="td-sm">{{ "%.3f"|format(d.keyword_coverage or 0) }}</td>
+            <td class="td-sm">{{ d.priority_hits or 0 }}</td>
+            <td class="td-sm" style="font-size:.65rem;color:var(--color-text-muted)">{{ (d.matched_terms or []) | join(', ') | truncate(40) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </details>
+  {% endif %}
+
+  <!-- Run single LLM -->
+  <div>
+    <button class="btn btn-secondary" style="font-size:.82rem"
+            onclick="
+              const sysp = document.getElementById('bqa-sys-prompt').value;
+              const userp = document.getElementById('bqa-user-prompt').value;
+              document.querySelector('[x-data]').__x.$data.runPreviewLLM(sysp, userp);
+            ">
+      <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      KI-Antwort abrufen
+    </button>
+    <div id="bqa-preview-answer" style="margin-top:.6rem"></div>
+  </div>
+
+</div>
+
+<style>
+.th-sm { padding:.25rem .45rem;text-align:left;font-weight:600;border-bottom:2px solid var(--color-border);white-space:nowrap; }
+.td-sm { padding:.25rem .45rem;border-bottom:1px solid var(--color-border);vertical-align:top; }
+</style>

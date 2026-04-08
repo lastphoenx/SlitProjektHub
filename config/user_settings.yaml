@@ -1,7 +1,7 @@
-model: gpt-4o
+model: gpt-4o-mini
 provider: openai
 rag_chunk_size: 1200
 rag_enabled: true
 rag_similarity_threshold: 0.45
 rag_top_k: 7
-temperature: 1.0
+temperature: 0.9
