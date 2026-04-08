@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}SlitProjektHub{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css" />
+  <!-- Inject KI settings before Alpine loads -->
+  <script>window.KI = {{ _ki_global_json() | safe }};</script>
   <!-- HTMX: Server-driven partial updates -->
   <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer></script>
   <!-- Alpine.js: lightweight client-side reactivity -->
@@ -65,6 +67,95 @@
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       API Docs
     </a>
+
+    <!-- ── KI-Einstellungen Sidebar Panel ─────────── -->
+    <div style="border-top:1px solid var(--color-border);margin-top:.5rem;padding:.5rem .25rem .75rem" x-data>
+      <details id="ki-sidebar-details">
+        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:.4rem;padding:.3rem .5rem;border-radius:.375rem;font-size:.75rem;font-weight:600;letter-spacing:.04em;color:var(--color-text-muted);user-select:none"
+                 onmouseover="this.style.background='var(--color-surface-2)'" onmouseout="this.style.background=''">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          KI-Einstellungen
+          <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="margin-left:auto" class="details-chevron"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+
+        <div style="padding:.6rem .5rem 0;display:flex;flex-direction:column;gap:.55rem">
+
+          <!-- Provider -->
+          <div>
+            <label style="font-size:.68rem;font-weight:600;letter-spacing:.05em;color:var(--color-text-muted);display:block;margin-bottom:.2rem">PROVIDER</label>
+            <select class="form-select" style="font-size:.78rem;width:100%"
+                    @change="
+                      $store.ki.provider = $event.target.value;
+                      $store.ki.model = ($store.ki.allModels[$store.ki.provider] || [])[0] || '';
+                      $store.ki.save();
+                    ">
+              <template x-for="p in $store.ki.providers" :key="p">
+                <option :value="p" x-text="p" :selected="p === $store.ki.provider"></option>
+              </template>
+            </select>
+            <!-- Key status -->
+            <template x-for="p in $store.ki.providers" :key="'s-'+p">
+              <span x-show="p === $store.ki.provider"
+                    :style="'font-size:.68rem;display:flex;align-items:center;gap:.2rem;margin-top:.2rem;color:' + ($store.ki.keyStatus[p] ? 'var(--color-success)' : 'var(--color-danger)')">
+                <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" x-show="$store.ki.keyStatus[p]"><path d="M20 6L9 17l-5-5"/></svg>
+                <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" x-show="!$store.ki.keyStatus[p]"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <span x-text="$store.ki.keyStatus[p] ? p.toUpperCase() + ' konfiguriert' : p.toUpperCase() + ' kein Key'"></span>
+              </span>
+            </template>
+          </div>
+
+          <!-- Model -->
+          <div>
+            <label style="font-size:.68rem;font-weight:600;letter-spacing:.05em;color:var(--color-text-muted);display:block;margin-bottom:.2rem">MODELL</label>
+            <select class="form-select" style="font-size:.78rem;width:100%"
+                    @change="$store.ki.model = $event.target.value; $store.ki.save()">
+              <template x-for="m in ($store.ki.allModels[$store.ki.provider] || [])" :key="m">
+                <option :value="m" x-text="m" :selected="m === $store.ki.model"></option>
+              </template>
+            </select>
+          </div>
+
+          <!-- Temperature -->
+          <div>
+            <label style="font-size:.68rem;font-weight:600;letter-spacing:.05em;color:var(--color-text-muted);display:flex;justify-content:space-between;margin-bottom:.2rem">
+              <span>TEMPERATUR</span>
+              <span x-text="$store.ki.temperature.toFixed(1)" style="font-weight:700;color:var(--color-text)"></span>
+            </label>
+            <input type="range" min="0" max="2" step="0.1"
+                   :value="$store.ki.temperature"
+                   @input="$store.ki.temperature = parseFloat($event.target.value)"
+                   @change="$store.ki.save()"
+                   style="width:100%;accent-color:var(--color-primary)">
+          </div>
+
+          <!-- RAG toggle -->
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem 0">
+            <label style="font-size:.78rem;cursor:pointer" for="sidebar-rag-toggle">RAG aktivieren</label>
+            <div style="position:relative;display:inline-block;width:34px;height:19px">
+              <input type="checkbox" id="sidebar-rag-toggle"
+                     :checked="$store.ki.rag_enabled"
+                     @change="$store.ki.rag_enabled = $event.target.checked; $store.ki.save()"
+                     style="opacity:0;width:0;height:0;position:absolute">
+              <label for="sidebar-rag-toggle"
+                     :style="'position:absolute;cursor:pointer;inset:0;border-radius:19px;transition:.2s;background:'+($store.ki.rag_enabled ? 'var(--color-primary)' : 'var(--color-border)')">
+                <span :style="'position:absolute;width:13px;height:13px;border-radius:50%;background:#fff;top:3px;transition:.2s;left:'+($store.ki.rag_enabled?'18px':'3px')"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Save indicator -->
+          <div style="text-align:center;min-height:16px">
+            <span x-show="$store.ki.saved" x-transition style="font-size:.68rem;color:var(--color-success);display:flex;align-items:center;justify-content:center;gap:.3rem">
+              <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+              Gespeichert
+            </span>
+          </div>
+
+        </div>
+      </details>
+    </div>
+    <!-- /KI-Panel -->
+
   </aside>
 
   <!-- ── Main ── -->
@@ -108,6 +199,40 @@ function showToast(msg, type = 'success') {
 // Alpine global helper
 document.addEventListener('alpine:init', () => {
   Alpine.store('ui', { modalOpen: false, q: '' });
+
+  const KI = window.KI || {};
+  Alpine.store('ki', {
+    provider:                KI.provider               || 'openai',
+    model:                   KI.model                  || '',
+    temperature:             KI.temperature             ?? 0.7,
+    rag_enabled:             KI.rag_enabled             ?? true,
+    rag_top_k:               KI.rag_top_k               ?? 5,
+    rag_chunk_size:          KI.rag_chunk_size          ?? 1000,
+    rag_similarity_threshold:KI.rag_similarity_threshold?? 0.45,
+    providers:               KI.providers               || ['openai'],
+    allModels:               KI.allModels               || {},
+    keyStatus:               KI.keyStatus               || {},
+    saved: false,
+    _saveTimer: null,
+    get models() { return this.allModels[this.provider] || []; },
+    save() {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = setTimeout(() => {
+        const fd = new FormData();
+        fd.append('provider', this.provider);
+        fd.append('model', this.model);
+        fd.append('temperature', this.temperature);
+        fd.append('rag_enabled', this.rag_enabled ? 'true' : 'false');
+        fd.append('rag_top_k', this.rag_top_k);
+        fd.append('rag_chunk_size', this.rag_chunk_size);
+        fd.append('rag_similarity_threshold', this.rag_similarity_threshold);
+        fetch('/settings', { method: 'POST', body: fd }).then(() => {
+          this.saved = true;
+          setTimeout(() => { this.saved = false; }, 2000);
+        });
+      }, 400);
+    },
+  });
 });
 </script>
 

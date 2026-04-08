@@ -1429,6 +1429,19 @@ async def health_check():
     return {"status": "healthy", "message": "SlitProjektHub API is running", "version": "2.0.0"}
 
 
+# ── Jinja2 globals: inject KI settings + model list into every template ───
+
+def _ki_global_json() -> str:
+    """Returns all KI settings + providers + allModels as single JSON string for window.KI."""
+    ctx = _load_settings_ctx()
+    ctx["providers"] = providers_available() or ["openai"]
+    ctx["allModels"] = {p: list(m.keys()) for p, m in AVAILABLE_MODELS.items()}
+    ctx["keyStatus"] = {p: have_key(p) for p in ["openai", "anthropic", "mistral"]}
+    return json.dumps(ctx)
+
+templates.env.globals["_ki_global_json"] = _ki_global_json
+
+
 # ── Entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
