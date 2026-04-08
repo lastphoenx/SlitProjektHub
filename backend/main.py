@@ -1103,11 +1103,18 @@ async def taskgen_page(request: Request, role_key: str | None = None):
                 sel_role = r
                 break
     import json as _json
-    roles_json = _json.dumps([
-        {k: (v if v is not None else "") for k, v in r.items()
-         if k in ("key", "title", "short_code", "description", "responsibilities")}
-        for r in roles
-    ], ensure_ascii=False)
+    # Use load_role() per role to get full (non-truncated) responsibilities
+    roles_full = []
+    for r in roles:
+        role_obj, _ = load_role(r["key"])
+        roles_full.append({
+            "key": r["key"],
+            "title": r.get("title", ""),
+            "short_code": r.get("short_code", "") or "",
+            "description": r.get("description", "") or "",
+            "responsibilities": (role_obj.responsibilities or "") if role_obj else (r.get("responsibilities", "") or ""),
+        })
+    roles_json = _json.dumps(roles_full, ensure_ascii=False)
     return templates.TemplateResponse("taskgen/index.html", {
         "request": request,
         "active_page": "taskgen",
