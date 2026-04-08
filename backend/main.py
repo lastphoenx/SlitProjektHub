@@ -27,9 +27,11 @@ from src.m07_contexts import list_contexts_df, load_context, upsert_context, sof
 from src.m03_db import get_session, Project, Role, Task, Context
 from src.m08_llm import (providers_available, generate_role_text, generate_summary,
                           try_models_with_messages, get_available_models, AVAILABLE_MODELS,
-                          generate_role_details, generate_project_details,
-                          have_key, test_connection, DEFAULT_MODELS)
-from src.m10_chat import save_message, load_history, find_latest_session_for_project, build_project_map
+                          generate_role_details, generate_project_details, generate_context_details,
+                          have_key, test_connection, DEFAULT_MODELS, rewrite_query_for_retrieval)
+from src.m10_chat import (save_message, load_history, find_latest_session_for_project, build_project_map,
+                           update_message_metadata, delete_message, delete_history, purge_history,
+                           save_rag_feedback)
 from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results
 from src.m01_config import load_user_settings, save_user_settings
 from sqlmodel import select
@@ -688,6 +690,44 @@ async def contexts_delete(key: str):
     return response
 
 
+@app.post("/contexts/ai-suggest", response_class=HTMLResponse)
+async def contexts_ai_suggest(
+    request: Request,
+    ai_description: str = Form(""),
+    context_key: str = Form(""),
+    provider: str = Form("openai"),
+    model: str = Form(""),
+    temperature: float = Form(0.7),
+):
+    if not ai_description.strip():
+        return HTMLResponse('<p class="text-muted" style="font-size:.8rem;padding:.5rem 0">Bitte Beschreibung eingeben.</p>')
+    try:
+        title, short_code, short_title, description, body_md = generate_context_details(
+            provider=provider,
+            description=ai_description.strip(),
+            context_key=context_key or None,
+            model=model or None,
+            temperature=temperature,
+        )
+    except Exception as e:
+        return HTMLResponse(f'<p style="color:var(--color-danger);font-size:.8rem">Fehler: {e}</p>')
+
+    return HTMLResponse(f"""<script>
+(function(){{
+  var f = (id, val) => {{ var el = document.getElementById(id); if(el) el.value = val; }};
+  f('c-title', {json.dumps(title)});
+  f('c-short-code', {json.dumps(short_code or "")});
+  f('c-short-title', {json.dumps(short_title or "")});
+  f('c-description', {json.dumps(description or "")});
+  f('c-body', {json.dumps(body_md or "")});
+}})();
+</script>
+<p style="color:var(--color-success);font-size:.8rem;padding:.25rem 0">
+  <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:inline;vertical-align:middle"><path d="M20 6L9 17l-5-5"/></svg>
+  KI-Vorschlag eingefügt!
+</p>""")
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # HTML Routes — Chat
 # ════════════════════════════════════════════════════════════════════════════
@@ -791,23 +831,49 @@ async def chat_send(
         except Exception:
             pass
 
-    # RAG retrieval
+    # RAG retrieval — with optional query distillation
     rag_section = ""
     rag_sources: list[dict] = []
+    rag_results: dict = {}
+    search_query = message.strip()
     if use_rag and project_key:
         try:
+            from src.m01_retrieval_config import get_retrieval_config
+            rc = get_retrieval_config()
+            if rc.query.enable_distillation:
+                try:
+                    distilled = rewrite_query_for_retrieval(
+                        message.strip(),
+                        provider=rc.query.distillation_provider,
+                        model=rc.query.distillation_model,
+                    )
+                    if distilled:
+                        search_query = distilled
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            s = _load_settings_ctx()
             rag_results = retrieve_relevant_chunks_hybrid(
-                message.strip(),
+                search_query,
                 project_key=project_key,
-                limit=7,
-                threshold=0.45,
+                limit=s.get("rag_top_k", 7),
+                threshold=s.get("rag_similarity_threshold", 0.45),
             )
             rag_results = deduplicate_results(rag_results)
             rag_text = build_rag_context_from_search(rag_results)
             if rag_text:
                 rag_section = f"\n\n{rag_text}"
             docs = rag_results.get("documents", [])
-            rag_sources = [{"filename": d.get("filename", ""), "similarity": d.get("similarity", 0)} for d in docs[:5]]
+            rag_sources = [
+                {
+                    "filename": d.get("filename", ""),
+                    "similarity": d.get("similarity", 0),
+                    "document_id": d.get("document_id", 0),
+                }
+                for d in docs[:5]
+            ]
         except Exception:
             pass
 
@@ -846,8 +912,10 @@ Antworte prägnant, strukturiert und mit direktem Bezug zu den Projekt-Anforderu
 
     actual_model = used_model[0] if used_model else model
 
+    ai_msg_id = None
+    user_msg_id = None
     if ai_response:
-        save_message(
+        ai_saved = save_message(
             provider=provider,
             session_id=session_id,
             role="assistant",
@@ -857,6 +925,7 @@ Antworte prägnant, strukturiert und mit direktem Bezug zu den Projekt-Anforderu
             model_temperature=temperature,
             rag_sources=rag_sources or None,
         )
+        ai_msg_id = ai_saved.id if ai_saved else None
     else:
         ai_response = error_text or "Keine Antwort vom KI-Modell erhalten."
 
@@ -872,7 +941,68 @@ Antworte prägnant, strukturiert und mit direktem Bezug zu den Projekt-Anforderu
         "rag_sources": rag_sources,
         "timestamp": timestamp,
         "error": error_text is not None and ai_response == error_text,
+        "ai_msg_id": ai_msg_id,
+        "user_msg_id": user_msg_id,
     })
+
+
+@app.patch("/chat/messages/{msg_id}/metadata", response_class=HTMLResponse)
+async def chat_update_metadata(
+    msg_id: int,
+    message_type: str = Form(""),
+    message_status: str = Form("ungeprüft"),
+):
+    update_message_metadata(
+        msg_id,
+        message_type=message_type or None,
+        message_status=message_status or "ungeprüft",
+    )
+    return HTMLResponse(f"""
+<span style="font-size:.72rem;color:var(--color-success);padding:.1rem .3rem">
+  <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+  Gespeichert
+</span>""")
+
+
+@app.delete("/chat/messages/{msg_id}", response_class=HTMLResponse)
+async def chat_delete_message(msg_id: int):
+    delete_message(msg_id)
+    return HTMLResponse("")   # OOB remove handled in template
+
+
+@app.post("/chat/session/hide", response_class=HTMLResponse)
+async def chat_session_hide(
+    provider: str = Form(""),
+    session_id: str = Form(""),
+):
+    if provider and session_id:
+        delete_history(provider, session_id)
+    response = HTMLResponse('<p class="text-muted" style="text-align:center;padding:2rem">Verlauf ausgeblendet.</p>')
+    return response
+
+
+@app.post("/chat/session/purge", response_class=HTMLResponse)
+async def chat_session_purge(
+    provider: str = Form(""),
+    session_id: str = Form(""),
+):
+    if provider and session_id:
+        purge_history(provider, session_id)
+    response = HTMLResponse('<p class="text-muted" style="text-align:center;padding:2rem">Verlauf endgültig gelöscht.</p>')
+    return response
+
+
+@app.post("/chat/feedback", response_class=HTMLResponse)
+async def chat_feedback(
+    message_id: int = Form(...),
+    document_id: int = Form(0),
+    helpful: str = Form("true"),
+):
+    doc_id = document_id if document_id else 0
+    is_helpful = helpful.lower() in ("true", "1", "yes")
+    save_rag_feedback(message_id, doc_id, is_helpful)
+    icon = "👍" if is_helpful else "👎"
+    return HTMLResponse(f'<span style="font-size:.85rem">{icon}</span>')
 
 
 # ════════════════════════════════════════════════════════════════════════════

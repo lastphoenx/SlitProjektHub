@@ -1,32 +1,99 @@
-﻿{% if history %}
+﻿{% set MSG_TYPES = [
+  ("", "— kein Typ —"),
+  ("idea", "💡 Idee"),
+  ("decision", "✅ Entscheidung"),
+  ("todo", "📌 ToDo"),
+  ("assumption", "❓ Annahme"),
+  ("info", "ℹ️ Info / Fakt")
+] %}
+{% set MSG_STATUSES = [
+  ("ungeprüft", "⚪ Ungeprüft"),
+  ("bestätigt", "✓ Bestätigt"),
+  ("falsch", "✗ Falsch"),
+  ("irrelevant", "⊘ Irrelevant")
+] %}
+
+{% if history %}
   {% for msg in history %}
-    {% if msg.role == "user" %}
-    <div style="display:flex;justify-content:flex-end">
-      <div>
-        <div class="chat-bubble chat-bubble-user" style="white-space:pre-wrap">{{ msg.content }}</div>
-        <div class="chat-meta" style="text-align:right">{{ msg.timestamp[:16] if msg.timestamp else '' }}</div>
+  <div id="msg-{{ msg.id }}" style="display:flex;justify-content:{% if msg.role == 'user' %}flex-end{% else %}flex-start{% endif %}">
+    <div style="max-width:90%">
+
+      <!-- Bubble -->
+      <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-user{% else %}chat-bubble-ai{% endif %} {% if msg.get('is_deleted') %}chat-bubble-deleted{% endif %}"
+           style="white-space:pre-wrap">{{ msg.content }}</div>
+
+      <!-- Meta line -->
+      <div class="chat-meta" style="{% if msg.role == 'user' %}text-align:right{% endif %}">
+        {% if msg.model_name %}{{ msg.model_name }}{% endif %}
+        {% if msg.model_temperature is not none %} · T={{ msg.model_temperature }}{% endif %}
+        · {{ msg.timestamp[:16] if msg.timestamp else '' }}
+        {% if msg.message_type %} · <em>{{ msg.message_type }}</em>{% endif %}
+        {% if msg.message_status and msg.message_status != 'ungeprüft' %} · {{ msg.message_status }}{% endif %}
       </div>
-    </div>
-    {% else %}
-    <div style="display:flex;justify-content:flex-start">
-      <div style="max-width:90%">
-        <div class="chat-bubble chat-bubble-ai" style="white-space:pre-wrap">{{ msg.content }}</div>
-        <div class="chat-meta">
-          {% if msg.model_name %}{{ msg.model_name }}{% endif %}
-          {% if msg.model_temperature is not none %} · T={{ msg.model_temperature }}{% endif %}
-          · {{ msg.timestamp[:16] if msg.timestamp else '' }}
-        </div>
-        {% if msg.rag_sources %}
-        <div class="chat-rag-sources">
-          📚 Quellen:
-          {% for src in msg.rag_sources[:3] %}
-            {{ src.get('filename', '?') }} ({{ "%.0f%%" | format(src.get('similarity', 0) * 100) }}){% if not loop.last %}, {% endif %}
-          {% endfor %}
-        </div>
-        {% endif %}
+
+      <!-- RAG sources + feedback (AI only) -->
+      {% if msg.role == 'assistant' and msg.rag_sources %}
+      <div class="chat-rag-sources">
+        📚
+        {% for src in msg.rag_sources[:5] %}
+          <span style="display:inline-flex;align-items:center;gap:.2rem">
+            {{ src.get('filename', '?') }} ({{ "%.0f%%" | format(src.get('similarity', 0) * 100) }})
+            <button type="button" style="background:none;border:none;cursor:pointer;font-size:.8rem;padding:0;line-height:1"
+                    hx-post="/chat/feedback"
+                    hx-vals='{"message_id": "{{ msg.id }}", "document_id": "{{ src.get('document_id', 0) }}", "helpful": "true"}'
+                    hx-target="#fbk-{{ msg.id }}-{{ loop.index }}"
+                    hx-swap="innerHTML">👍</button>
+            <button type="button" style="background:none;border:none;cursor:pointer;font-size:.8rem;padding:0;line-height:1"
+                    hx-post="/chat/feedback"
+                    hx-vals='{"message_id": "{{ msg.id }}", "document_id": "{{ src.get('document_id', 0) }}", "helpful": "false"}'
+                    hx-target="#fbk-{{ msg.id }}-{{ loop.index }}"
+                    hx-swap="innerHTML">👎</button>
+            <span id="fbk-{{ msg.id }}-{{ loop.index }}"></span>
+          </span>{% if not loop.last %}, {% endif %}
+        {% endfor %}
       </div>
+      {% endif %}
+
+      <!-- Actions: type/status + delete (collapsible) -->
+      {% if not msg.get('is_deleted') %}
+      <details style="margin-top:.3rem">
+        <summary style="font-size:.7rem;color:var(--color-text-muted);cursor:pointer;list-style:none;display:flex;align-items:center;gap:.3rem">
+          <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+          Aktionen
+        </summary>
+        <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;padding:.3rem 0"
+             x-data="{ msgType: '{{ msg.message_type or '' }}', msgStatus: '{{ msg.message_status or 'ungeprüft' }}' }">
+          <select class="form-select" style="font-size:.75rem;padding:.2rem .4rem;max-width:140px" x-model="msgType">
+            {% for val, label in MSG_TYPES %}
+            <option value="{{ val }}" {% if msg.message_type == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <select class="form-select" style="font-size:.75rem;padding:.2rem .4rem;max-width:130px" x-model="msgStatus">
+            {% for val, label in MSG_STATUSES %}
+            <option value="{{ val }}" {% if (msg.message_status or 'ungeprüft') == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <button type="button" class="btn btn-sm" style="font-size:.72rem;padding:.2rem .5rem"
+                  hx-patch="/chat/messages/{{ msg.id }}/metadata"
+                  hx-vals="js:{message_type: $el.closest('[x-data]').__x.$data.msgType, message_status: $el.closest('[x-data]').__x.$data.msgStatus}"
+                  hx-target="#meta-save-{{ msg.id }}"
+                  hx-swap="innerHTML">
+            Speichern
+          </button>
+          <span id="meta-save-{{ msg.id }}"></span>
+          <button type="button" class="btn btn-sm" style="font-size:.72rem;padding:.2rem .5rem;color:var(--color-danger)"
+                  hx-delete="/chat/messages/{{ msg.id }}"
+                  hx-target="#msg-{{ msg.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Nachricht endgültig löschen?">
+            🗑️
+          </button>
+        </div>
+      </details>
+      {% endif %}
+
     </div>
-    {% endif %}
+  </div>
   {% endfor %}
 {% else %}
   <p class="text-muted" style="text-align:center;padding:3rem 1rem">
@@ -37,6 +104,10 @@
 
 <!-- OOB: update session_id in the form -->
 <input id="active-session-id" name="session_id" type="hidden" value="{{ session_id }}" hx-swap-oob="true">
+
+<style>
+  .chat-bubble-deleted { opacity: .45; text-decoration: line-through; }
+</style>
 
 <script>
   (function() {

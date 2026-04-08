@@ -1,5 +1,20 @@
-﻿<!-- User message -->
-<div style="display:flex;justify-content:flex-end">
+﻿{% set MSG_TYPES = [
+  ("", "— kein Typ —"),
+  ("idea", "💡 Idee"),
+  ("decision", "✅ Entscheidung"),
+  ("todo", "📌 ToDo"),
+  ("assumption", "❓ Annahme"),
+  ("info", "ℹ️ Info / Fakt")
+] %}
+{% set MSG_STATUSES = [
+  ("ungeprüft", "⚪ Ungeprüft"),
+  ("bestätigt", "✓ Bestätigt"),
+  ("falsch", "✗ Falsch"),
+  ("irrelevant", "⊘ Irrelevant")
+] %}
+
+<!-- User message -->
+<div id="msg-{{ user_msg_id if user_msg_id else 'u-new' }}" style="display:flex;justify-content:flex-end">
   <div>
     <div class="chat-bubble chat-bubble-user" style="white-space:pre-wrap">{{ user_message }}</div>
     <div class="chat-meta" style="text-align:right">{{ timestamp }}</div>
@@ -7,23 +22,71 @@
 </div>
 
 <!-- AI message -->
-<div style="display:flex;justify-content:flex-start">
+<div id="msg-{{ ai_msg_id if ai_msg_id else 'a-new' }}" style="display:flex;justify-content:flex-start">
   <div style="max-width:90%">
     <div class="chat-bubble chat-bubble-ai {% if error %}chat-bubble-error{% endif %}" style="white-space:pre-wrap">{{ ai_response }}</div>
     <div class="chat-meta">
       {% if model %}{{ model }}{% endif %}
       {% if temperature is not none %} · T={{ temperature }}{% endif %}
       · {{ timestamp }}
-      {% if rag_sources %} · RAG {% endif %}
     </div>
+
+    <!-- RAG sources + feedback -->
     {% if rag_sources %}
     <div class="chat-rag-sources">
-      📚 Quellen:
-      {% for src in rag_sources[:3] %}
-        {{ src.get('filename', '?') }} ({{ "%.0f%%" | format(src.get('similarity', 0) * 100) }}){% if not loop.last %}, {% endif %}
+      📚
+      {% for src in rag_sources[:5] %}
+        <span style="display:inline-flex;align-items:center;gap:.2rem">
+          {{ src.get('filename', '?') }} ({{ "%.0f%%" | format(src.get('similarity', 0) * 100) }})
+          {% if ai_msg_id %}
+          <button type="button" style="background:none;border:none;cursor:pointer;font-size:.8rem;padding:0;line-height:1"
+                  hx-post="/chat/feedback"
+                  hx-vals='{"message_id": "{{ ai_msg_id }}", "document_id": "{{ src.get('document_id', 0) }}", "helpful": "true"}'
+                  hx-target="#pair-fbk-{{ ai_msg_id }}-{{ loop.index }}"
+                  hx-swap="innerHTML">👍</button>
+          <button type="button" style="background:none;border:none;cursor:pointer;font-size:.8rem;padding:0;line-height:1"
+                  hx-post="/chat/feedback"
+                  hx-vals='{"message_id": "{{ ai_msg_id }}", "document_id": "{{ src.get('document_id', 0) }}", "helpful": "false"}'
+                  hx-target="#pair-fbk-{{ ai_msg_id }}-{{ loop.index }}"
+                  hx-swap="innerHTML">👎</button>
+          <span id="pair-fbk-{{ ai_msg_id }}-{{ loop.index }}"></span>
+          {% endif %}
+        </span>{% if not loop.last %}, {% endif %}
       {% endfor %}
     </div>
     {% endif %}
+
+    <!-- Quick metadata actions for new AI message -->
+    {% if ai_msg_id %}
+    <details style="margin-top:.3rem">
+      <summary style="font-size:.7rem;color:var(--color-text-muted);cursor:pointer;list-style:none;display:flex;align-items:center;gap:.3rem">
+        <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+        Einordnen
+      </summary>
+      <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;padding:.3rem 0"
+           x-data="{ msgType: '', msgStatus: 'ungeprüft' }">
+        <select class="form-select" style="font-size:.75rem;padding:.2rem .4rem;max-width:140px" x-model="msgType">
+          {% for val, label in MSG_TYPES %}
+          <option value="{{ val }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+        <select class="form-select" style="font-size:.75rem;padding:.2rem .4rem;max-width:130px" x-model="msgStatus">
+          {% for val, label in MSG_STATUSES %}
+          <option value="{{ val }}" {% if val == 'ungeprüft' %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <button type="button" class="btn btn-sm" style="font-size:.72rem;padding:.2rem .5rem"
+                hx-patch="/chat/messages/{{ ai_msg_id }}/metadata"
+                hx-vals="js:{message_type: $el.closest('[x-data]').__x.$data.msgType, message_status: $el.closest('[x-data]').__x.$data.msgStatus}"
+                hx-target="#pair-meta-{{ ai_msg_id }}"
+                hx-swap="innerHTML">
+          Speichern
+        </button>
+        <span id="pair-meta-{{ ai_msg_id }}"></span>
+      </div>
+    </details>
+    {% endif %}
+
   </div>
 </div>
 
