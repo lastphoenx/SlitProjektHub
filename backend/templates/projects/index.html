@@ -1,0 +1,54 @@
+﻿{% extends "base.html" %}
+
+{% block title %}Projekte — SlitProjektHub{% endblock %}
+{% block topbar_title %}Projekte{% endblock %}
+
+{% block topbar_actions %}
+  <button
+    class="btn btn-primary btn-sm"
+    hx-get="/projects/new"
+    hx-target="#modal-slot"
+    hx-swap="innerHTML"
+  >
+    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    Neues Projekt
+  </button>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <div class="page-title">Alle Projekte</div>
+    <div class="page-subtitle">{{ projects | length }} Projekt{% if projects | length != 1 %}e{% endif %} vorhanden</div>
+  </div>
+</div>
+
+<!-- Project table (HTMX swappable region) -->
+<div class="card" style="padding:0">
+  <div class="table-wrap" id="projects-table">
+    {% include "projects/_table.html" %}
+  </div>
+</div>
+
+<!-- Modal slot — HTMX injects forms here -->
+<div id="modal-slot"></div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// Close modal when clicking backdrop (delegated)
+document.addEventListener('click', function(e) {
+  if (e.target.classList.contains('modal-backdrop')) {
+    document.getElementById('modal-slot').innerHTML = '';
+  }
+});
+// ESC key
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    document.getElementById('modal-slot').innerHTML = '';
+  }
+});
+</script>
+{% endblock %}
