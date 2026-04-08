@@ -416,27 +416,46 @@ def generate_chunk_keywords(
     INHALTLICH was im Chunk steht — unabhängig von Dokumentnamen, Kapitelbezeichnungen
     oder Verfahrenskontext.
 
-    Beispiel:
-        Chunk: "Die Anbietenden erbringen die Dienstleistung selber.
-                Subunternehmende sind nicht zugelassen."
-        → ["subunternehmen", "verbot", "eigenleistung", "zulassung", "dienstleistung"]
-
     Returns: Liste von 5-10 Fachbegriffen (lowercase), leer bei Fehler.
     """
     system_prompt = (
-        "Du bist ein Retrieval-Experte. Deine Aufgabe: Welche 5-10 Fachbegriffe würde jemand "
-        "in eine Suchmaschine eingeben, um genau diesen Textabschnitt zu finden?\n\n"
-        "RAHMEN/THEMA-Prinzip:\n"
-        "- RAHMEN = Dokumentname, Kapitelbezeichnung, Projektname, Verfahrensart → WEGLASSEN\n"
-        "- THEMA = fachlicher, rechtlicher oder technischer Inhalt → BEHALTEN\n\n"
-        "ANALOGIE: Wenn der Text aus einem 'Rezeptbuch' das 'Braten von Fleisch' beschreibt, "
-        "sind die Keywords 'Fleisch', 'braten', 'Temperatur' — nicht 'Rezeptbuch' oder 'Kapitel 3'.\n\n"
-        "Regeln:\n"
-        "1. Nur den fachlichen Kern erfassen, keine Metadaten des Dokuments.\n"
-        "2. Synonyme und Stammformen einbeziehen falls sinnvoll (z.B. 'Subunternehmen', 'Subbeauftragung').\n"
-        "3. Antwort: NUR eine JSON-Liste von Strings, keine Erklärung.\n"
-        "Beispielantwort: [\"subunternehmen\", \"verbot\", \"eigenleistung\", \"zulassung\"]"
+        "Du bist ein neutraler Experte für Informations-Extraktion.\n\n"
+        "AUFGABE: Extrahiere 5-10 Schlüsselwörter, die das spezifische 'Signal' des Textes "
+        "maximieren und das 'Hintergrundrauschen' minimieren.\n\n"
+        "LOGIK:\n"
+        "1. SIGNAL (Extrahieren): Spezifische Fachterme, technische Details, eindeutige Regeln "
+        "oder Fakten, die diesen Abschnitt UNIKAT innerhalb einer großen Sammlung machen.\n"
+        "2. RAUSCHEN (Ignorieren): Begriffe, die nur das Medium, den Dokumententyp, den "
+        "formalen Rahmen oder den übergeordneten Prozess beschreiben. Lösche Wörter, die "
+        "typischerweise in fast jedem Dokument der vorliegenden Sammlung vorkommen könnten.\n\n"
+        "ZIEL: Erzeuge Suchbegriffe, mit denen ein Nutzer exakt diesen inhaltlichen Kern findet, "
+        "ohne hunderte andere Dokumente desselben Rahmens als Treffer zu erhalten.\n\n"
+        "FORMAT: NUR ein valides JSON-Array von Strings (Grundform, lowercase, keine "
+        "Komposita-Zerlegung — 'subunternehmen' bleibt 'subunternehmen', nicht ['sub','unternehmen']). "
+        "Keine Erklärung.\n"
+        "BEISPIEL-STRUKTUR: [\"spezifischer_term_1\", \"spezifischer_term_2\"]"
     )
+    try:
+        result = try_models_with_messages(
+            provider=provider,
+            system=system_prompt,
+            messages=[{"role": "user", "content": chunk_text[:2000]}],  # max 2000 Zeichen
+            max_tokens=120,
+            temperature=0.0,
+            model=model,
+        )
+        if not result:
+            return []
+        # JSON-Array aus Antwort extrahieren (robust gegen Markdown-Code-Blöcke)
+        import re as _re
+        match = _re.search(r'\[.*?\]', result, _re.DOTALL)
+        if not match:
+            return []
+        import json as _json
+        keywords = _json.loads(match.group())
+        return [str(k).lower().strip() for k in keywords if k and str(k).strip()]
+    except Exception:
+        return []
     try:
         result = try_models_with_messages(
             provider=provider,
