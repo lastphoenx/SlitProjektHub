@@ -11,16 +11,6 @@
   min_per_resp: 3,
   max_per_resp: 7,
   generating: false,
-  get filteredRoles() {
-    if (!this.search.trim()) return this.rolesData;
-    const q = this.search.toLowerCase();
-    return this.rolesData.filter(r =>
-      (r.title||'').toLowerCase().includes(q) ||
-      (r.short_code||'').toLowerCase().includes(q) ||
-      (r.description||'').toLowerCase().includes(q) ||
-      (r.responsibilities||'').toLowerCase().includes(q)
-    );
-  },
   get selectedRole() {
     return this.rolesData.find(r => r.key === this.role_key) || null;
   },
@@ -30,6 +20,14 @@
     return r.responsibilities.split('\n')
       .map(l => l.replace(/^[-*]\s*/, '').trim())
       .filter(l => l.length > 0);
+  },
+  filterRoles(q) {
+    const sel = document.getElementById('tg-role-select');
+    if (!sel) return;
+    sel.querySelectorAll('option[value]').forEach(opt => {
+      if (!opt.value) return;
+      opt.hidden = q && !opt.dataset.search.includes(q.toLowerCase());
+    });
   }
 }">
 
@@ -49,15 +47,21 @@
     <label class="form-label" style="font-size:.78rem;color:var(--color-text-muted)">Suche (durchsucht alle Felder)</label>
     <input type="text" class="form-input" style="margin-bottom:.75rem"
            placeholder="Titel, Kürzel, Beschreibung, Verantwortlichkeiten..."
-           x-model="search">
+           x-model="search"
+           @input="filterRoles($event.target.value)">
 
     <label class="form-label">Rolle</label>
-    <select class="form-select" x-model="role_key">
-      <option value="">— Rolle wählen —</option>
-      <template x-for="r in filteredRoles" :key="r.key">
-        <option :value="r.key"
-                x-text="(r.short_code ? r.short_code + ' - ' : '') + r.title"></option>
-      </template>
+    <!-- native select with Jinja2 options — Alpine filters via JS on search -->
+    <select id="tg-role-select" class="form-select" x-model="role_key"
+            @change="role_key = $event.target.value">
+      <option value="">— Rolle w&#228;hlen —</option>
+      {% for r in roles %}
+      <option value="{{ r.key }}"
+              data-search="{{ ((r.short_code or '') + ' ' + r.title + ' ' + (r.description or '') + ' ' + (r.responsibilities or '')) | lower | replace('"', '') }}"
+              {% if sel_role and sel_role.key == r.key %}selected{% endif %}>
+        {% if r.short_code %}{{ r.short_code }} - {% endif %}{{ r.title }}
+      </option>
+      {% endfor %}
     </select>
 
     <!-- Count badge -->
