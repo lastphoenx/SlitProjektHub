@@ -72,9 +72,7 @@
         <td class="td">
           <div id="bqa-ki-ai-{{ vendor | replace(' ', '_') }}">
             <button class="btn-xs"
-                    onclick="document.querySelector('[x-data]').__x.$data.runKiAiAnalysis('{{ vendor }}')">
-              KI-Analyse
-            </button>
+                    onclick="window.__bqa.runKiAiAnalysis('{{ vendor }}')">KI-Analyse</button>
           </div>
         </td>
       </tr>

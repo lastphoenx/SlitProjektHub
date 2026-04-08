@@ -394,11 +394,11 @@ function batchQA() {
     selected_roles: [],
     roleModeOptions: [
       { val: 'all_merged', label: 'Alle zusammen',
-        desc: 'Alle Rollen kombiniert in einer Antwort' },
+        desc: 'Alle Rollen kombiniert — keine Auswahl nötig' },
       { val: 'individual', label: 'Einzeln',
-        desc: 'Eine separate Antwort-Spalte pro Rolle' },
+        desc: 'Separate Spalte pro Rolle (1 oder mehrere)' },
       { val: 'single', label: 'Eine Rolle',
-        desc: 'Genau eine Rolle, eine Antwort-Spalte' },
+        desc: 'Genau eine Rolle auswählen' },
       { val: 'none', label: 'Ohne Rolle',
         desc: 'Generisch ohne Rollenkontext' },
     ],
@@ -423,7 +423,43 @@ function batchQA() {
     export_tag: '',
 
     init() {
-      // nothing to init
+      window.__bqa = this;
+      this.$watch('role_mode', () => this.applyRoleModeUI());
+    },
+
+    applyRoleModeUI() {
+      const container = document.getElementById('bqa-roles-list');
+      if (!container) return;
+      const labels = container.querySelectorAll('label.bqa-rl');
+      const cbs    = container.querySelectorAll('input.bqa-rcb');
+      if (!cbs.length) return;
+
+      if (this.role_mode === 'all_merged') {
+        // All always selected, not changeable
+        cbs.forEach(cb => { cb.checked = true; cb.disabled = true; });
+        labels.forEach(l => { l.style.opacity = '1'; l.style.cursor = 'default'; l.title = 'Alle Rollen werden zusammengefasst'; });
+      } else if (this.role_mode === 'individual') {
+        // 1 or more — enable all, keep current checks
+        cbs.forEach(cb => { cb.disabled = false; });
+        labels.forEach(l => { l.style.opacity = '1'; l.style.cursor = 'pointer'; l.title = ''; });
+        // remove any single-only handlers
+        cbs.forEach(cb => { cb.onclick = null; });
+      } else if (this.role_mode === 'single') {
+        // Only one can be selected at a time → radio behaviour
+        cbs.forEach(cb => { cb.disabled = false; });
+        labels.forEach(l => { l.style.opacity = '1'; l.style.cursor = 'pointer'; l.title = 'Nur eine Rolle möglich'; });
+        // uncheck all but first checked (or first)
+        let found = false;
+        cbs.forEach(cb => {
+          if (cb.checked && !found) { found = true; }
+          else cb.checked = false;
+        });
+        if (!found && cbs.length) cbs[0].checked = true;
+        // install click handler to enforce single selection
+        cbs.forEach(cb => {
+          cb.onclick = () => { if (cb.checked) cbs.forEach(other => { if (other !== cb) other.checked = false; }); };
+        });
+      }
     },
 
     onProjectChange() {
@@ -475,7 +511,7 @@ function batchQA() {
         .then(r => r.text())
         .then(html => {
           const el = document.getElementById('bqa-roles-list');
-          if (el) el.innerHTML = html;
+          if (el) { el.innerHTML = html; this.applyRoleModeUI(); }
         });
     },
 
