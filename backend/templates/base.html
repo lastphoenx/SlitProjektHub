@@ -9,6 +9,7 @@
   <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer></script>
   <!-- Alpine.js: lightweight client-side reactivity -->
   <script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
+  <style>[x-cloak]{display:none!important}</style>
 </head>
 <body>
 
@@ -96,7 +97,7 @@ function showToast(msg, type = 'success') {
 
 // Alpine global helper
 document.addEventListener('alpine:init', () => {
-  Alpine.store('ui', { modalOpen: false });
+  Alpine.store('ui', { modalOpen: false, q: '' });
 });
 </script>
 

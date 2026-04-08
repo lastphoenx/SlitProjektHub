@@ -1,0 +1,103 @@
+﻿<div class="modal-backdrop" id="role-form-backdrop">
+  <div class="modal" style="max-width:640px" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+
+    <div class="modal-header">
+      <h2 class="modal-title" id="modal-title">
+        {% if role %}Rolle bearbeiten{% else %}Neue Rolle{% endif %}
+      </h2>
+      <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''" title="Schließen">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <form
+      {% if role %}
+        hx-put="/roles/{{ role.key }}"
+      {% else %}
+        hx-post="/roles"
+      {% endif %}
+      hx-target="#roles-table"
+      hx-swap="innerHTML"
+      hx-on::after-request="if(event.detail.successful) document.getElementById('modal-slot').innerHTML=''"
+    >
+
+      <!-- Titel + Kürzel -->
+      <div class="form-row">
+        <div class="form-group" style="grid-column:span 2">
+          <label class="form-label" for="r-title">Rollenbezeichnung *</label>
+          <input id="r-title" class="form-input" type="text" name="title" required
+                 value="{{ role.title if role else '' }}"
+                 placeholder="z. B. Projektleiter:in Digitalisierung" autofocus />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="r-short-code">Kürzel / Funktion</label>
+          <input id="r-short-code" class="form-input font-mono" type="text" name="short_code" maxlength="14"
+                 list="sc-suggestions"
+                 value="{{ role.short_code if role else '' }}"
+                 placeholder="z. B. PL-DIG"
+                 style="text-transform:uppercase"
+                 oninput="this.value=this.value.toUpperCase()" />
+          <datalist id="sc-suggestions">
+            {% for s in suggestions %}
+              <option value="{{ s }}">
+            {% endfor %}
+          </datalist>
+        </div>
+        <div class="form-group">
+          <!-- spacer -->
+        </div>
+      </div>
+
+      <!-- Beschreibung -->
+      <div class="form-group">
+        <label class="form-label" for="r-description">Kurzbeschreibung</label>
+        <textarea id="r-description" class="form-textarea" name="description" rows="2"
+                  placeholder="1-2 Sätze zur Rolle …">{{ role.description if role else '' }}</textarea>
+      </div>
+
+      <!-- Verantwortlichkeiten / Qualifikationen / Expertise -->
+      <div class="form-group">
+        <label class="form-label" for="r-responsibilities">Hauptverantwortlichkeiten</label>
+        <textarea id="r-responsibilities" class="form-textarea" name="responsibilities" rows="3"
+                  placeholder="Stichpunkte oder Fliesstext …">{{ role.responsibilities if role else '' }}</textarea>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="r-qualifications">Qualifikationen</label>
+          <textarea id="r-qualifications" class="form-textarea" name="qualifications" rows="3"
+                    placeholder="Anforderungen …">{{ role.qualifications if role else '' }}</textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="r-expertise">Expertise / Spezialwissen</label>
+          <textarea id="r-expertise" class="form-textarea" name="expertise" rows="3"
+                    placeholder="Spezifisches Fachwissen …">{{ role.expertise if role else '' }}</textarea>
+        </div>
+      </div>
+
+      <!-- Markdown-Body -->
+      <div class="form-group">
+        <label class="form-label" for="r-body">Detailbeschreibung (Markdown)</label>
+        <textarea id="r-body" class="form-textarea" name="body_text" rows="6"
+                  placeholder="Ausführliche Rollenbeschreibung …">{{ body_text or '' }}</textarea>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('modal-slot').innerHTML=''">
+          Abbrechen
+        </button>
+        <button type="submit" class="btn btn-primary">
+          <span class="htmx-indicator">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+          </span>
+          {% if role %}Speichern{% else %}Erstellen{% endif %}
+        </button>
+      </div>
+
+    </form>
+  </div>
+</div>
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>

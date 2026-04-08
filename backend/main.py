@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)  # DB-Pfad Referenz
 
 # ── Src imports ────────────────────────────────────────────────────────────
-from src.m07_roles import list_roles_df, load_role, upsert_role, soft_delete_role
+from src.m07_roles import list_roles_df, load_role, upsert_role, soft_delete_role, function_suggestions
 from src.m07_tasks import list_tasks_df, load_task, upsert_task
 from src.m07_projects import list_projects_df, load_project, upsert_project, soft_delete_project
 from src.m07_contexts import list_contexts_df
@@ -218,6 +218,170 @@ async def projects_delete(key: str):
     # Return empty string — HTMX swaps out the row with nothing
     response = HTMLResponse(content="")
     response.headers["HX-Toast"] = json.dumps({"message": "Projekt gelöscht", "type": "success"})
+    return response
+
+
+# ── Roles helper ───────────────────────────────────────────────────────────
+
+def _roles_list() -> list[dict]:
+    df = list_roles_df(include_deleted=False)
+    if df is None or df.empty:
+        return []
+    return df.rename(columns={
+        "Key": "key",
+        "Rollenbezeichnung": "title",
+        "Rollenkürzel": "short_code",
+        "Beschreibung": "description",
+        "Hauptverantwortlichkeiten": "responsibilities",
+        "Qualifikationen": "qualifications",
+        "Expertise": "expertise",
+    }).to_dict("records")
+
+
+def _role_full(key: str) -> dict | None:
+    """Lädt eine Rolle mit allen Feldern (ungekürzt) für das Bearbeitungs-Formular."""
+    role_obj, body = load_role(key)
+    if not role_obj:
+        return None
+    return {
+        "key": role_obj.key,
+        "title": role_obj.title,
+        "short_code": role_obj.short_code or "",
+        "description": role_obj.description or "",
+        "responsibilities": role_obj.responsibilities or "",
+        "qualifications": role_obj.qualifications or "",
+        "expertise": role_obj.expertise or "",
+        "rag_status": role_obj.rag_status,
+        "body_text": body,
+    }
+
+
+# ── Roles HTML views ────────────────────────────────────────────────────────
+
+@app.get("/roles", response_class=HTMLResponse)
+async def roles_page(request: Request):
+    return templates.TemplateResponse("roles/index.html", {
+        "request": request,
+        "active_page": "roles",
+        "roles": _roles_list(),
+    })
+
+
+@app.get("/roles/new", response_class=HTMLResponse)
+async def roles_new_form(request: Request):
+    """HTMX partial: Neue-Rolle-Formular"""
+    return templates.TemplateResponse("roles/_form.html", {
+        "request": request,
+        "role": None,
+        "body_text": "",
+        "suggestions": function_suggestions(),
+    })
+
+
+@app.get("/roles/{key}/edit", response_class=HTMLResponse)
+async def roles_edit_form(request: Request, key: str):
+    """HTMX partial: Bearbeiten-Formular"""
+    role = _role_full(key)
+    if not role:
+        raise HTTPException(status_code=404, detail="Rolle nicht gefunden")
+    return templates.TemplateResponse("roles/_form.html", {
+        "request": request,
+        "role": role,
+        "body_text": role["body_text"],
+        "suggestions": function_suggestions(),
+    })
+
+
+@app.get("/roles/{key}/confirm-delete", response_class=HTMLResponse)
+async def roles_confirm_delete(request: Request, key: str):
+    """HTMX partial: Lösch-Bestätigung"""
+    role_obj, _ = load_role(key)
+    if not role_obj:
+        raise HTTPException(status_code=404, detail="Rolle nicht gefunden")
+    return templates.TemplateResponse("roles/_confirm_delete.html", {
+        "request": request,
+        "role": role_obj,
+    })
+
+
+@app.post("/roles", response_class=HTMLResponse)
+async def roles_create(
+    request: Request,
+    title: str = Form(...),
+    short_code: str = Form(""),
+    description: str = Form(""),
+    responsibilities: str = Form(""),
+    qualifications: str = Form(""),
+    expertise: str = Form(""),
+    body_text: str = Form(""),
+):
+    """HTMX: Rolle erstellen → gibt aktualisierten table-body zurück"""
+    try:
+        upsert_role(
+            title=title.strip(),
+            body_text=body_text,
+            short_code=short_code.strip() or None,
+            description=description.strip() or None,
+            responsibilities=responsibilities.strip() or None,
+            qualifications=qualifications.strip() or None,
+            expertise=expertise.strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    response = templates.TemplateResponse("roles/_table.html", {
+        "request": request,
+        "roles": _roles_list(),
+    })
+    response.headers["HX-Toast"] = json.dumps({"message": f'Rolle "{title}" erstellt', "type": "success"})
+    return response
+
+
+@app.put("/roles/{key}", response_class=HTMLResponse)
+async def roles_update(
+    request: Request,
+    key: str,
+    title: str = Form(...),
+    short_code: str = Form(""),
+    description: str = Form(""),
+    responsibilities: str = Form(""),
+    qualifications: str = Form(""),
+    expertise: str = Form(""),
+    body_text: str = Form(""),
+):
+    """HTMX: Rolle aktualisieren → gibt aktualisierten table-body zurück"""
+    role_obj, _ = load_role(key)
+    if not role_obj:
+        raise HTTPException(status_code=404, detail="Rolle nicht gefunden")
+    try:
+        upsert_role(
+            key=key,
+            title=title.strip(),
+            body_text=body_text,
+            short_code=short_code.strip() or None,
+            description=description.strip() or None,
+            responsibilities=responsibilities.strip() or None,
+            qualifications=qualifications.strip() or None,
+            expertise=expertise.strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    response = templates.TemplateResponse("roles/_table.html", {
+        "request": request,
+        "roles": _roles_list(),
+    })
+    response.headers["HX-Toast"] = json.dumps({"message": f'Rolle "{title}" gespeichert', "type": "success"})
+    return response
+
+
+@app.delete("/roles/{key}", response_class=HTMLResponse)
+async def roles_delete(key: str):
+    """HTMX: Rolle soft-delete → Row verschwindet"""
+    if not soft_delete_role(key):
+        raise HTTPException(status_code=404, detail="Rolle nicht gefunden")
+    response = HTMLResponse(content="")
+    response.headers["HX-Toast"] = json.dumps({"message": "Rolle gelöscht", "type": "success"})
     return response
 
 
