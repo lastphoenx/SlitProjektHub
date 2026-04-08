@@ -4,8 +4,10 @@
 {% block topbar_title %}Task-Generator{% endblock %}
 
 {% block content %}
+<script>window.__tgRoles = {{ roles_json | safe }};</script>
+
 <div style="max-width:900px" x-data="{
-  rolesData: {{ roles_json | safe }},
+  rolesData: window.__tgRoles || [],
   search: '',
   role_key: '{{ sel_role.key if sel_role else '' }}',
   min_per_resp: 3,
@@ -17,8 +19,8 @@
   get responsibilities() {
     const r = this.selectedRole;
     if (!r || !r.responsibilities) return [];
-    return r.responsibilities.split('\n')
-      .map(l => l.replace(/^[-*]\s*/, '').trim())
+    return r.responsibilities.split(/\r?\n/)
+      .map(l => l.replace(/^[-*\d.]+\s*/, '').trim())
       .filter(l => l.length > 0);
   },
   filterRoles(q) {
@@ -26,7 +28,7 @@
     if (!sel) return;
     sel.querySelectorAll('option[value]').forEach(opt => {
       if (!opt.value) return;
-      opt.hidden = q && !opt.dataset.search.includes(q.toLowerCase());
+      opt.hidden = q.length > 0 && !opt.dataset.search.includes(q.toLowerCase());
     });
   }
 }">
