@@ -23,7 +23,7 @@ os.chdir(ROOT)  # DB-Pfad Referenz
 from src.m07_roles import list_roles_df, load_role, upsert_role, soft_delete_role, function_suggestions
 from src.m07_tasks import list_tasks_df, load_task, upsert_task, soft_delete_task
 from src.m07_projects import list_projects_df, load_project, upsert_project, soft_delete_project
-from src.m07_contexts import list_contexts_df
+from src.m07_contexts import list_contexts_df, load_context, upsert_context, soft_delete_context
 from src.m03_db import get_session, Project, Role, Task, Context
 from src.m08_llm import providers_available, generate_role_text, generate_summary
 from sqlmodel import select
@@ -549,6 +549,135 @@ async def tasks_delete(key: str):
         raise HTTPException(status_code=404, detail="Aufgabe nicht gefunden")
     response = HTMLResponse(content="")
     response.headers["HX-Toast"] = json.dumps({"message": "Aufgabe gelöscht", "type": "success"})
+    return response
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# HTML Routes — Contexts
+# ════════════════════════════════════════════════════════════════════════════
+
+def _contexts_list() -> list[dict]:
+    df = list_contexts_df(include_body=False)
+    if df.empty:
+        return []
+    return [
+        {
+            "key": row["Key"],
+            "title": row["Titel"],
+            "short_title": row.get("KurzTitel", ""),
+            "short_code": row.get("Kürzel", ""),
+            "description": row.get("Beschreibung", ""),
+        }
+        for _, row in df.iterrows()
+    ]
+
+
+@app.get("/contexts", response_class=HTMLResponse)
+async def contexts_page(request: Request):
+    return templates.TemplateResponse("contexts/index.html", {
+        "request": request,
+        "contexts": _contexts_list(),
+    })
+
+
+@app.get("/contexts/new", response_class=HTMLResponse)
+async def contexts_new_form(request: Request):
+    return templates.TemplateResponse("contexts/_form.html", {
+        "request": request,
+        "context": None,
+        "body_text": "",
+    })
+
+
+@app.get("/contexts/{key}/edit", response_class=HTMLResponse)
+async def contexts_edit_form(request: Request, key: str):
+    ctx_obj, body = load_context(key)
+    if not ctx_obj:
+        raise HTTPException(status_code=404, detail="Kontext nicht gefunden")
+    ctx = {
+        "key": ctx_obj.key,
+        "title": ctx_obj.title,
+        "short_title": ctx_obj.short_title or "",
+        "short_code": ctx_obj.short_code or "",
+        "description": ctx_obj.description or "",
+    }
+    return templates.TemplateResponse("contexts/_form.html", {
+        "request": request,
+        "context": ctx,
+        "body_text": body,
+    })
+
+
+@app.get("/contexts/{key}/confirm-delete", response_class=HTMLResponse)
+async def contexts_confirm_delete(request: Request, key: str):
+    ctx_obj, _ = load_context(key)
+    if not ctx_obj:
+        raise HTTPException(status_code=404, detail="Kontext nicht gefunden")
+    return templates.TemplateResponse("contexts/_confirm_delete.html", {
+        "request": request,
+        "context": {"key": ctx_obj.key, "title": ctx_obj.title},
+    })
+
+
+@app.post("/contexts", response_class=HTMLResponse)
+async def contexts_create(
+    request: Request,
+    title: str = Form(...),
+    short_title: str = Form(""),
+    short_code: str = Form(""),
+    description: str = Form(""),
+    body_text: str = Form(""),
+):
+    upsert_context(
+        title=title,
+        body_text=body_text,
+        short_title=short_title or None,
+        short_code=short_code or None,
+        description=description or None,
+    )
+    response = templates.TemplateResponse("contexts/_table.html", {
+        "request": request,
+        "contexts": _contexts_list(),
+    })
+    response.headers["HX-Toast"] = json.dumps({"message": f'Kontext "{title}" erstellt', "type": "success"})
+    return response
+
+
+@app.put("/contexts/{key}", response_class=HTMLResponse)
+async def contexts_update(
+    request: Request,
+    key: str,
+    title: str = Form(...),
+    short_title: str = Form(""),
+    short_code: str = Form(""),
+    description: str = Form(""),
+    body_text: str = Form(""),
+):
+    ctx_obj, _ = load_context(key)
+    if not ctx_obj:
+        raise HTTPException(status_code=404, detail="Kontext nicht gefunden")
+    upsert_context(
+        key=key,
+        title=title,
+        body_text=body_text,
+        short_title=short_title or None,
+        short_code=short_code or None,
+        description=description or None,
+    )
+    response = templates.TemplateResponse("contexts/_table.html", {
+        "request": request,
+        "contexts": _contexts_list(),
+    })
+    response.headers["HX-Toast"] = json.dumps({"message": f'Kontext "{title}" gespeichert', "type": "success"})
+    return response
+
+
+@app.delete("/contexts/{key}", response_class=HTMLResponse)
+async def contexts_delete(key: str):
+    if not soft_delete_context(key):
+        raise HTTPException(status_code=404, detail="Kontext nicht gefunden")
+    response = HTMLResponse(content="")
+    response.headers["HX-Toast"] = json.dumps({"message": "Kontext gelöscht", "type": "success"})
     return response
 
 

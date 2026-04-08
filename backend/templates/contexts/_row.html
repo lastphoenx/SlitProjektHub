@@ -1,0 +1,36 @@
+﻿<tr id="context-row-{{ c.key }}"
+    x-data
+    x-show="!$store.ui.q || '{{ c.title }} {{ c.short_code }} {{ c.description }}'.toLowerCase().includes($store.ui.q.toLowerCase())"
+    x-cloak>
+  <td><span class="badge badge-neutral font-mono">{{ c.short_code or "—" }}</span></td>
+  <td>
+    <span style="font-weight:500">{{ c.title }}</span>
+    {% if c.short_title and c.short_title != c.title %}
+      <div class="text-muted" style="font-size:.78rem;margin-top:.1rem">{{ c.short_title }}</div>
+    {% endif %}
+  </td>
+  <td class="truncate text-muted" style="max-width:320px">{{ c.description or "—" }}</td>
+  <td>
+    <div class="flex items-center gap-1">
+      <button
+        class="btn btn-ghost btn-sm btn-icon"
+        title="Bearbeiten"
+        hx-get="/contexts/{{ c.key }}/edit"
+        hx-target="#modal-slot"
+        hx-swap="innerHTML"
+      >
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      </button>
+      <button
+        class="btn btn-ghost btn-sm btn-icon"
+        title="Löschen"
+        style="color:var(--color-danger)"
+        hx-get="/contexts/{{ c.key }}/confirm-delete"
+        hx-target="#modal-slot"
+        hx-swap="innerHTML"
+      >
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+      </button>
+    </div>
+  </td>
+</tr>
