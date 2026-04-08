@@ -959,6 +959,117 @@ async def projects_ai_suggest(
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# HTML Routes — Task-Generierung
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.get("/taskgen", response_class=HTMLResponse)
+async def taskgen_page(request: Request, role_key: str | None = None):
+    roles = _roles_list()
+    s = _load_settings_ctx()
+    sel_role = None
+    if role_key:
+        for r in roles:
+            if r["key"] == role_key:
+                sel_role = r
+                break
+    return templates.TemplateResponse("taskgen/index.html", {
+        "request": request,
+        "active_page": "taskgen",
+        "roles": roles,
+        "sel_role": sel_role,
+        "providers": providers_available() or ["openai"],
+        "all_models_json": _all_models_json(),
+        "settings": s,
+    })
+
+
+@app.post("/taskgen/generate", response_class=HTMLResponse)
+async def taskgen_generate(
+    request: Request,
+    role_key: str = Form(""),
+    provider: str = Form("openai"),
+    model: str = Form(""),
+    temperature: float = Form(0.7),
+    min_per_resp: int = Form(2),
+    max_per_resp: int = Form(5),
+    rag_enabled: str = Form("false"),
+):
+    if not role_key:
+        return HTMLResponse('<p class="text-muted" style="padding:1rem">Bitte eine Rolle auswählen.</p>')
+
+    role_obj, _ = load_role(role_key)
+    if not role_obj:
+        return HTMLResponse('<p style="color:var(--color-danger);padding:1rem">Rolle nicht gefunden.</p>')
+
+    responsibilities = getattr(role_obj, "responsibilities", "") or ""
+    if not responsibilities.strip():
+        return HTMLResponse('<p style="color:var(--color-danger);padding:1rem">Die Rolle hat keine Verantwortlichkeiten definiert. Bitte zuerst in der Rollenverwaltung ergänzen.</p>')
+
+    s = _load_settings_ctx()
+    use_rag = rag_enabled.lower() in ("true", "1", "on", "yes")
+
+    try:
+        from src.m12_task_generation import generate_tasks_from_role
+        tasks = generate_tasks_from_role(
+            provider=provider,
+            role_title=role_obj.title,
+            role_key=role_key,
+            responsibilities=responsibilities,
+            min_per_resp=min_per_resp,
+            max_per_resp=max_per_resp,
+            model_name=model or s.get("model") or None,
+            temperature=temperature,
+            rag_enabled=use_rag,
+            rag_top_k=s.get("rag_top_k", 5),
+            rag_similarity_threshold=s.get("rag_similarity_threshold", 0.45),
+            rag_chunk_size=s.get("rag_chunk_size", 1000),
+        )
+    except Exception as e:
+        return HTMLResponse(f'<div style="color:var(--color-danger);padding:1rem">Fehler beim Generieren: {e}</div>')
+
+    return templates.TemplateResponse("taskgen/_results.html", {
+        "request": request,
+        "tasks": tasks,
+        "role_key": role_key,
+        "role_title": role_obj.title,
+        "count": len(tasks),
+    })
+
+
+@app.post("/taskgen/save", response_class=HTMLResponse)
+async def taskgen_save(request: Request):
+    """Save selected generated tasks. Accepts JSON body with list of task dicts."""
+    body = await request.json()
+    tasks_to_save = body.get("tasks", [])
+    saved = 0
+    errors = []
+    for t in tasks_to_save:
+        try:
+            upsert_task(
+                title=t.get("title", ""),
+                body_text=t.get("description", ""),
+                short_title=t.get("title", "")[:50],
+                short_code=t.get("short_code") or None,
+                description=t.get("description", ""),
+                source_role_key=t.get("source_role_key") or None,
+                source_responsibility=t.get("source_responsibility") or None,
+                generation_batch_id=t.get("generation_batch_id") or None,
+            )
+            saved += 1
+        except Exception as e:
+            errors.append(str(e))
+
+    msg = f"{saved} Aufgabe(n) gespeichert."
+    if errors:
+        msg += f" {len(errors)} Fehler."
+    return HTMLResponse(f"""
+<div style="padding:.75rem 1rem;background:var(--color-surface-2);border:1px solid var(--color-border);border-radius:.5rem;display:flex;align-items:center;gap:.6rem">
+  <svg width="16" height="16" fill="none" stroke="var(--color-success)" stroke-width="2" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+  <span style="font-size:.9rem">{msg} <a href="/tasks" style="color:var(--color-primary)">Zu den Aufgaben →</a></span>
+</div>""")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # HTML Routes — KI-Einstellungen
 # ════════════════════════════════════════════════════════════════════════════
 
