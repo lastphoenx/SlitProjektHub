@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 import json
+import logging
 import os
 import math
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from pathlib import Path
 from sqlmodel import select
@@ -602,11 +605,22 @@ def _keyword_search(
         docs_map = {d.id: d for d in ses.exec(select(Document).where(Document.id.in_(doc_ids))).all()}
         
         # Tokenisieren und BM25 Index erstellen
+        # Wenn retrieval_keywords vorhanden (LLM-generiert beim Upload) → diese als BM25-Corpus.
+        # Vorteil: der BM25-Index beschreibt WAS im Chunk steht, nicht WIE es steht.
+        # Fallback auf chunk_text für ältere Chunks ohne Keywords.
         tokenized_corpus = []
         chunk_metadata = []  # (chunk_id, document_id, chunk_text, doc_object, token_set)
         
         for chunk in chunks:
-            tokens = tokenize(chunk.chunk_text or "")
+            if chunk.retrieval_keywords:
+                try:
+                    kw_list = json.loads(chunk.retrieval_keywords)
+                    # Keywords sind bereits destillierte Terme — direkt als Tokens verwenden
+                    tokens = [t.lower().strip() for t in kw_list if t.strip()]
+                except Exception:
+                    tokens = tokenize(chunk.chunk_text or "")
+            else:
+                tokens = tokenize(chunk.chunk_text or "")
             if tokens:  # nur Chunks mit Content
                 tokenized_corpus.append(tokens)
                 chunk_metadata.append((chunk.id, chunk.document_id, chunk.chunk_text, docs_map.get(chunk.document_id), set(tokens)))
@@ -879,10 +893,13 @@ def retrieve_relevant_chunks_hybrid(
                 provider=config.query.distillation_provider,
                 model=config.query.distillation_model,
             )
-            if distilled:
+            if distilled and distilled != query:
+                logger.info("RAG distillation: %r → %r", query[:80], distilled)
                 keyword_query = distilled
-        except Exception:
-            pass  # Fallback: Original-Query
+            else:
+                logger.debug("RAG distillation: no change (result=%r)", distilled)
+        except Exception as exc:
+            logger.warning("RAG distillation failed, using original query: %s", exc)
 
     # Cache-Check NACH Distillation: Key basiert auf keyword_query damit
     # Distillations-Ergebnisse korrekt gecacht werden und keine pre-distillation

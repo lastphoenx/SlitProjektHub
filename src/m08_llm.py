@@ -404,6 +404,62 @@ def rewrite_query_for_retrieval(query: str, provider: str = "openai", model: str
         return query
 
 
+def generate_chunk_keywords(
+    chunk_text: str,
+    provider: str = "openai",
+    model: str = "gpt-4o-mini",
+) -> list[str]:
+    """
+    Generiert BM25-Suchbegriffe für einen Dokumenten-Chunk (Index-time Enrichment).
+
+    Statt den Rohtext zu indexieren, beschreibt eine LLM-generierte Keyword-Liste
+    INHALTLICH was im Chunk steht — unabhängig von Dokumentnamen, Kapitelbezeichnungen
+    oder Verfahrenskontext.
+
+    Beispiel:
+        Chunk: "Die Anbietenden erbringen die Dienstleistung selber.
+                Subunternehmende sind nicht zugelassen."
+        → ["subunternehmen", "verbot", "eigenleistung", "zulassung", "dienstleistung"]
+
+    Returns: Liste von 5-10 Fachbegriffen (lowercase), leer bei Fehler.
+    """
+    system_prompt = (
+        "Du bist ein Retrieval-Experte. Deine Aufgabe: Welche 5-10 Fachbegriffe würde jemand "
+        "in eine Suchmaschine eingeben, um genau diesen Textabschnitt zu finden?\n\n"
+        "RAHMEN/THEMA-Prinzip:\n"
+        "- RAHMEN = Dokumentname, Kapitelbezeichnung, Projektname, Verfahrensart → WEGLASSEN\n"
+        "- THEMA = fachlicher, rechtlicher oder technischer Inhalt → BEHALTEN\n\n"
+        "ANALOGIE: Wenn der Text aus einem 'Rezeptbuch' das 'Braten von Fleisch' beschreibt, "
+        "sind die Keywords 'Fleisch', 'braten', 'Temperatur' — nicht 'Rezeptbuch' oder 'Kapitel 3'.\n\n"
+        "Regeln:\n"
+        "1. Nur den fachlichen Kern erfassen, keine Metadaten des Dokuments.\n"
+        "2. Synonyme und Stammformen einbeziehen falls sinnvoll (z.B. 'Subunternehmen', 'Subbeauftragung').\n"
+        "3. Antwort: NUR eine JSON-Liste von Strings, keine Erklärung.\n"
+        "Beispielantwort: [\"subunternehmen\", \"verbot\", \"eigenleistung\", \"zulassung\"]"
+    )
+    try:
+        result = try_models_with_messages(
+            provider=provider,
+            system=system_prompt,
+            messages=[{"role": "user", "content": chunk_text[:2000]}],  # max 2000 Zeichen
+            max_tokens=120,
+            temperature=0.0,
+            model=model,
+        )
+        if not result:
+            return []
+        # JSON-Array aus Antwort extrahieren (robust gegen Markdown-Code-Blöcke)
+        import re as _re
+        match = _re.search(r'\[.*?\]', result, _re.DOTALL)
+        if not match:
+            return []
+        import json as _json
+        keywords = _json.loads(match.group())
+        return [str(k).lower().strip() for k in keywords if k and str(k).strip()]
+    except Exception:
+        return []
+
+
 def generate_query_hypotheses(
     query: str,
     count: int = 3,

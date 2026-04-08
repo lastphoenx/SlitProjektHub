@@ -20,15 +20,15 @@ if (-not (Test-Path $pythonExe)) {
 # Laufende Instanzen auf Port 8000 und 8501 beenden
 Write-Host "Beende laufende Prozesse auf Port 8000/8501..." -ForegroundColor Yellow
 $port8000 = netstat -ano | Select-String ":8000\s" | ForEach-Object { ($_ -split "\s+")[-1] } | Select-Object -Unique
-foreach ($pid in $port8000) {
-    if ($pid -match "^\d+$" -and $pid -ne "0") {
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+foreach ($procId in $port8000) {
+    if ($procId -match "^\d+$" -and $procId -ne "0") {
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
     }
 }
 $port8501 = netstat -ano | Select-String ":8501\s" | ForEach-Object { ($_ -split "\s+")[-1] } | Select-Object -Unique
-foreach ($pid in $port8501) {
-    if ($pid -match "^\d+$" -and $pid -ne "0") {
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+foreach ($procId in $port8501) {
+    if ($procId -match "^\d+$" -and $procId -ne "0") {
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
     }
 }
 Start-Sleep -Seconds 1

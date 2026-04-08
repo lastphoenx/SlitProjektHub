@@ -1,6 +1,7 @@
 ﻿# backend/main.py - FastAPI Backend für SlitProjektHub
 from __future__ import annotations
 import json
+import logging
 import sys
 import os
 from pathlib import Path
@@ -12,6 +13,12 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+
+# ── Logging ────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s [%(name)s] %(message)s",
+)
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parents[1]

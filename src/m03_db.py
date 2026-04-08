@@ -158,6 +158,7 @@ class DocumentChunk(SQLModel, table=True):
     embedding: Optional[str] = None
     embedding_model: Optional[str] = None
     tokens_count: Optional[int] = None
+    retrieval_keywords: Optional[str] = None  # JSON-Array: LLM-generierte Suchbegriffe für BM25
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False, index=True)
@@ -374,6 +375,8 @@ def migrate_db() -> None:
             conn.execute(text("ALTER TABLE project ADD COLUMN embedding_model VARCHAR;"))
         if not _column_exists("project", "rag_priority_terms"):
             conn.execute(text("ALTER TABLE project ADD COLUMN rag_priority_terms TEXT;"))
+        if not _column_exists("document_chunk", "retrieval_keywords"):
+            conn.execute(text("ALTER TABLE document_chunk ADD COLUMN retrieval_keywords TEXT;"))
 
         # Projekt-spezifische Priority-Terms seeden (einmalig, nur wenn noch NULL)
         _UNISPORT_KEY = (

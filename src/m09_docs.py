@@ -7,6 +7,7 @@ import os
 import hashlib
 import json
 import math
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
@@ -45,6 +46,36 @@ S = get_settings()
 # Verzeichnis für hochgeladene Dokumente
 DOCS_DIR = Path(S.data_dir) / "rag" / "docs"
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _seed_keywords_for_document(doc_id: int, provider: str = "openai", model: str = "gpt-4o-mini") -> None:
+    """
+    Generiert retrieval_keywords für alle Chunks eines Dokuments (Background-Thread).
+    Überspringt Chunks die bereits Keywords haben (idempotent).
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        from .m08_llm import generate_chunk_keywords
+        with get_session() as ses:
+            chunks = ses.exec(
+                select(DocumentChunk)
+                .where(DocumentChunk.document_id == doc_id)
+                .where(DocumentChunk.retrieval_keywords == None)
+            ).all()
+
+        for chunk in chunks:
+            keywords = generate_chunk_keywords(chunk.chunk_text or "", provider=provider, model=model)
+            if keywords:
+                with get_session() as ses:
+                    db_chunk = ses.get(DocumentChunk, chunk.id)
+                    if db_chunk:
+                        db_chunk.retrieval_keywords = json.dumps(keywords, ensure_ascii=False)
+                        ses.add(db_chunk)
+                        ses.commit()
+        log.info("retrieval_keywords geseedet für doc_id=%s (%d Chunks)", doc_id, len(chunks))
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Keyword-Seeding fehlgeschlagen für doc_id=%s: %s", doc_id, exc)
 
 
 def calculate_sha256(file_bytes: bytes) -> str:
@@ -349,6 +380,14 @@ def ingest_document(
 
                 session2.commit()
                 clear_rag_cache()
+
+                # Keyword-Generierung im Hintergrund (nicht-blockend für Upload-Response)
+                threading.Thread(
+                    target=_seed_keywords_for_document,
+                    args=(doc.id,),
+                    daemon=True,
+                ).start()
+
                 return True, f"✅ CSV erfolgreich importiert: {doc.chunk_count} Fragen"
             elif text_content:
                 chunks = chunk_text(text_content, chunk_size=chunk_size)
@@ -378,6 +417,15 @@ def ingest_document(
 
                 session2.commit()
                 clear_rag_cache()
+
+                # Keyword-Generierung im Hintergrund (nicht-blockend für Upload-Response)
+                doc_id_for_kw = doc.id
+                threading.Thread(
+                    target=_seed_keywords_for_document,
+                    args=(doc_id_for_kw,),
+                    daemon=True,
+                ).start()
+
                 label = "neu importiert" if _reingest_doc is not None else "erfolgreich importiert"
                 return True, f"Dokument '{file_name}' {label} ({doc.chunk_count} Chunks, Chunk-Grösse: {chunk_size})."
             else:
