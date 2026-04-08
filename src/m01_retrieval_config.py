@@ -21,6 +21,7 @@ class BM25Config:
     idf_weight: float = 0.75
     priority_boost: float = 6.0
     min_token_length: int = 10
+    min_query_idf: float = 0.0
 
 
 @dataclass
@@ -115,6 +116,7 @@ class RetrievalConfig:
                 idf_weight=bm25_data.get('scoring', {}).get('idf_weight', 0.75),
                 priority_boost=bm25_data.get('scoring', {}).get('priority_boost', 6.0),
                 min_token_length=bm25_data.get('scoring', {}).get('min_token_length', 10),
+                min_query_idf=bm25_data.get('scoring', {}).get('min_query_idf', 0.0),
             )
             
             # Semantic Config

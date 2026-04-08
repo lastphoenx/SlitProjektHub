@@ -67,18 +67,38 @@
       <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
       Debug: BM25 / Semantic / Final Kandidaten
     </summary>
-    {% for section_key, section_label in [('keyword_candidates','BM25 Kandidaten'),('semantic_candidates','Semantic Kandidaten'),('final_candidates','Final (nach Deduplizierung)')] %}
+    {% if rag_debug.keyword_query and rag_debug.keyword_query != rag_debug.query %}
+    <div style="margin-top:.3rem;font-size:.68rem;color:var(--color-text-muted)">
+      <span style="font-weight:600">Query:</span> <span style="color:var(--color-text)">{{ rag_debug.query }}</span>
+      <span style="margin:0 .4rem;color:var(--color-border)">→</span>
+      <span style="font-weight:600">Distilliert:</span> <code style="font-size:.68rem;background:var(--color-surface-2);padding:.1rem .3rem;border-radius:3px">{{ rag_debug.keyword_query }}</code>
+    </div>
+    {% endif %}
+    {% for section_key, section_label in [('keyword_candidates','🟡 BM25 Kandidaten'),('semantic_candidates','🔵 Semantic Kandidaten'),('final_candidates','🟢 Final (nach Deduplizierung)')] %}
     {% if rag_debug.get(section_key) %}
-    <div style="margin-top:.5rem">
-      <div style="font-weight:600;color:var(--color-text-muted);font-size:.7rem;margin-bottom:.25rem">{{ section_label }}</div>
-      <table style="width:100%;border-collapse:collapse;font-size:.7rem">
+    <div style="margin-top:.55rem">
+      <div style="font-weight:700;font-size:.7rem;margin-bottom:.25rem;color:var(--color-text-muted)">{{ section_label }}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:.69rem;table-layout:fixed">
+        <colgroup>
+          <col style="width:22%">
+          <col style="width:12%">
+          <col style="width:6%">
+          <col style="width:6%">
+          <col style="width:6%">
+          <col style="width:7%">
+          <col style="width:6%">
+          <col style="width:6%">
+          <col style="width:5%">
+          <col style="width:24%">
+        </colgroup>
         <thead>
           <tr style="background:var(--color-surface-2)">
             <th class="th-sm">Datei</th>
+            <th class="th-sm" style="color:#7c3aed">Cls</th>
             <th class="th-sm">Comb</th>
             <th class="th-sm">Sem</th>
             <th class="th-sm">KW</th>
-            <th class="th-sm">Raw BM25</th>
+            <th class="th-sm">Raw</th>
             <th class="th-sm">IDF</th>
             <th class="th-sm">Cov</th>
             <th class="th-sm">Hits</th>
@@ -87,17 +107,28 @@
         </thead>
         <tbody>
           {% for d in rag_debug[section_key][:10] %}
+          {% set has_terms = d.matched_terms and d.matched_terms | length > 0 %}
+          {% set cls_disp = (d.classification or '')[:18] %}
+          {% set preview = d.text_preview or '' %}
           <tr>
-            <td class="td-sm" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ d.filename or '' }}">{{ d.filename or '?' }}</td>
+            <td class="td-sm" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600" title="{{ d.filename or '' }}">{{ d.filename or '?' }}</td>
+            <td class="td-sm" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7c3aed;font-size:.63rem" title="{{ d.classification or '' }}">{{ cls_disp }}</td>
             <td class="td-sm" style="font-weight:600">{{ "%.3f"|format(d.combined_score or 0) }}</td>
             <td class="td-sm">{{ "%.3f"|format(d.similarity or 0) }}</td>
             <td class="td-sm">{{ "%.3f"|format(d.normalized_match_score or 0) }}</td>
             <td class="td-sm">{{ "%.2f"|format(d.raw_bm25_score or 0) }}</td>
-            <td class="td-sm">{{ "%.3f"|format(d.keyword_idf_score or 0) }}</td>
+            <td class="td-sm">{{ "%.2f"|format(d.keyword_idf_score or 0) }}</td>
             <td class="td-sm">{{ "%.3f"|format(d.keyword_coverage or 0) }}</td>
             <td class="td-sm">{{ d.priority_hits or 0 }}</td>
-            <td class="td-sm" style="font-size:.65rem;color:var(--color-text-muted)">{{ (d.matched_terms or []) | join(', ') | truncate(40) }}</td>
+            <td class="td-sm" style="color:{% if has_terms %}#b45309{% else %}var(--color-text-muted){% endif %};font-size:.63rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ (d.matched_terms or []) | join(', ') }}">
+              {% if has_terms %}{{ d.matched_terms | join(', ') }}{% else %}<em>— sem</em>{% endif %}
+            </td>
           </tr>
+          {% if preview %}
+          <tr style="background:var(--color-surface-2)">
+            <td colspan="10" class="td-sm" style="color:var(--color-text-muted);font-size:.63rem;white-space:pre-wrap;word-break:break-word;border-top:none;padding-left:1rem;padding-bottom:.3rem">…{{ preview }}…</td>
+          </tr>
+          {% endif %}
           {% endfor %}
         </tbody>
       </table>

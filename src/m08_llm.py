@@ -381,12 +381,14 @@ def rewrite_query_for_retrieval(query: str, provider: str = "openai", model: str
         "Subunternehmen Verkabelung Zuständigkeit"
     """
     system_prompt = (
-        "Du bist ein Retrieval-Experte. Deine Aufgabe ist es, eine komplexe Nutzeranfrage "
-        "in eine kurze, präzise Suchanfrage für eine Dokumentensuche (RAG) umzuwandeln. "
-        "Entferne Höflichkeitsfloskeln, UI-Kontext (wie 'Frage von...') und fokussiere dich "
-        "auf die technischen Substantive und fachlichen Anforderungen. "
-        "Behalte wichtige Fachterme bei (z.B. Subunternehmen, Vergabeverfahren, BIM). "
-        "Antwort: Nur die optimierte Suchanfrage, keine Erklärung."
+        "Du bist ein Retrieval-Experte. Extrahiere aus der Nutzeranfrage das eigentliche THEMA "
+        "(was wird gefragt?), nicht den Rahmen der Frage. "
+        "Entferne: Höflichkeitsfloskeln, UI-Kontext ('Frage von...'), sowie alle Begriffe, die nur "
+        "das Dokument, das Verfahren oder den Fragekontext benennen – sie beschreiben WO die Frage "
+        "herkommt, nicht WORÜBER sie handelt. "
+        "Behalte: die konkreten fachlichen und technischen Substantive, welche das Thema der Frage "
+        "ausmachen. Keine projektspezifischen Annahmen – die Regel gilt für jedes Fachgebiet. "
+        "Antwort: Nur die optimierte Suchanfrage als Schlüsselwörter, keine Erklärung."
     )
     try:
         rewritten = try_models_with_messages(

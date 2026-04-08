@@ -24,25 +24,22 @@ bm25:
   # Stemming für deutsche Morphologie (z.B. "Subunternehmen" → "subunternehm")
   use_german_stemming: true
   
-  # Priority Boosting: Optionale Domain-spezifische Begriffe für Scoring-Boost
-  # PHASE 3: Nicht mehr hardcoded, sondern konfigurierbar
-  # Leer = keine Domain-Prioritäten (generisch)
-  priority_terms:
-    - "subunternehm"      # Subunternehmen/Subunternehmende
-    - "vergabe"           # Vergabeverfahren
-    - "konzern"           # Konzernstrukturen
-    - "hosting"           # Hosting-Dienste
-    - "cloud"             # Cloud-Betrieb
-    - "rechenzentrum"     # Rechenzentrum / Drittanbieter-Hosting
-    - "drittanbieter"     # Externer Anbieter
-    - "infrastruktur"     # Infrastrukturleistungen
+  # Priority Terms: globale Defaults für alle Projekte.
+  # LEER lassen — projekte-spezifische Terms gehören in die Datenbank (Project.rag_priority_terms).
+  # Nur hier eintragen wenn ein Term wirklich für JEDES Projekt relevant ist (z.B. "hosting", "cloud"
+  # sind typische Cross-Domain-Begriffe die in fast keinem Zieldokument stehen).
+  priority_terms: []
+
   
   # Scoring-Gewichte (für BM25-interne Berechnungen)
   scoring:
     coverage_weight: 2.0      # Keyword-Coverage Multiplikator
     idf_weight: 0.75          # IDF-Bonus Multiplikator
     priority_boost: 6.0       # Boost pro Priority-Term Hit
-    min_token_length: 4       # Min. Länge für Supporting Tokens (war 10, zu restriktiv für kurze Fachbegriffe)
+    min_token_length: 4       # Min. Länge für Supporting Tokens
+    min_query_idf: 0.0        # Wird nicht mehr verwendet; relativer 25%-Perzentil-Filter ersetzt dies.
+                              # 0.0 = deaktiviert. BM25Okapi IDF-Skala: 0=omnipräsent, >6=sehr selten.
+                              # 1.5 filtert Begriffe die in >40% aller Chunks vorkommen.
 
 # ==================== SEMANTIC SEARCH ====================
 semantic:

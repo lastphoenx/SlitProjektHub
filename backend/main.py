@@ -28,7 +28,7 @@ from src.m03_db import get_session, Project, Role, Task, Context
 from src.m08_llm import (providers_available, generate_role_text, generate_summary,
                           try_models_with_messages, get_available_models, AVAILABLE_MODELS,
                           generate_role_details, generate_project_details, generate_context_details,
-                          have_key, test_connection, DEFAULT_MODELS, rewrite_query_for_retrieval)
+                          have_key, test_connection, DEFAULT_MODELS)
 from src.m10_chat import (save_message, load_history, find_latest_session_for_project, build_project_map,
                            update_message_metadata, delete_message, delete_history, purge_history,
                            save_rag_feedback)
@@ -831,32 +831,15 @@ async def chat_send(
         except Exception:
             pass
 
-    # RAG retrieval — with optional query distillation
+    # RAG retrieval — distillation is handled centrally inside retrieve_relevant_chunks_hybrid
     rag_section = ""
     rag_sources: list[dict] = []
     rag_results: dict = {}
-    search_query = message.strip()
     if use_rag and project_key:
-        try:
-            from src.m01_retrieval_config import get_retrieval_config
-            rc = get_retrieval_config()
-            if rc.query.enable_distillation:
-                try:
-                    distilled = rewrite_query_for_retrieval(
-                        message.strip(),
-                        provider=rc.query.distillation_provider,
-                        model=rc.query.distillation_model,
-                    )
-                    if distilled:
-                        search_query = distilled
-                except Exception:
-                    pass
-        except Exception:
-            pass
         try:
             s = _load_settings_ctx()
             rag_results = retrieve_relevant_chunks_hybrid(
-                search_query,
+                message.strip(),
                 project_key=project_key,
                 limit=s.get("rag_top_k", 7),
                 threshold=s.get("rag_similarity_threshold", 0.45),
@@ -1347,7 +1330,7 @@ def _style_text(answer_style: str, answer_stance: str, answer_wording: str) -> s
         "(nur gemäss Rolle)": "",
         "Neutral": " Bei Interpretationsspielraum wäge objektiv ab.",
         "Wohlwollend (erlaubend)": " Bei Interpretationsspielraum entscheide zugunsten des Anbieters.",
-        "Restriktiv (ablehnend)": " Bei Interpretationsspielraum entscheide ablehnend.",
+        "Restriktiv (ablehnend)": ' Bei Interpretationsspielraum entscheide ablehnend: "ist nicht zulässig", "gilt als unzulässige Subbeauftragung", "wird abgelehnt".',
     }
     wording_map = {
         "(nur gemäss Rolle)": "",
@@ -2017,8 +2000,12 @@ async def batch_qa_stream(
                     parts = []
                     for bk, lbl in [("keyword_candidates","kw"),("semantic_candidates","sem"),("final_candidates","final")]:
                         for d in dbg.get(bk, [])[:5]:
+                            cls_short = (d.get("classification") or "")[:20]
+                            terms_str = ",".join(d.get("matched_terms") or []) or "—"
+                            preview = (d.get("text_preview") or d.get("text") or "")[:80].replace("\n", " ")
                             parts.append(
                                 f"[{lbl}] {d.get('filename','?')} "
+                                f"cls={cls_short} "
                                 f"comb={d.get('combined_score',0):.3f} "
                                 f"sem={d.get('similarity',0):.3f} "
                                 f"kw={d.get('normalized_match_score',0):.3f} "
@@ -2026,7 +2013,8 @@ async def batch_qa_stream(
                                 f"idf={d.get('keyword_idf_score',0):.3f} "
                                 f"cov={d.get('keyword_coverage',0):.3f} "
                                 f"hits={d.get('priority_hits',0)} "
-                                f"terms=[{','.join(d.get('matched_terms') or [])}]"
+                                f"terms=[{terms_str}] "
+                                f"preview=[{preview}]"
                             )
                     row["_RAG_Debug"] = " | ".join(parts)
                 except Exception as rag_err:

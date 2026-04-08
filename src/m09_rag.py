@@ -19,6 +19,10 @@ def _get_generate_query_hypotheses():
     from src.m08_llm import generate_query_hypotheses
     return generate_query_hypotheses
 
+def _get_rewrite_query():
+    from src.m08_llm import rewrite_query_for_retrieval
+    return rewrite_query_for_retrieval
+
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSION = 1536
@@ -519,9 +523,23 @@ def _keyword_search(
                     tokens.append(w)
             return tokens
 
-    # PHASE 3: Priority Terms aus Config laden (statt hardcoded)
+    # Priority Terms: globale Defaults aus YAML + projekt-spezifische aus DB (merged, dedupliziert)
     config = get_retrieval_config()
-    priority_parts = config.bm25.priority_terms
+    priority_parts: list[str] = list(config.bm25.priority_terms)
+    if project_key:
+        try:
+            with get_session() as _ps:
+                from sqlmodel import select as _sel
+                from src.m03_db import Project as _Project
+                _proj = _ps.exec(_sel(_Project).where(_Project.key == project_key)).first()
+                if _proj and _proj.rag_priority_terms:
+                    import json as _json
+                    _proj_terms = _json.loads(_proj.rag_priority_terms)
+                    for t in _proj_terms:
+                        if t not in priority_parts:
+                            priority_parts.append(t)
+        except Exception:
+            pass
 
     def _prepare_query_tokens(raw_query: str) -> list[str]:
         """Fokussiert lange UI-Fragen auf die inhaltlich relevanten Suchterme."""
@@ -605,7 +623,18 @@ def _keyword_search(
         if not query_tokens:
             # Fallback: wenn alle Wörter Stopwords sind, verwende Original
             query_tokens = [token for token in query.lower().split() if len(token) >= 3]
-        
+
+        # Relativer IDF-Noise-Filter: Query-Tokens im untersten 25%-IDF-Quartil
+        # haben wenig Unterscheidungskraft. Durch den relativen (nicht absoluten) Cutoff
+        # ist der Filter corpus-agnostisch und braucht keine manuelle Schwellenwert-Pflege.
+        # Mindestens 2 Tokens verbleiben (kein Query-Leerstand bei kurzen Queries).
+        if len(query_tokens) > 2:
+            idfs = sorted(bm25.idf.get(t, 0) for t in query_tokens)
+            cutoff = idfs[len(idfs) // 4]  # 25. Perzentil
+            filtered = [t for t in query_tokens if bm25.idf.get(t, cutoff + 1) > cutoff]
+            if len(filtered) >= 2:  # mind. 2 Tokens erhalten
+                query_tokens = filtered
+
         # BM25 Scores berechnen
         scores = bm25.get_scores(query_tokens)
         
@@ -830,10 +859,6 @@ def retrieve_relevant_chunks_hybrid(
 
     Returns: Dict mit kombinierten Ergebnissen
     """
-    cache_key = _get_cache_key(query, project_key, limit, threshold, exclude_classification)
-    if cache_key in _RAG_CACHE:
-        return _RAG_CACHE[cache_key]
-
     # PHASE 3: Config-basierte Schwellenwerte (statt Hardcoding)
     config = get_retrieval_config()
     guaranteed_threshold = config.hybrid.guaranteed_doc_threshold
@@ -843,7 +868,30 @@ def retrieve_relevant_chunks_hybrid(
     )
     max_per_doc = config.hybrid.max_chunks_per_document or max(2, limit // 2)
 
-    # 1. Semantic-Suche mit niedrigerer Entdeckungs-Schwelle
+    # Query Distillation: LLM destilliert lange Nutzerfragen zu präzisen Suchbegriffen.
+    # Nur für BM25-Suche — Semantic-Embedding profitiert vom vollen natürlichsprachlichen Text.
+    # Zentralisiert hier damit alle Aufrufer (Chat, Batch QA, Reports) automatisch profitieren.
+    keyword_query = query
+    if config.query.enable_distillation:
+        try:
+            distilled = _get_rewrite_query()(
+                query,
+                provider=config.query.distillation_provider,
+                model=config.query.distillation_model,
+            )
+            if distilled:
+                keyword_query = distilled
+        except Exception:
+            pass  # Fallback: Original-Query
+
+    # Cache-Check NACH Distillation: Key basiert auf keyword_query damit
+    # Distillations-Ergebnisse korrekt gecacht werden und keine pre-distillation
+    # Resultate aus dem Cache zurückgegeben werden.
+    cache_key = _get_cache_key(keyword_query, project_key, limit, threshold, exclude_classification)
+    if cache_key in _RAG_CACHE:
+        return _RAG_CACHE[cache_key]
+
+    # 1. Semantic-Suche mit niedrigerer Entdeckungs-Schwelle (Original-Query für Embeddings)
     semantic_results = retrieve_relevant_chunks(
         query, project_key, limit * 5, discovery_threshold,
         role_key=role_key,
@@ -851,9 +899,9 @@ def retrieve_relevant_chunks_hybrid(
         exclude_classification=exclude_classification
     )
 
-    # 2. Keyword-Suche mit grossem Limit (alle Dokumente abdecken)
+    # 2. Keyword-Suche mit grossem Limit (destillierte Query für BM25)
     keyword_docs = _keyword_search(
-        query, project_key, limit * 10,
+        keyword_query, project_key, limit * 10,
         role_key=role_key,
         classification_filter=classification_filter,
         exclude_classification=exclude_classification
@@ -869,7 +917,7 @@ def retrieve_relevant_chunks_hybrid(
         hyp_limit_kw  = max(limit * 5, 15)   # weniger als Standard (limit*10)
 
         hypotheses = _get_generate_query_hypotheses()(
-            query,
+            keyword_query,
             count=config.query.hypothesis_count,
             provider=config.query.distillation_provider,
             model=config.query.distillation_model
@@ -1081,6 +1129,7 @@ def retrieve_relevant_chunks_hybrid(
     semantic_results["documents"] = result_docs[:limit]
     semantic_results["debug"] = {
         "query": query,
+        "keyword_query": keyword_query,
         "semantic_candidates": [_debug_entry(d, "semantic") for d in semantic_debug_docs[:15]],
         "keyword_candidates": [_debug_entry(d, "keyword") for d in keyword_docs[:15]],
         "final_candidates": [_debug_entry(d, "final") for d in result_docs[:15]],

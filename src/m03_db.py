@@ -125,6 +125,7 @@ class Project(SQLModel, table=True):
     # RAG & Embeddings
     embedding: Optional[str] = None             # JSON-Array (Vektor-Embedding)
     embedding_model: Optional[str] = None       # z.B. "text-embedding-3-small"
+    rag_priority_terms: Optional[str] = None    # JSON-Array: Projekt-spezifische BM25-Priority-Terms
 
 class Document(SQLModel, table=True):
     __tablename__ = "document"
@@ -371,6 +372,26 @@ def migrate_db() -> None:
             conn.execute(text("ALTER TABLE project ADD COLUMN embedding TEXT;"))
         if not _column_exists("project", "embedding_model"):
             conn.execute(text("ALTER TABLE project ADD COLUMN embedding_model VARCHAR;"))
+        if not _column_exists("project", "rag_priority_terms"):
+            conn.execute(text("ALTER TABLE project ADD COLUMN rag_priority_terms TEXT;"))
+
+        # Projekt-spezifische Priority-Terms seeden (einmalig, nur wenn noch NULL)
+        _UNISPORT_KEY = (
+            "erweiterung-und-optimierung-der-kursverwaltungsl-sung-escada-f-r-unisport"
+            "-moderner-webauftritt-zahlungsabwicklung-und-portalerneuerung"
+        )
+        row = conn.execute(
+            text("SELECT rag_priority_terms FROM project WHERE \"key\" = :k"),
+            {"k": _UNISPORT_KEY},
+        ).fetchone()
+        if row is not None and row[0] is None:
+            conn.execute(
+                text("UPDATE project SET rag_priority_terms = :v WHERE \"key\" = :k"),
+                {
+                    "v": '["subunternehm","konzern","hosting","cloud","infrastruktur"]',
+                    "k": _UNISPORT_KEY,
+                },
+            )
         
         # Document table - neue Tabelle für Document Management
         if not _column_exists("document", "filename"):
