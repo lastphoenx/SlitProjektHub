@@ -27,9 +27,11 @@ from src.m07_contexts import list_contexts_df, load_context, upsert_context, sof
 from src.m03_db import get_session, Project, Role, Task, Context
 from src.m08_llm import (providers_available, generate_role_text, generate_summary,
                           try_models_with_messages, get_available_models, AVAILABLE_MODELS,
-                          generate_role_details, generate_project_details)
+                          generate_role_details, generate_project_details,
+                          have_key, test_connection, DEFAULT_MODELS)
 from src.m10_chat import save_message, load_history, find_latest_session_for_project, build_project_map
 from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results
+from src.m01_config import load_user_settings, save_user_settings
 from sqlmodel import select
 import uuid as _uuid
 
@@ -704,12 +706,12 @@ def _default_provider() -> str:
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request, project_key: str | None = None, provider: str | None = None):
     projects = _projects_list()
-    # Pick defaults
+    s = _load_settings_ctx()
     sel_project = project_key or (projects[0]["key"] if projects else "")
     providers = providers_available() or ["openai"]
-    sel_provider = provider or providers[0]
-    sel_model = get_available_models(sel_provider)[0] if get_available_models(sel_provider) else ""
-    # Find existing session for this project+provider
+    sel_provider = provider or s["provider"] or providers[0]
+    # Use saved model if it exists for this provider, else first available
+    saved_model = s["model"] if s["model"] in get_available_models(sel_provider) else (get_available_models(sel_provider)[0] if get_available_models(sel_provider) else "")
     session_id = ""
     if sel_project and sel_provider:
         session_id = find_latest_session_for_project(sel_provider, sel_project) or str(_uuid.uuid4())
@@ -719,7 +721,9 @@ async def chat_page(request: Request, project_key: str | None = None, provider: 
         "providers": providers,
         "sel_project": sel_project,
         "sel_provider": sel_provider,
-        "sel_model": sel_model,
+        "sel_model": saved_model,
+        "temperature": s["temperature"],
+        "rag_enabled": s["rag_enabled"],
         "session_id": session_id,
         "all_models_json": _all_models_json(),
         "active_page": "chat",
@@ -952,6 +956,88 @@ async def projects_ai_suggest(
   <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:inline;vertical-align:middle"><path d="M20 6L9 17l-5-5"/></svg>
   KI-Vorschlag eingefügt!
 </p>""")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# HTML Routes — KI-Einstellungen
+# ════════════════════════════════════════════════════════════════════════════
+
+def _load_settings_ctx() -> dict:
+    """Merge config defaults with user_settings.yaml overrides."""
+    from src.m01_config import get_settings as _gs
+    defaults = _gs().llm_defaults
+    user = load_user_settings()
+    merged = {**defaults, **user}
+    return {
+        "provider": merged.get("provider", "openai"),
+        "model": merged.get("model", "gpt-4o"),
+        "temperature": float(merged.get("temperature", 0.7)),
+        "rag_top_k": int(merged.get("rag_top_k", 5)),
+        "rag_chunk_size": int(merged.get("rag_chunk_size", 1000)),
+        "rag_similarity_threshold": float(merged.get("rag_similarity_threshold", 0.45)),
+        "rag_enabled": bool(merged.get("rag_enabled", True)),
+    }
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    ctx = _load_settings_ctx()
+    return templates.TemplateResponse("settings/index.html", {
+        "request": request,
+        "active_page": "settings",
+        "all_models_json": _all_models_json(),
+        "providers": ["openai", "anthropic", "mistral"],
+        "provider_status": {p: have_key(p) for p in ["openai", "anthropic", "mistral"]},
+        **ctx,
+    })
+
+
+@app.post("/settings", response_class=HTMLResponse)
+async def settings_save(
+    request: Request,
+    provider: str = Form("openai"),
+    model: str = Form(""),
+    temperature: float = Form(0.7),
+    rag_top_k: int = Form(5),
+    rag_chunk_size: int = Form(1000),
+    rag_similarity_threshold: float = Form(0.45),
+    rag_enabled: str = Form("false"),
+):
+    settings_dict = {
+        "provider": provider,
+        "model": model or DEFAULT_MODELS.get(provider, ""),
+        "temperature": round(temperature, 2),
+        "rag_top_k": rag_top_k,
+        "rag_chunk_size": rag_chunk_size,
+        "rag_similarity_threshold": round(rag_similarity_threshold, 3),
+        "rag_enabled": rag_enabled in ("true", "on", "1", "yes"),
+    }
+    save_user_settings(settings_dict)
+    response = templates.TemplateResponse("settings/index.html", {
+        "request": request,
+        "active_page": "settings",
+        "all_models_json": _all_models_json(),
+        "providers": ["openai", "anthropic", "mistral"],
+        "provider_status": {p: have_key(p) for p in ["openai", "anthropic", "mistral"]},
+        **settings_dict,
+        "saved": True,
+    })
+    response.headers["HX-Toast"] = json.dumps({"message": "Einstellungen gespeichert", "type": "success"})
+    return response
+
+
+@app.get("/settings/test-connection", response_class=HTMLResponse)
+async def settings_test_connection(request: Request, provider: str = "openai"):
+    ok, msg = test_connection(provider)
+    status = "success" if ok else "error"
+    icon = '<path d="M20 6L9 17l-5-5"/>' if ok else '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
+    color = "var(--color-success)" if ok else "var(--color-danger)"
+    label = f"Verbindung OK — {provider}" if ok else f"Fehler: {msg}"
+    return HTMLResponse(f"""
+<span style="color:{color};font-size:.82rem;display:flex;align-items:center;gap:.35rem">
+  <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">{icon}</svg>
+  {label}
+</span>""")
 
 
 # ════════════════════════════════════════════════════════════════════════════

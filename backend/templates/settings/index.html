@@ -1,0 +1,180 @@
+﻿{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">KI-Einstellungen</h1>
+    <p class="page-subtitle">Globale Standardwerte für Provider, Modell und RAG — gespeichert in <code>config/user_settings.yaml</code></p>
+  </div>
+</div>
+
+<div style="max-width:720px"
+     x-data="{
+       provider: '{{ provider }}',
+       model: '{{ model }}',
+       temperature: {{ temperature }},
+       rag_top_k: {{ rag_top_k }},
+       rag_chunk_size: {{ rag_chunk_size }},
+       rag_threshold: {{ rag_similarity_threshold }},
+       rag_enabled: {{ 'true' if rag_enabled else 'false' }},
+       allModels: {{ all_models_json | safe }},
+       get models() { return this.allModels[this.provider] || [] }
+     }">
+
+  <form hx-post="/settings"
+        hx-target="#settings-form-wrap"
+        hx-swap="innerHTML"
+        id="settings-form-wrap">
+
+  <!-- ── Provider & Modell ─────────────────────────────────────────── -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <h2 style="font-size:.95rem;font-weight:700;margin-bottom:1rem;display:flex;align-items:center;gap:.4rem">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Provider &amp; Modell
+    </h2>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+
+      <div>
+        <label class="form-label">KI-Provider</label>
+        <select name="provider" class="form-select" x-model="provider" @change="model = models[0] || ''">
+          {% for p in providers %}
+          <option value="{{ p }}" {% if p == provider %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+        <!-- Provider status badges -->
+        {% for p, configured in provider_status.items() %}
+        <span x-show="provider === '{{ p }}'"
+              style="font-size:.75rem;margin-top:.3rem;display:flex;align-items:center;gap:.25rem;color:{% if configured %}var(--color-success){% else %}var(--color-danger){% endif %}">
+          {% if configured %}
+          <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+          {{ p }} API-Key konfiguriert
+          {% else %}
+          <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          {{ p }} API-Key fehlt (.env)
+          {% endif %}
+        </span>
+        {% endfor %}
+      </div>
+
+      <div>
+        <label class="form-label">Modell</label>
+        <select name="model" class="form-select" x-model="model">
+          <template x-for="m in models" :key="m">
+            <option :value="m" :selected="m === model" x-text="m"></option>
+          </template>
+        </select>
+      </div>
+    </div>
+
+    <!-- Connection test -->
+    <div style="display:flex;align-items:center;gap:.75rem">
+      <button type="button" class="btn btn-secondary btn-sm"
+              :hx-get="'/settings/test-connection?provider=' + provider"
+              hx-target="#conn-test-result"
+              hx-swap="innerHTML"
+              hx-indicator="#conn-spinner">
+        <svg id="conn-spinner" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="htmx-indicator" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+        Verbindung testen
+      </button>
+      <span id="conn-test-result" style="font-size:.82rem"></span>
+    </div>
+  </div>
+
+  <!-- ── LLM-Parameter ─────────────────────────────────────────────── -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <h2 style="font-size:.95rem;font-weight:700;margin-bottom:1rem">LLM-Parameter</h2>
+
+    <div class="form-group">
+      <label class="form-label">
+        Temperatur: <strong x-text="temperature.toFixed(1)"></strong>
+        <span class="text-muted" style="font-weight:400;margin-left:.4rem;font-size:.78rem">(0 = präzise, 1 = kreativ)</span>
+      </label>
+      <input type="range" name="temperature" min="0" max="1" step="0.1"
+             x-model.number="temperature"
+             style="width:100%;max-width:320px" />
+    </div>
+  </div>
+
+  <!-- ── RAG-Einstellungen ─────────────────────────────────────────── -->
+  <div class="card" style="margin-bottom:1.5rem">
+    <h2 style="font-size:.95rem;font-weight:700;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem">
+      RAG-Einstellungen
+      <!-- RAG toggle -->
+      <span style="margin-left:auto;display:flex;align-items:center;gap:.5rem;font-weight:400;font-size:.82rem">
+        <span class="text-muted">RAG aktiv</span>
+        <label style="position:relative;display:inline-block;width:38px;height:20px;cursor:pointer">
+          <input type="checkbox" name="rag_enabled_check" x-model="rag_enabled"
+                 style="opacity:0;width:0;height:0">
+          <span :style="'display:block;position:absolute;inset:0;border-radius:20px;background:'+( rag_enabled ? 'var(--color-primary)' : 'var(--color-border)')+';transition:.25s'">
+            <span :style="'position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;transition:.25s;left:'+(rag_enabled?'21px':'3px')"></span>
+          </span>
+        </label>
+      </span>
+    </h2>
+
+    <!-- hidden field to submit boolean -->
+    <input type="hidden" name="rag_enabled" :value="rag_enabled ? 'true' : 'false'">
+
+    <div :style="rag_enabled ? '' : 'opacity:.4;pointer-events:none'">
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem">
+
+        <div class="form-group">
+          <label class="form-label">
+            RAG-Kontexte (Top-K): <strong x-text="rag_top_k"></strong>
+            <span class="text-muted" style="font-size:.75rem;font-weight:400"> Chunks</span>
+          </label>
+          <input type="range" name="rag_top_k" min="1" max="20" step="1"
+                 x-model.number="rag_top_k" style="width:100%" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">
+            Chunk-Größe: <strong x-text="rag_chunk_size"></strong>
+            <span class="text-muted" style="font-size:.75rem;font-weight:400"> Zeichen</span>
+          </label>
+          <input type="range" name="rag_chunk_size" min="200" max="4000" step="100"
+                 x-model.number="rag_chunk_size" style="width:100%" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">
+            Similarity-Threshold: <strong x-text="rag_threshold.toFixed(2)"></strong>
+          </label>
+          <input type="range" name="rag_similarity_threshold" min="0.1" max="0.9" step="0.05"
+                 x-model.number="rag_threshold" style="width:100%" />
+        </div>
+
+      </div>
+
+      <details style="margin-top:.75rem">
+        <summary class="text-muted" style="cursor:pointer;font-size:.8rem">Was bedeuten diese Werte?</summary>
+        <div style="font-size:.78rem;color:var(--color-text-muted);margin-top:.5rem;line-height:1.6">
+          <strong>RAG-Kontexte (Top-K):</strong> Wie viele Dokument-Chunks dem LLM als Kontext übergeben werden. Mehr = mehr Kontext, aber auch mehr Token-Verbrauch.<br>
+          <strong>Chunk-Größe:</strong> Wie groß ein Textabschnitt beim Ingestion ist (in Zeichen). Kleinere Chunks = präzisere Suche; grössere = mehr Zusammenhang.<br>
+          <strong>Similarity-Threshold:</strong> Mindest-Ähnlichkeitsscore (0–1) damit ein Chunk als Treffer gilt. Niedriger = mehr Treffer; höher = nur sehr relevante.
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ── Save button ───────────────────────────────────────────────── -->
+  <div style="display:flex;align-items:center;gap:1rem">
+    <button type="submit" class="btn btn-primary">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+      Einstellungen speichern
+    </button>
+    {% if saved is defined and saved %}
+    <span style="color:var(--color-success);font-size:.85rem;display:flex;align-items:center;gap:.3rem">
+      <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+      Gespeichert
+    </span>
+    {% endif %}
+  </div>
+
+  </form>
+</div>
+
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+{% endblock %}

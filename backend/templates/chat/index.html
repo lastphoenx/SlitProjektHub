@@ -5,8 +5,8 @@
   x-data="{
     provider: '{{ sel_provider }}',
     model: '{{ sel_model }}',
-    temperature: {{ '%.1f' | format(0.7) }},
-    rag: true,
+    temperature: {{ temperature | default(0.7) }},
+    rag: {{ 'true' if rag_enabled | default(true) else 'false' }},
     allModels: {{ all_models_json | safe }},
     get models() { return this.allModels[this.provider] || [] }
   }"
