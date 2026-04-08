@@ -313,10 +313,15 @@ window.__bqaProjects = {{ projects | tojson | safe }};
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       CSV herunterladen
     </button>
+    <button class="btn btn-secondary" @click="exportExcel()"
+            style="background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.4)">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      Excel herunterladen
+    </button>
   </div>
   <div style="font-size:.75rem;color:var(--color-text-muted);margin-top:.4rem">
-    Exportdatei enthält alle Spalten inkl. _RAG_Chunks und _RAG_Debug.
-    Dateiname: <code x-text="buildExportFilename()+'.csv'"></code>
+    CSV/Excel inkl. <code>_RAG_Chunks</code> und <code>_RAG_Debug</code> (im Excel auf Sheet 2).
+    Dateiname: <code x-text="buildExportFilename()+'.csv/.xlsx'"></code>
   </div>
 </div>
 
@@ -712,21 +717,53 @@ function batchQA() {
         .then(() => { document.getElementById('bqa-checkpoint').innerHTML = ''; });
     },
 
-    // Called from preview partial to run single LLM call
-    runPreviewLLM(sysp, userp) {
+    // Called from preview partial — always uses current settings (no stale textarea)
+    runPreviewAnswer() {
       const target = document.getElementById('bqa-preview-answer');
       if (!target) return;
       target.innerHTML = '<span class="text-muted small"><span class="spinner-sm"></span> Antwort wird generiert…</span>';
       const fd = new FormData();
-      fd.append('sys_prompt', sysp);
-      fd.append('user_prompt', userp);
+      fd.append('project_key', this.project_key);
+      fd.append('csv_doc_id', this.csv_doc_id);
+      fd.append('frage_nr', this.preview_nr);
+      fd.append('role_mode', this.role_mode);
+      fd.append('role_keys', this._getSelectedRoleKeys());
+      fd.append('use_project_context', this.use_project_context);
+      fd.append('answer_style', this.answer_style);
+      fd.append('answer_stance', this.answer_stance);
+      fd.append('answer_wording', this.answer_wording);
       fd.append('provider', this.$store.ki.provider);
       fd.append('model', this.$store.ki.model);
       fd.append('temperature', this.$store.ki.temperature);
-      fetch('/batch-qa/run-preview-llm', { method: 'POST', body: fd })
+      fd.append('rag_enabled', this.$store.ki.rag_enabled);
+      fd.append('rag_top_k', this.$store.ki.rag_top_k);
+      fd.append('rag_threshold', this.$store.ki.rag_similarity_threshold);
+      fetch('/batch-qa/run-preview-answer', { method: 'POST', body: fd })
         .then(r => r.text())
         .then(html => { target.innerHTML = html; })
         .catch(e => { target.innerHTML = `<span style="color:var(--color-danger)">Fehler: ${e}</span>`; });
+    },
+
+    exportExcel() {
+      if (!this.batch_results.length) return;
+      fetch('/batch-qa/export-excel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rows: this.batch_results,
+          filename: this.buildExportFilename(),
+        }),
+      })
+        .then(r => r.blob())
+        .then(blob => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = this.buildExportFilename() + '.xlsx';
+          a.click();
+          URL.revokeObjectURL(url);
+        })
+        .catch(e => alert('Excel-Export Fehler: ' + e));
     },
   };
 }

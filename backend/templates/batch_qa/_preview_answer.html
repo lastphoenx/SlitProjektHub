@@ -1,5 +1,13 @@
 ﻿<div style="background:var(--color-surface-2);border:1px solid var(--color-border);border-radius:.5rem;padding:.6rem .75rem;font-size:.82rem">
-  <strong style="color:var(--color-primary)">KI-Antwort</strong>
-  <span style="color:var(--color-text-muted);font-size:.72rem;margin-left:.5rem">via {{ used_model }}</span>
-  <div style="margin-top:.5rem;white-space:pre-wrap;line-height:1.5">{{ answer }}</div>
+  <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem">
+    <strong style="color:var(--color-primary)">KI-Antwort</strong>
+    <span style="color:var(--color-text-muted);font-size:.72rem">via {{ used_model }}</span>
+    {% if settings_summary %}
+    <span style="color:var(--color-text-muted);font-size:.72rem">· {{ settings_summary }}</span>
+    {% endif %}
+    {% if role_summary %}
+    <span style="color:var(--color-text-muted);font-size:.72rem">· Rolle: {{ role_summary }}</span>
+    {% endif %}
+  </div>
+  <div style="margin-top:.25rem;white-space:pre-wrap;line-height:1.5">{{ answer }}</div>
 </div>

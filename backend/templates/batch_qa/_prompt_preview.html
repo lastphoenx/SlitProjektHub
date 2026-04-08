@@ -107,17 +107,16 @@
   </details>
   {% endif %}
 
-  <!-- Run single LLM -->
+  <!-- Run single LLM with current settings (always fresh, not from textarea) -->
   <div>
     <button class="btn btn-secondary" style="font-size:.82rem"
-            onclick="
-              const sysp = document.getElementById('bqa-sys-prompt').value;
-              const userp = document.getElementById('bqa-user-prompt').value;
-              window.__bqa.runPreviewLLM(sysp, userp);
-            ">
+            onclick="window.__bqa.runPreviewAnswer()">
       <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
       KI-Antwort abrufen
     </button>
+    <span style="font-size:.72rem;color:var(--color-text-muted);margin-left:.5rem">
+      Verwendet immer die aktuellen Einstellungen (Stil, Rolle, RAG)
+    </span>
     <div id="bqa-preview-answer" style="margin-top:.6rem"></div>
   </div>
 

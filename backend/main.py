@@ -1619,6 +1619,257 @@ async def batch_qa_run_preview_llm(
     })
 
 
+@app.post("/batch-qa/run-preview-answer", response_class=HTMLResponse)
+async def batch_qa_run_preview_answer(
+    request: Request,
+    project_key: str = Form(""),
+    csv_doc_id: int = Form(0),
+    frage_nr: int = Form(1),
+    role_mode: str = Form("all_merged"),
+    role_keys: str = Form(""),
+    use_project_context: bool = Form(True),
+    answer_style: str = Form("Sachlich & präzise"),
+    answer_stance: str = Form("(nur gemäss Rolle)"),
+    answer_wording: str = Form("Klar & abschliessend"),
+    provider: str = Form("openai"),
+    model: str = Form(""),
+    temperature: float = Form(0.7),
+    rag_enabled: bool = Form(True),
+    rag_top_k: int = Form(5),
+    rag_threshold: float = Form(0.45),
+):
+    """
+    Rebuilds the system prompt from current settings and calls the LLM.
+    Always fresh — not dependent on stale textarea content.
+    """
+    style_txt = _style_text(answer_style, answer_stance, answer_wording)
+    sel_role_keys = [k.strip() for k in role_keys.split(",") if k.strip()]
+
+    # Load question
+    error = None
+    question_data = None
+    try:
+        rows = _load_bqa_questions(csv_doc_id)
+        chunks_by_nr: dict = {}
+        for cd in rows:
+            nr_raw = _get_csv_field(cd, "Nr")
+            try:
+                nr = int(float(str(nr_raw).strip()))
+            except Exception:
+                nr = str(nr_raw).strip()
+            chunks_by_nr[nr] = cd
+        question_data = chunks_by_nr.get(frage_nr) or chunks_by_nr.get(str(frage_nr))
+        if not question_data:
+            error = f"Frage Nr. {frage_nr} nicht gefunden."
+    except Exception as e:
+        error = str(e)
+
+    if error:
+        return HTMLResponse(f'<div style="color:var(--color-danger)">{error}</div>')
+
+    q_text = _get_csv_field(question_data, "Frage")
+    q_nr = _get_csv_field(question_data, "Nr", str(frage_nr))
+    q_lief = _get_csv_field(question_data, "Lieferant")
+
+    proj_ctx = ""
+    if use_project_context:
+        po, _ = load_project(project_key)
+        if po:
+            proj_ctx = f"\n\nPROJEKT: {po.title}\nBESCHREIBUNG: {po.description or '—'}"
+
+    # RAG
+    rag_ctx = ""
+    if rag_enabled:
+        try:
+            rr = retrieve_relevant_chunks_hybrid(
+                q_text, project_key=project_key,
+                limit=rag_top_k, threshold=rag_threshold,
+                exclude_classification="FAQ/Fragen-Katalog",
+            )
+            rr = deduplicate_results(rr)
+            rag_ctx = build_rag_context_from_search(rr)
+        except Exception:
+            pass
+
+    proj_roles = get_project_roles(project_key) or []
+    sel_roles = [r for r in proj_roles if r.key in sel_role_keys]
+
+    # Build system prompt
+    if role_mode == "none":
+        sys_p = (f"Du bist ein technischer Berater.\n\n{style_txt}{proj_ctx}"
+                 f"\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}"
+                 f"\n\nAUFGABE: Beantworte die Frage präzise.")
+    elif role_mode == "all_merged":
+        rc = "\n".join(f"- {r.title}: {r.description or ''}" for r in sel_roles)
+        sys_p = (f"Du bist ein technisches Berater-Team.\n\n{style_txt}{proj_ctx}"
+                 f"\n\nTEAM-PERSPEKTIVEN:\n{rc or '(keine Rollen gewählt)'}"
+                 f"\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}"
+                 f"\n\nAUFGABE: Beantworte kombiniert.")
+    elif role_mode == "single":
+        ro = sel_roles[0] if sel_roles else None
+        if ro:
+            sys_p = (f'Du bist Berater in der Rolle "{ro.title}".'
+                     f"\n\nDEINE ROLLE:\n{ro.description or ''}"
+                     f"\n\n{style_txt}{proj_ctx}"
+                     f"\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}"
+                     f"\n\nAUFGABE: Beantworte aus deiner Rollenperspektive.")
+        else:
+            sys_p = f"Du bist ein technischer Berater.\n\n{style_txt}{proj_ctx}\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}"
+    else:  # individual — first role for preview
+        ro = sel_roles[0] if sel_roles else None
+        if ro:
+            sys_p = (f'Du bist Berater in der Rolle "{ro.title}".'
+                     f"\n\nDEINE ROLLE:\n{ro.description or ''}"
+                     f"\n\n{style_txt}{proj_ctx}"
+                     f"\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}"
+                     f"\n\nAUFGABE: Beantworte aus deiner Rollenperspektive.")
+        else:
+            sys_p = f"Du bist ein technischer Berater.\n\n{style_txt}{proj_ctx}\n\nRELEVANTE DOKUMENTE:\n{rag_ctx or '(keine)'}"
+
+    user_p = f"Frage von {q_lief} (Nr. {q_nr}):\n{q_text}"
+
+    try:
+        used: list = []
+        answer = try_models_with_messages(
+            provider=provider, system=sys_p,
+            messages=[{"role": "user", "content": user_p}],
+            max_tokens=2000, temperature=temperature,
+            model=model or None, _used_model=used,
+        )
+        used_model = used[0] if used else model
+    except Exception as e:
+        return HTMLResponse(f'<div style="color:var(--color-danger)">LLM-Fehler: {e}</div>')
+
+    # Debug info to show settings used
+    settings_summary = f"{answer_style} · {answer_stance} · {answer_wording}"
+    role_summary = (
+        "Keine Rolle" if role_mode == "none"
+        else ("Alle: " + ", ".join(r.title for r in sel_roles) if role_mode == "all_merged"
+              else (sel_roles[0].title if sel_roles else "(keine Rolle gewählt)"))
+    )
+
+    return templates.TemplateResponse("batch_qa/_preview_answer.html", {
+        "request": request,
+        "answer": answer or "(Keine Antwort)",
+        "used_model": used_model,
+        "settings_summary": settings_summary,
+        "role_summary": role_summary,
+    })
+
+
+@app.post("/batch-qa/export-excel")
+async def batch_qa_export_excel(request: Request):
+    """Accept JSON body {rows: [...], filename: '...'} and return xlsx file."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+
+    rows: list[dict] = body.get("rows", [])
+    filename: str = body.get("filename", "batch_export") + ".xlsx"
+
+    if not rows:
+        raise HTTPException(400, "Keine Daten")
+
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    import io as _io
+
+    # Collect all column names, separate display vs debug
+    display_cols: list[str] = []
+    debug_cols: list[str] = []
+    seen: set = set()
+    for row in rows:
+        for k in row.keys():
+            if k not in seen:
+                seen.add(k)
+                if k.startswith("_"):
+                    debug_cols.append(k)
+                else:
+                    display_cols.append(k)
+
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: Hauptergebnisse ──────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "Ergebnisse"
+
+    header_fill = PatternFill("solid", fgColor="363E4A")
+    header_font = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
+    answer_fill = PatternFill("solid", fgColor="1E293B")
+    alt_fill = PatternFill("solid", fgColor="0F172A")
+    normal_fill = PatternFill("solid", fgColor="1A2234")
+    thin = Side(style="thin", color="2D3748")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Header row
+    for ci, col in enumerate(display_cols, 1):
+        cell = ws1.cell(row=1, column=ci, value=col)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(wrap_text=False, vertical="center")
+        cell.border = border
+
+    # Data rows
+    for ri, row in enumerate(rows, 2):
+        fill = alt_fill if ri % 2 == 0 else normal_fill
+        for ci, col in enumerate(display_cols, 1):
+            val = row.get(col, "")
+            cell = ws1.cell(row=ri, column=ci, value=val)
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            cell.border = border
+            # Highlight answer columns
+            if col.startswith("Antwort"):
+                cell.fill = answer_fill
+            else:
+                cell.fill = fill
+
+    # Auto column widths (capped)
+    for ci, col in enumerate(display_cols, 1):
+        max_w = len(col) + 2
+        for row in rows:
+            v = str(row.get(col, ""))
+            # Use first line only for width
+            line_len = len(v.split("\n")[0])
+            max_w = max(max_w, min(line_len, 80))
+        ws1.column_dimensions[get_column_letter(ci)].width = min(max_w + 2, 80)
+
+    ws1.freeze_panes = "A2"
+    ws1.row_dimensions[1].height = 22
+
+    # ── Sheet 2: RAG Debug ────────────────────────────────────────────────
+    if debug_cols:
+        ws2 = wb.create_sheet("RAG Debug")
+        all_debug_cols = ["Nr", "Lieferant"] + debug_cols
+        for ci, col in enumerate(all_debug_cols, 1):
+            cell = ws2.cell(row=1, column=ci, value=col)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(vertical="center")
+            cell.border = border
+        for ri, row in enumerate(rows, 2):
+            for ci, col in enumerate(all_debug_cols, 1):
+                val = row.get(col, "")
+                cell = ws2.cell(row=ri, column=ci, value=val)
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+                cell.border = border
+        for ci, col in enumerate(all_debug_cols, 1):
+            ws2.column_dimensions[get_column_letter(ci)].width = 12 if col in ("Nr", "Lieferant") else 60
+        ws2.freeze_panes = "A2"
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    from fastapi.responses import Response
+    return Response(
+        content=buf.read(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/batch-qa/checkpoint-info", response_class=HTMLResponse)
 async def batch_qa_checkpoint_info(
     request: Request,
