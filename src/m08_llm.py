@@ -371,35 +371,53 @@ def providers_available() -> list[str]:
 
 def rewrite_query_for_retrieval(query: str, provider: str = "openai", model: str = "gpt-4o-mini") -> str:
     """
-    Transformiert eine konversationelle Nutzerfrage in eine optimierte Such-Query.
-    Eliminiert UI-Wrapper und fokussiert auf technische Kernbegriffe.
+    Destilliert eine Nutzerfrage auf ihre Signal-Keywords für BM25-Retrieval.
+    Verwendet denselben Signal/Noise-Ansatz wie generate_chunk_keywords():
+    Nur Begriffe, die den Kern der Frage EINDEUTIG benennen — kein Dokumentkontext,
+    keine Verfahrensbegriffe, keine omnipräsenten Rahmenwörter.
 
-    Phase 1 Query Distillation für RAG-Optimierung.
+    Returns: Leerzeichen-getrennte Keyword-Liste (lowercase), oder Original bei Fehler.
 
     Example:
-        >>> rewrite_query_for_retrieval("Frage von Max: Welche Subunternehmen sind für die Verkabelung zuständig?")
-        "Subunternehmen Verkabelung Zuständigkeit"
+        >>> rewrite_query_for_retrieval("In den Ausschreibungsunterlagen wird Subunternehmen untersagt...")
+        "subunternehmen konzernverbund tochtergesellschaft konzernprivilegierung"
     """
+    import json as _json
     system_prompt = (
-        "Du bist ein Retrieval-Experte. Extrahiere aus der Nutzeranfrage das eigentliche THEMA "
-        "(was wird gefragt?), nicht den Rahmen der Frage. "
-        "Entferne: Höflichkeitsfloskeln, UI-Kontext ('Frage von...'), sowie alle Begriffe, die nur "
-        "das Dokument, das Verfahren oder den Fragekontext benennen – sie beschreiben WO die Frage "
-        "herkommt, nicht WORÜBER sie handelt. "
-        "Behalte: die konkreten fachlichen und technischen Substantive, welche das Thema der Frage "
-        "ausmachen. Keine projektspezifischen Annahmen – die Regel gilt für jedes Fachgebiet. "
-        "Antwort: Nur die optimierte Suchanfrage als Schlüsselwörter, keine Erklärung."
+        "Du bist ein Experte fuer Informations-Retrieval. Aus einer Frage extrahierst du "
+        "genau die Begriffe, die das KERNTHEMA dieser Frage benennen -- und nur die.\n\n"
+        "SIGNAL vs. RAUSCHEN:\n"
+        "RAUSCHEN (nie als Keyword): Omnipraesente Woerter, die in fast jeder Frage des Korpus "
+        "vorkommen -- z.B. Dokumenttypen (Pflichtenheft, Ausschreibung, Anhang), "
+        "Verfahrensbegriffe (Anfrage, Klaerung, Verbot, Regelung), "
+        "Kapitelreferenzen (Kap. 2.1), Projektnamen.\n"
+        "SIGNAL (als Keyword): Die spezifischen Fachbegriffe, technischen Konzepte oder "
+        "rechtlichen Tatbestaende, um die es in der Frage KONKRET geht.\n\n"
+        "ANALOGIE -- Frage in einem Werkstatthandbuch-Forum: "
+        "'Laut Handbuch Abschnitt 3.2 soll man beim Golf 4 die Zuendkerzen wechseln. "
+        "Gilt das auch fuer den Polo 6N?'\n"
+        "Keywords: ['zuendkerzen', 'wechseln', 'polo 6n']\n"
+        "Verboten: ['handbuch', 'abschnitt', 'gilt', 'laut']\n\n"
+        "Antworte NUR mit einem JSON-Array aus 3-6 deutschen Strings (lowercase). "
+        "Keine Erklaerung."
     )
     try:
-        rewritten = try_models_with_messages(
+        result = try_models_with_messages(
             provider=provider,
             system=system_prompt,
-            messages=[{"role": "user", "content": query}],
-            max_tokens=100,
+            messages=[{"role": "user", "content": query[:1500]}],
+            max_tokens=80,
             temperature=0.0,
-            model=model
+            model=model,
         )
-        return (rewritten or query).strip()
+        if not result:
+            return query
+        match = re.search(r'\[.*?\]', result, re.DOTALL)
+        if not match:
+            return query
+        keywords = _json.loads(match.group())
+        cleaned = [str(k).lower().strip() for k in keywords if k and str(k).strip()]
+        return " ".join(cleaned) if cleaned else query
     except Exception:
         return query
 
