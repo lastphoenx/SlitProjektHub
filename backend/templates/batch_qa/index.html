@@ -1026,8 +1026,8 @@ function batchQA() {
         Object.keys(row).forEach(k => { if (!seen.has(k)) { seen.add(k); allKeys.push(k); } });
       });
       const esc = v => '"' + String(v || '').replace(/"/g, '""') + '"';
-      const header = allKeys.map(esc).join(',');
-      const rows = this.batch_results.map(row => allKeys.map(k => esc(row[k] || '')).join(','));
+      const header = allKeys.map(esc).join(';');
+      const rows = this.batch_results.map(row => allKeys.map(k => esc(row[k] || '')).join(';'));
       const csvContent = [header, ...rows].join('\r\n');
       const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
@@ -1104,7 +1104,10 @@ function batchQA() {
           filename: this.buildExportFilename(),
         }),
       })
-        .then(r => r.blob())
+        .then(r => {
+          if (!r.ok) return r.text().then(t => { throw new Error('Server-Fehler ' + r.status + ': ' + t.slice(0, 200)); });
+          return r.blob();
+        })
         .then(blob => {
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');

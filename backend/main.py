@@ -1932,103 +1932,127 @@ async def batch_qa_export_excel(request: Request):
     if not rows:
         raise HTTPException(400, "Keine Daten")
 
+    import traceback as _traceback
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
     import io as _io
 
-    # Collect all column names, separate display vs debug
-    display_cols: list[str] = []
-    debug_cols: list[str] = []
-    seen: set = set()
-    for row in rows:
-        for k in row.keys():
-            if k not in seen:
-                seen.add(k)
-                if k.startswith("_"):
-                    debug_cols.append(k)
-                else:
-                    display_cols.append(k)
-
-    wb = openpyxl.Workbook()
-
-    # ── Sheet 1: Hauptergebnisse ──────────────────────────────────────────
-    ws1 = wb.active
-    ws1.title = "Ergebnisse"
-
-    header_fill = PatternFill("solid", fgColor="363E4A")
-    header_font = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
-    answer_fill = PatternFill("solid", fgColor="1E293B")
-    alt_fill = PatternFill("solid", fgColor="0F172A")
-    normal_fill = PatternFill("solid", fgColor="1A2234")
-    thin = Side(style="thin", color="2D3748")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-    # Header row
-    for ci, col in enumerate(display_cols, 1):
-        cell = ws1.cell(row=1, column=ci, value=col)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(wrap_text=False, vertical="center")
-        cell.border = border
-
-    # Data rows
-    for ri, row in enumerate(rows, 2):
-        fill = alt_fill if ri % 2 == 0 else normal_fill
-        for ci, col in enumerate(display_cols, 1):
-            val = row.get(col, "")
-            cell = ws1.cell(row=ri, column=ci, value=val)
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
-            cell.border = border
-            # Highlight answer columns
-            if col.startswith("Antwort"):
-                cell.fill = answer_fill
-            else:
-                cell.fill = fill
-
-    # Auto column widths (capped)
-    for ci, col in enumerate(display_cols, 1):
-        max_w = len(col) + 2
+    try:
+        # Collect all column names, separate display vs debug
+        display_cols: list[str] = []
+        debug_cols: list[str] = []
+        seen: set = set()
         for row in rows:
-            v = str(row.get(col, ""))
-            # Use first line only for width
-            line_len = len(v.split("\n")[0])
-            max_w = max(max_w, min(line_len, 80))
-        ws1.column_dimensions[get_column_letter(ci)].width = min(max_w + 2, 80)
+            for k in row.keys():
+                if k not in seen:
+                    seen.add(k)
+                    if k == "_RAG_Warning":
+                        pass  # added after other display cols below
+                    elif k.startswith("_"):
+                        debug_cols.append(k)
+                    else:
+                        display_cols.append(k)
+        # Always show RAG warning in main sheet (last column)
+        has_warning_col = any("_RAG_Warning" in row for row in rows)
+        if has_warning_col:
+            display_cols.append("_RAG_Warning")
 
-    ws1.freeze_panes = "A2"
-    ws1.row_dimensions[1].height = 22
+        wb = openpyxl.Workbook()
 
-    # ── Sheet 2: RAG Debug ────────────────────────────────────────────────
-    if debug_cols:
-        ws2 = wb.create_sheet("RAG Debug")
-        all_debug_cols = ["Nr", "Lieferant"] + debug_cols
-        for ci, col in enumerate(all_debug_cols, 1):
-            cell = ws2.cell(row=1, column=ci, value=col)
+        # ── Sheet 1: Hauptergebnisse ──────────────────────────────────────────
+        ws1 = wb.active
+        ws1.title = "Ergebnisse"
+
+        header_fill = PatternFill("solid", fgColor="2F5496")
+        header_font = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
+        answer_fill = PatternFill("solid", fgColor="DEEAF1")
+        warning_fill = PatternFill("solid", fgColor="FFF2CC")
+        warning_font = Font(name="Calibri", size=10, color="7F6000")
+        alt_fill = PatternFill("solid", fgColor="F2F2F2")
+        normal_fill = PatternFill("solid", fgColor="FFFFFF")
+        thin = Side(style="thin", color="BFBFBF")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        # Header row
+        for ci, col in enumerate(display_cols, 1):
+            cell = ws1.cell(row=1, column=ci, value=col)
             cell.font = header_font
             cell.fill = header_fill
-            cell.alignment = Alignment(vertical="center")
+            cell.alignment = Alignment(wrap_text=False, vertical="center")
             cell.border = border
+
+        # Data rows
         for ri, row in enumerate(rows, 2):
-            for ci, col in enumerate(all_debug_cols, 1):
+            fill = alt_fill if ri % 2 == 0 else normal_fill
+            for ci, col in enumerate(display_cols, 1):
                 val = row.get(col, "")
-                cell = ws2.cell(row=ri, column=ci, value=val)
+                if not isinstance(val, (str, int, float, bool, type(None))):
+                    val = str(val)
+                cell = ws1.cell(row=ri, column=ci, value=val)
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
                 cell.border = border
-        for ci, col in enumerate(all_debug_cols, 1):
-            ws2.column_dimensions[get_column_letter(ci)].width = 12 if col in ("Nr", "Lieferant") else 60
-        ws2.freeze_panes = "A2"
+                if col == "_RAG_Warning":
+                    if val:
+                        cell.fill = warning_fill
+                        cell.font = warning_font
+                    else:
+                        cell.fill = normal_fill
+                elif col.startswith("Antwort"):
+                    cell.fill = answer_fill
+                else:
+                    cell.fill = fill
 
-    buf = _io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+        # Auto column widths (capped)
+        for ci, col in enumerate(display_cols, 1):
+            max_w = len(col) + 2
+            for row in rows:
+                v = str(row.get(col, ""))
+                line_len = len(v.split("\n")[0])
+                max_w = max(max_w, min(line_len, 80))
+            ws1.column_dimensions[get_column_letter(ci)].width = min(max_w + 2, 80)
 
-    from fastapi.responses import Response
-    return Response(
-        content=buf.read(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+        ws1.freeze_panes = "A2"
+        ws1.row_dimensions[1].height = 22
+
+        # ── Sheet 2: RAG Debug ────────────────────────────────────────────────
+        if debug_cols:
+            ws2 = wb.create_sheet("RAG Debug")
+            debug_header_fill = PatternFill("solid", fgColor="375623")
+            all_debug_cols = ["Nr", "Lieferant"] + debug_cols
+            for ci, col in enumerate(all_debug_cols, 1):
+                cell = ws2.cell(row=1, column=ci, value=col)
+                cell.font = header_font
+                cell.fill = debug_header_fill
+                cell.alignment = Alignment(vertical="center")
+                cell.border = border
+            for ri, row in enumerate(rows, 2):
+                for ci, col in enumerate(all_debug_cols, 1):
+                    val = row.get(col, "")
+                    if not isinstance(val, (str, int, float, bool, type(None))):
+                        val = str(val)
+                    cell = ws2.cell(row=ri, column=ci, value=val)
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+                    cell.border = border
+            for ci, col in enumerate(all_debug_cols, 1):
+                ws2.column_dimensions[get_column_letter(ci)].width = 12 if col in ("Nr", "Lieferant") else 60
+            ws2.freeze_panes = "A2"
+
+        buf = _io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        from fastapi.responses import Response
+        return Response(
+            content=buf.read(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.error("Excel-Export fehlgeschlagen: %s\n%s", exc, _traceback.format_exc())
+        raise HTTPException(500, f"Excel-Generierung fehlgeschlagen: {exc}")
 
 
 @app.post("/batch-qa/checkpoint-info", response_class=HTMLResponse)
