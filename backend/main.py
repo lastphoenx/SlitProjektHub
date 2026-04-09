@@ -1364,6 +1364,60 @@ def _load_bqa_questions(csv_doc_id: int) -> list[dict]:
     return rows
 
 
+def _parse_question_selection(selection_str: str, total_questions: int) -> set[int]:
+    """
+    Parse question selection string to 0-based index set.
+    
+    Syntax:
+    - "all" or "" → all questions
+    - "1-20" → questions 1 through 20 (inclusive)
+    - "1-20,25,51-105" → ranges and individual questions
+    
+    Returns:
+        Set of 0-based indices
+    
+    Raises:
+        ValueError: if syntax invalid or out of bounds
+    """
+    if not selection_str or selection_str.lower() == "all":
+        return set(range(total_questions))
+    
+    selected_indices: set[int] = set()
+    parts = [p.strip() for p in selection_str.split(",")]
+    
+    for part in parts:
+        if "-" in part:
+            # Range
+            try:
+                start_str, end_str = part.split("-", 1)
+                start = int(start_str.strip())
+                end = int(end_str.strip())
+            except ValueError:
+                raise ValueError(f"Ungültige Bereichs-Syntax: '{part}' (erwartet: 'Start-Ende')")
+            
+            if start < 1 or end > total_questions:
+                raise ValueError(f"Bereich {start}-{end} außerhalb gültiger Fragen (1-{total_questions})")
+            if start > end:
+                raise ValueError(f"Ungültiger Bereich: {start}-{end} (Start > Ende)")
+            
+            # Add all indices in range (convert 1-based to 0-based)
+            for i in range(start - 1, end):
+                selected_indices.add(i)
+        else:
+            # Single number
+            try:
+                num = int(part.strip())
+            except ValueError:
+                raise ValueError(f"Ungültige Fragennummer: '{part}' (muss Zahl sein)")
+            
+            if num < 1 or num > total_questions:
+                raise ValueError(f"Frage {num} außerhalb gültiger Fragen (1-{total_questions})")
+            
+            selected_indices.add(num - 1)  # Convert to 0-based
+    
+    return selected_indices
+
+
 @app.get("/batch-qa", response_class=HTMLResponse)
 async def batch_qa_page(request: Request):
     s = _load_settings_ctx()
@@ -1533,7 +1587,7 @@ async def batch_qa_prompt_preview(
                 for d in docs
             ) or "(keine passenden Chunks)"
             rag_diagnostics = get_all_documents_with_best_scores(
-                q_text, project_key=project_key,
+                (rag_debug or {}).get('keyword_query', q_text), project_key=project_key,
                 threshold=rag_threshold,
                 exclude_classification="FAQ/Fragen-Katalog",
             )
@@ -1911,6 +1965,7 @@ async def batch_qa_stream(
     rag_enabled: bool = True,
     rag_top_k: int = 5,
     rag_threshold: float = 0.45,
+    question_selection: str = "all",
 ):
     """
     SSE stream for batch execution. Events:
@@ -1926,6 +1981,7 @@ async def batch_qa_stream(
         "project": project_key, "csv_id": str(csv_doc_id),
         "provider": provider, "model": model,
         "role_mode": role_mode, "roles": sorted(sel_role_keys),
+        "question_selection": question_selection,
     }
     cp_path = _pathlib.Path("data") / f"batch_checkpoint_{project_key}_{csv_doc_id}.json"
 
@@ -1938,6 +1994,21 @@ async def batch_qa_stream(
             return
         if not questions:
             yield f"event: error\ndata: {json.dumps({'message': 'Keine Fragen in der CSV gefunden.'})}\n\n"
+            return
+        
+        # ── Parse question selection ───────────────────────────────────────
+        try:
+            selected_indices = _parse_question_selection(question_selection, len(questions))
+        except ValueError as e:
+            yield f"event: error\ndata: {json.dumps({'message': f'Ungültige Fragen-Auswahl: {e}'})}\n\n"
+            return
+        
+        # Create mapping: original_index -> question_data
+        questions_map = {idx: q for idx, q in enumerate(questions)}
+        selected_questions = [(idx, questions_map[idx]) for idx in sorted(selected_indices)]
+        
+        if not selected_questions:
+            yield f"event: error\ndata: {json.dumps({'message': 'Keine Fragen ausgewählt.'})}\n\n"
             return
 
         # ── Checkpoint resume ──────────────────────────────────────────────
@@ -1953,10 +2024,11 @@ async def batch_qa_stream(
                             and sm.get("provider") == provider
                             and sm.get("model") == model
                             and sm.get("role_mode") == role_mode
-                            and sorted(sm.get("roles", [])) == sorted(sel_role_keys)):
+                            and sorted(sm.get("roles", [])) == sorted(sel_role_keys)
+                            and sm.get("question_selection", "all") == question_selection):
                         results = saved["results"]
                         resume_from = len(results)
-                        yield f"event: resume\ndata: {json.dumps({'from': resume_from, 'total': len(questions)})}\n\n"
+                        yield f"event: resume\ndata: {json.dumps({'from': resume_from, 'total': len(selected_questions)})}\n\n"
             except Exception:
                 pass
 
@@ -1973,17 +2045,17 @@ async def batch_qa_stream(
         proj_roles = get_project_roles(project_key) or []
 
         # ── Per-question loop ──────────────────────────────────────────────
-        for idx, q_data in enumerate(questions):
-            if idx < resume_from:
+        for enum_idx, (original_idx, q_data) in enumerate(selected_questions):
+            if enum_idx < resume_from:
                 continue
             if await request.is_disconnected():
                 return
 
             q_text = _get_csv_field(q_data, "Frage", "")
-            nr = _get_csv_field(q_data, "Nr", str(idx + 1))
+            nr = _get_csv_field(q_data, "Nr", str(original_idx + 1))
             lieferant = _get_csv_field(q_data, "Lieferant", "")
 
-            yield f"event: progress\ndata: {json.dumps({'current': idx+1, 'total': len(questions), 'nr': nr, 'lieferant': lieferant})}\n\n"
+            yield f"event: progress\ndata: {json.dumps({'current': enum_idx+1, 'total': len(selected_questions), 'nr': nr, 'lieferant': lieferant})}\n\n"
 
             row: dict = {"Nr": nr, "Lieferant": lieferant, "Frage": q_text}
 

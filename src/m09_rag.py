@@ -395,6 +395,31 @@ def _get_spacy_nlp():
 # Lazy-init für compound_split (einmalig laden)
 _COMPOUND_SPLIT_AVAILABLE: bool | None = None
 
+def _german_stem(lemma: str) -> str:
+    """
+    Einfacher deutscher Suffix-Stemmer für morphologische Varianten.
+    
+    Entfernt häufige Endungen die spaCy-Lemmatisierung nicht vereinheitlicht:
+    - Partizipformen: anbieten**d** → anbiet, subunternehmen**d** → subunternehm
+    - Nominalisierungen: anbieten**de** → anbiet
+    - Stammformen: anbiete**e** → anbiet (seltener)
+    
+    Wird NACH spaCy-Lemmatisierung angewendet, um morphologische Lücken zu schließen.
+    So matchen "Anbieter" und "Anbietende", "Subunternehmen" und "Subunternehmende".
+    """
+    if len(lemma) < 5:  # Zu kurze Wörter nicht stemmen
+        return lemma
+    
+    # Suffix-Regeln: längste zuerst (greedy matching)
+    for suffix in ['ende', 'end', 'e']:
+        if lemma.endswith(suffix):
+            stem = lemma[:-len(suffix)]
+            if len(stem) >= 4:  # Stamm muss sinnvoll lang sein
+                return stem
+    
+    return lemma
+
+
 def _decompound(lemma: str) -> list[str]:
     """
     Zerlegt ein deutsches Kompositum in seine Bestandteile (zusätzlich zum Originalwort).
@@ -437,6 +462,69 @@ def _decompound(lemma: str) -> list[str]:
     return parts_lower
 
 
+# Stopwords: häufige, bedeutungsarme Wörter (Modul-Level für Wiederverwendung)
+_STOPWORDS = {
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "eines",
+    "und", "oder", "aber", "mit", "von", "zu", "bei", "für", "auf", "an", "in",
+    "ich", "du", "er", "sie", "es", "wir", "ihr", "ist", "sind", "war", "waren",
+    "wird", "werden", "hat", "haben", "kann", "können", "soll", "sollte", "muss",
+    "wie", "was", "wer", "wo", "wann", "warum", "welche", "welcher", "welches",
+    "bitte", "antworten", "antwort", "frage", "anbieter", "hier", "kurz", "bündig",
+    "betrifft", "konkret", "gilt", "gelten", "stellt", "stelltsich", "nutzung",
+    "interner", "interne", "unserer", "unsere", "unser", "einer", "einem", "einen"
+}
+
+
+def _tokenize_text(text: str) -> list[str]:
+    """
+    Tokenisiert Text via spaCy-Lemmatisierung (de_core_news_sm).
+    
+    - Volltext-Analyse mit POS-Tagging für kontextuelle Lemmas
+    - Lowercase Lemmas
+    - Stopwords (spaCy + custom) raus
+    - Nur Alpha-Tokens, min 3 Zeichen
+    - Fallback auf einfaches Suffix-Stemming wenn spaCy nicht verfügbar
+    
+    Diese Funktion wird sowohl von BM25-Suche als auch von der Debug-Anzeige verwendet.
+    """
+    import re
+    nlp = _get_spacy_nlp()
+    
+    if nlp is not None:
+        # spaCy-Pfad: Volltext → POS + Lemma → Suffix-Stemming
+        doc = nlp(text[:25000])  # Safety-Cap für sehr lange Chunks
+        tokens = []
+        for token in doc:
+            # Erweiterte Prüfung: Alpha ODER Alphanumerisch (ISO9001, 24/7, SLA-1)
+            # Entfernt Bindestriche/Slashes temporär für .isalnum() Check
+            token_clean = token.text.replace('-', '').replace('/', '')
+            if not (token.is_alpha or token_clean.isalnum()):
+                continue
+            lemma = token.lemma_.lower()
+            if len(lemma) < 2:  # Reduziert von 3 auf 2 für Codes wie "V1"
+                continue
+            if lemma in _STOPWORDS or token.is_stop:
+                continue
+            # Suffix-Stemming für morphologische Varianten (Partizipien etc.)
+            stemmed = _german_stem(lemma)
+            tokens.append(stemmed)
+            # Decompounding: nur bei Nomen/Eigennamen (Komposita sind im Deutschen
+            # fast ausschliesslich Substantive; verhindert seltsame Verb-Splits)
+            if token.pos_ in ("NOUN", "PROPN"):
+                for part in _decompound(stemmed):
+                    if part not in _STOPWORDS and part not in tokens:
+                        tokens.append(part)
+        return tokens
+    else:
+        # Fallback: einfaches Regex-Stemming (kein spaCy verfügbar)
+        words = re.findall(r'\b[a-zA-ZäöüÄÖÜß]+\b', text.lower())
+        tokens = []
+        for w in words:
+            if len(w) >= 3 and w not in _STOPWORDS:
+                tokens.append(w)
+        return tokens
+
+
 def _keyword_search(
     query: str, 
     project_key: str | None = None, 
@@ -463,19 +551,6 @@ def _keyword_search(
     Returns: List mit keyword-gefundenen Chunks
     """
     from rank_bm25 import BM25Okapi
-    import re
-    
-    # Stopwords (häufige, bedeutungsarme Wörter)
-    STOPWORDS = {
-        "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "eines",
-        "und", "oder", "aber", "mit", "von", "zu", "bei", "für", "auf", "an", "in",
-        "ich", "du", "er", "sie", "es", "wir", "ihr", "ist", "sind", "war", "waren",
-        "wird", "werden", "hat", "haben", "kann", "können", "soll", "sollte", "muss",
-        "wie", "was", "wer", "wo", "wann", "warum", "welche", "welcher", "welches",
-        "bitte", "antworten", "antwort", "frage", "anbieter", "hier", "kurz", "bündig",
-        "betrifft", "konkret", "gilt", "gelten", "stellt", "stelltsich", "nutzung",
-        "interner", "interne", "unserer", "unsere", "unser", "einer", "einem", "einen"
-    }
 
     def _strip_query_wrapper(text: str) -> str:
         """Entfernt UI-Wrapper wie 'Frage von Anbieter ...:' und behält die eigentliche Nutzfrage."""
@@ -485,47 +560,6 @@ def _keyword_search(
             return text.split(":", 1)[1].strip()
         return text.strip()
     
-    def tokenize(text: str) -> list[str]:
-        """
-        Tokenisiert Text via spaCy-Lemmatisierung (de_core_news_sm).
-        
-        - Volltext-Analyse mit POS-Tagging für kontextuelle Lemmas
-        - Lowercase Lemmas
-        - Stopwords (spaCy + custom) raus
-        - Nur Alpha-Tokens, min 3 Zeichen
-        - Fallback auf einfaches Suffix-Stemming wenn spaCy nicht verfügbar
-        """
-        nlp = _get_spacy_nlp()
-        
-        if nlp is not None:
-            # spaCy-Pfad: Volltext → POS + Lemma
-            doc = nlp(text[:25000])  # Safety-Cap für sehr lange Chunks
-            tokens = []
-            for token in doc:
-                if not token.is_alpha:
-                    continue
-                lemma = token.lemma_.lower()
-                if len(lemma) < 3:
-                    continue
-                if lemma in STOPWORDS or token.is_stop:
-                    continue
-                tokens.append(lemma)
-                # Decompounding: nur bei Nomen/Eigennamen (Komposita sind im Deutschen
-                # fast ausschliesslich Substantive; verhindert seltsame Verb-Splits)
-                if token.pos_ in ("NOUN", "PROPN"):
-                    for part in _decompound(lemma):
-                        if part not in STOPWORDS and part not in tokens:
-                            tokens.append(part)
-            return tokens
-        else:
-            # Fallback: einfaches Regex-Stemming (kein spaCy verfügbar)
-            words = re.findall(r'\b[a-zA-ZäöüÄÖÜß]+\b', text.lower())
-            tokens = []
-            for w in words:
-                if len(w) >= 3 and w not in STOPWORDS:
-                    tokens.append(w)
-            return tokens
-
     # Priority Terms: globale Defaults aus YAML + projekt-spezifische aus DB (merged, dedupliziert)
     config = get_retrieval_config()
     priority_parts: list[str] = list(config.bm25.priority_terms)
@@ -546,8 +580,16 @@ def _keyword_search(
 
     def _prepare_query_tokens(raw_query: str) -> list[str]:
         """Fokussiert lange UI-Fragen auf die inhaltlich relevanten Suchterme."""
+        # ===== DEBUG LOGGING =====
+        logger.debug(f"[_prepare_query_tokens] INPUT: {raw_query!r}")
+        # ===== END DEBUG =====
+        
         core_query = _strip_query_wrapper(raw_query)
-        tokens = tokenize(core_query)
+        tokens = _tokenize_text(core_query)
+        
+        # ===== DEBUG LOGGING =====
+        logger.debug(f"[_prepare_query_tokens] After tokenize: {tokens}")
+        # ===== END DEBUG =====
 
         # Deduplizieren, Reihenfolge beibehalten
         unique_tokens = []
@@ -558,6 +600,9 @@ def _keyword_search(
                 unique_tokens.append(token)
 
         if len(unique_tokens) <= 12:
+            # ===== DEBUG LOGGING =====
+            logger.debug(f"[_prepare_query_tokens] OUTPUT (short query): {unique_tokens}")
+            # ===== END DEBUG =====
             return unique_tokens
 
         priority_tokens = [
@@ -572,11 +617,19 @@ def _keyword_search(
                 token for token in unique_tokens
                 if token not in priority_tokens and len(token) >= min_token_len
             ]
-            return (priority_tokens + supporting_tokens[:4])[:8]
+            result = (priority_tokens + supporting_tokens[:4])[:8]
+            # ===== DEBUG LOGGING =====
+            logger.debug(f"[_prepare_query_tokens] OUTPUT (priority path): {result}")
+            # ===== END DEBUG =====
+            return result
 
         # Fallback für andere Fragen: die längsten, eindeutigsten Tokens behalten.
         ranked_tokens = sorted(unique_tokens, key=len, reverse=True)
-        return ranked_tokens[:10]
+        result = ranked_tokens[:10]
+        # ===== DEBUG LOGGING =====
+        logger.debug(f"[_prepare_query_tokens] OUTPUT (fallback): {result}")
+        # ===== END DEBUG =====
+        return result
     
     with get_session() as ses:
         # Chunks laden mit allen Filtern
@@ -612,21 +665,33 @@ def _keyword_search(
         chunk_metadata = []  # (chunk_id, document_id, chunk_text, doc_object, token_set)
         
         for chunk in chunks:
-            if chunk.retrieval_keywords:
-                try:
-                    kw_list = json.loads(chunk.retrieval_keywords)
-                    # Keywords sind bereits destillierte Terme — direkt als Tokens verwenden
-                    tokens = [t.lower().strip() for t in kw_list if t.strip()]
-                except Exception:
-                    tokens = tokenize(chunk.chunk_text or "")
-            else:
-                tokens = tokenize(chunk.chunk_text or "")
+            # WICHTIG: Wir ignorieren retrieval_keywords komplett!
+            # Grund: DB-Keywords sind oft veraltet oder falsch.
+            # BM25 auf dem Raw Text mit spaCy+Stemming ist zuverlässiger.
+            tokens = _tokenize_text(chunk.chunk_text or "")
+            
+            # ===== DEBUG LOGGING für Chunk 939 =====
+            if chunk.id == 939:
+                logger.info(f"[BM25 CORPUS] Chunk 939 found! Text preview: {(chunk.chunk_text or '')[:150]}")
+                logger.info(f"[BM25 CORPUS] Chunk 939 tokens: {tokens[:20]}")
+                logger.info(f"[BM25 CORPUS] Chunk 939 has 'subunternehm' in tokens: {'subunternehm' in tokens}")
+            # ===== END DEBUG =====
+            
             if tokens:  # nur Chunks mit Content
                 tokenized_corpus.append(tokens)
                 chunk_metadata.append((chunk.id, chunk.document_id, chunk.chunk_text, docs_map.get(chunk.document_id), set(tokens)))
         
         if not tokenized_corpus:
             return []
+        
+        # ===== DEBUG LOGGING =====
+        logger.info(f"[BM25 CORPUS] Tokenized {len(tokenized_corpus)} chunks total")
+        chunk_939_in_corpus = any(meta[0] == 939 for meta in chunk_metadata)
+        logger.info(f"[BM25 CORPUS] Chunk 939 in corpus: {chunk_939_in_corpus}")
+        if chunk_939_in_corpus:
+            idx_939 = [i for i, meta in enumerate(chunk_metadata) if meta[0] == 939][0]
+            logger.info(f"[BM25 CORPUS] Chunk 939 corpus index: {idx_939}")
+        # ===== END DEBUG =====
         
         # BM25 Index erstellen
         bm25 = BM25Okapi(tokenized_corpus)
@@ -642,7 +707,11 @@ def _keyword_search(
         # haben wenig Unterscheidungskraft. Durch den relativen (nicht absoluten) Cutoff
         # ist der Filter corpus-agnostisch und braucht keine manuelle Schwellenwert-Pflege.
         # Mindestens 2 Tokens verbleiben (kein Query-Leerstand bei kurzen Queries).
-        if len(query_tokens) > 2:
+        #
+        # WICHTIG: IDF-Filter wird NUR bei langen Queries (>10 Tokens) angewendet!
+        # Grund: Distillierte Queries sind kurz (3-8 Tokens) und bereits Noise-gefiltert.
+        # Ein IDF-Filter auf bereits distillierten Keywords würde Signal-Begriffe entfernen.
+        if len(query_tokens) > 10:
             idfs = sorted(bm25.idf.get(t, 0) for t in query_tokens)
             cutoff = idfs[len(idfs) // 4]  # 25. Perzentil
             filtered = [t for t in query_tokens if bm25.idf.get(t, cutoff + 1) > cutoff]
@@ -651,6 +720,26 @@ def _keyword_search(
 
         # BM25 Scores berechnen
         scores = bm25.get_scores(query_tokens)
+        
+        # ===== DEBUG LOGGING =====
+        logger.info(f"[BM25 DEBUG] Original Query: {query!r}")
+        logger.info(f"[BM25 DEBUG] Query Tokens AFTER tokenization: {query_tokens}")
+        logger.info(f"[BM25 DEBUG] Corpus size: {len(tokenized_corpus)} chunks")
+        logger.info(f"[BM25 DEBUG] Scores computed: {len(scores)} scores")
+        
+        # Check Chunk 939 Score
+        chunk_939_in_corpus = any(meta[0] == 939 for meta in chunk_metadata)
+        if chunk_939_in_corpus:
+            idx_939 = [i for i, meta in enumerate(chunk_metadata) if meta[0] == 939][0]
+            score_939 = scores[idx_939]
+            logger.info(f"[BM25 DEBUG] Chunk 939 Score: {score_939}")
+        
+        scores_above_zero = [s for s in scores if s > 0]
+        logger.info(f"[BM25 DEBUG] Scores > 0: {len(scores_above_zero)} hits")
+        if scores_above_zero:
+            top5_scores = sorted(scores_above_zero, reverse=True)[:5]
+            logger.info(f"[BM25 DEBUG] Top-5 Scores: {top5_scores}")
+        # ===== END DEBUG =====
         
         # Top-K Ergebnisse sammeln
         results = []
@@ -698,6 +787,14 @@ def _keyword_search(
             for r in results:
                 r["normalized_match_score"] = round(r["match_score"] / max_score, 3) if max_score > 0 else 0.0
         
+        # ===== DEBUG LOGGING =====
+        logger.info(f"[BM25 DEBUG] Results collected: {len(results)} hits")
+        logger.info(f"[BM25 DEBUG] Returning top {min(len(results), limit)} results (limit={limit})")
+        if results:
+            for i, r in enumerate(results[:3]):
+                logger.info(f"[BM25 DEBUG] Result #{i+1}: chunk_id={r['chunk_id']}, score={r['match_score']:.3f}, terms={r['matched_terms']}")
+        # ===== END DEBUG =====
+        
         return results[:limit]
 
 
@@ -708,13 +805,13 @@ def get_all_documents_with_best_scores(
     exclude_classification: str | None = None
 ) -> list[dict]:
     """
-    Gibt ALLE Projekt-Dokumente mit ihrem besten Chunk-Score zurück.
+    Gibt ALLE Projekt-Dokumente mit ihrem besten Chunk-Score zurück (Hybrid: Semantic + BM25).
     
     Nützlich für Diagnostics: zeigt welche Dokumente geprüft wurden,
     aber nicht in Top-K kamen (Score < Threshold).
     
     Returns:
-        Liste von {"document_id", "filename", "classification", "best_score", "included"}
+        Liste von {"document_id", "filename", "classification", "best_score", "included", "bm25_score", "matched_terms"}
     """
     from src.m09_docs import get_project_documents
     
@@ -723,21 +820,23 @@ def get_all_documents_with_best_scores(
     if exclude_classification:
         all_docs = [d for d in all_docs if d.classification != exclude_classification]
     
+    # 1. BM25-Suche für alle Chunks (für Diagnostics)
+    # Wir nutzen ein grosses Limit um möglichst alle Dokumente zu erwischen
+    kw_results = _keyword_search(
+        query, project_key, limit=2000, 
+        exclude_classification=exclude_classification
+    )
+    kw_map = {} # doc_id -> (best_score, matched_terms)
+    for res in kw_results:
+        did = res["document_id"]
+        score = res["match_score"]
+        terms = res["matched_terms"]
+        if did not in kw_map or score > kw_map[did][0]:
+            kw_map[did] = (score, terms)
+
+    # 2. Semantic Search Vorbereitung
     result = []
-    
-    # CRITICAL FIX: Performance O(N) → O(1)
-    # Query-Embedding EINMAL vor der Schleife berechnen
     query_emb = embed_text(query)
-    if not query_emb:
-        # Bei Embedding-Fehler: alle Dokumente als "fehlgeschlagen" markieren
-        return [{
-            "document_id": doc.id,
-            "filename": doc.filename,
-            "classification": doc.classification,
-            "best_score": 0.0,
-            "included": False,
-            "reason": "Query-Embedding fehlgeschlagen"
-        } for doc in all_docs]
     
     with get_session() as ses:
         for doc in all_docs:
@@ -746,44 +845,41 @@ def get_all_documents_with_best_scores(
                 select(DocumentChunk).where(DocumentChunk.document_id == doc.id)
             ).all()
             
-            if not chunks:
-                result.append({
-                    "document_id": doc.id,
-                    "filename": doc.filename,
-                    "classification": doc.classification,
-                    "best_score": 0.0,
-                    "included": False,
-                    "reason": "Keine Chunks vorhanden"
-                })
-                continue
+            best_semantic = 0.0
+            if query_emb:
+                for chunk in chunks:
+                    if chunk.embedding:
+                        chunk_emb = json.loads(chunk.embedding)
+                        sim = _cosine_similarity(query_emb, chunk_emb)
+                        best_semantic = max(best_semantic, sim)
             
-            best_score = 0.0
-            for chunk in chunks:
-                if chunk.embedding:
-                    chunk_emb = json.loads(chunk.embedding)
-                    sim = _cosine_similarity(query_emb, chunk_emb)
-                    best_score = max(best_score, sim)
+            # BM25 Info
+            kw_score, kw_terms = kw_map.get(doc.id, (0.0, []))
             
-            # Check if included (>= threshold)
-            included = best_score >= threshold
+            # Best score (Hybrid)
+            # Normalerweise nutzen wir RRF fürs Ranking, aber hier für die einfache Diagnose-Tabelle
+            # zeigen wir einfach den besten Einzel-Score
+            best_score = max(best_semantic, kw_score / 20.0 if kw_score > 0 else 0) # Grobe Normalisierung für die Ampel
+            
+            included = best_score >= threshold or best_semantic >= threshold or kw_score > 0
+            
             reason = ""
             if not included:
-                if best_score < 0.05:
-                    reason = "Semantisch irrelevant (<5%)"
-                else:
-                    reason = f"Score {best_score:.0%} < Threshold {threshold:.0%}"
+                reason = f"Score {best_semantic:.0%} < Threshold {threshold:.0%}"
             
             result.append({
                 "document_id": doc.id,
                 "filename": doc.filename,
                 "classification": doc.classification,
-                "best_score": best_score,
+                "best_score": best_semantic, # Wir lassen best_score für Abwärtskompatibilität als semantischen Score
+                "best_semantic": best_semantic,
+                "bm25_score": kw_score,
+                "matched_terms": kw_terms,
                 "included": included,
                 "reason": reason
             })
     
-    # Sortiere nach Score (höchste zuerst)
-    return sorted(result, key=lambda x: x["best_score"], reverse=True)
+    return sorted(result, key=lambda x: max(x["best_semantic"], x["bm25_score"]/50.0), reverse=True)
 
 
 def reciprocal_rank_fusion(results_list: list[list[dict]], k: int = 60) -> list[dict]:
@@ -824,7 +920,17 @@ def reciprocal_rank_fusion(results_list: list[list[dict]], k: int = 60) -> list[
             # RRF Score akkumulieren
             if chunk_id not in fused_scores:
                 fused_scores[chunk_id] = 0.0
-                doc_data[chunk_id] = hit
+                doc_data[chunk_id] = hit.copy()
+            else:
+                # Metadaten zusammenführen (Keyword-Treffer zu Semantic-Treffer hinzufügen)
+                existing = doc_data[chunk_id]
+                for key in ["matched_terms", "match_score", "raw_bm25_score", "keyword_coverage", "keyword_idf_score", "priority_hits", "similarity"]:
+                    if hit.get(key) and not existing.get(key):
+                        existing[key] = hit[key]
+                    elif key == "matched_terms" and hit.get(key) and existing.get(key):
+                        # Begriffe kombinieren
+                        combined = list(set(existing[key] + hit[key]))
+                        existing[key] = combined
             
             fused_scores[chunk_id] += 1.0 / (k + rank)
     
@@ -885,21 +991,51 @@ def retrieve_relevant_chunks_hybrid(
     # Query Distillation: LLM destilliert lange Nutzerfragen zu präzisen Suchbegriffen.
     # Nur für BM25-Suche — Semantic-Embedding profitiert vom vollen natürlichsprachlichen Text.
     # Zentralisiert hier damit alle Aufrufer (Chat, Batch QA, Reports) automatisch profitieren.
+    
+    # ===== DEBUG LOGGING =====
+    logger.info("=" * 80)
+    logger.info("[HYBRID RETRIEVAL] START")
+    logger.info(f"[HYBRID RETRIEVAL] Original Query: {query!r}")
+    logger.info(f"[HYBRID RETRIEVAL] Distillation Enabled: {config.query.enable_distillation}")
+    if config.query.enable_distillation:
+        logger.info(f"[HYBRID RETRIEVAL] Distillation Provider: {config.query.distillation_provider}")
+        logger.info(f"[HYBRID RETRIEVAL] Distillation Model: {config.query.distillation_model}")
+    # ===== END DEBUG =====
+    
     keyword_query = query
     if config.query.enable_distillation:
         try:
+            # ===== DEBUG LOGGING =====
+            logger.info("[HYBRID RETRIEVAL] Calling Query Distillation...")
+            # ===== END DEBUG =====
+            
             distilled = _get_rewrite_query()(
                 query,
                 provider=config.query.distillation_provider,
                 model=config.query.distillation_model,
             )
+            
+            # ===== DEBUG LOGGING =====
+            logger.info(f"[HYBRID RETRIEVAL] Distillation Result: {distilled!r}")
+            # ===== END DEBUG =====
+            
             if distilled and distilled != query:
                 logger.info("RAG distillation: %r → %r", query[:80], distilled)
                 keyword_query = distilled
+                
+                # ===== DEBUG LOGGING =====
+                logger.info(f"[HYBRID RETRIEVAL] Using distilled query for BM25: {keyword_query!r}")
+                # ===== END DEBUG =====
             else:
                 logger.debug("RAG distillation: no change (result=%r)", distilled)
+                # ===== DEBUG LOGGING =====
+                logger.info(f"[HYBRID RETRIEVAL] No change from distillation, using original")
+                # ===== END DEBUG =====
         except Exception as exc:
             logger.warning("RAG distillation failed, using original query: %s", exc)
+            # ===== DEBUG LOGGING =====
+            logger.error(f"[HYBRID RETRIEVAL] Distillation ERROR: {exc}", exc_info=True)
+            # ===== END DEBUG =====
 
     # Cache-Check NACH Distillation: Key basiert auf keyword_query damit
     # Distillations-Ergebnisse korrekt gecacht werden und keine pre-distillation
@@ -909,20 +1045,37 @@ def retrieve_relevant_chunks_hybrid(
         return _RAG_CACHE[cache_key]
 
     # 1. Semantic-Suche mit niedrigerer Entdeckungs-Schwelle (Original-Query für Embeddings)
+    # ===== DEBUG LOGGING =====
+    logger.info(f"[HYBRID RETRIEVAL] Performing Semantic Search with query: {query!r}")
+    # ===== END DEBUG =====
+    
     semantic_results = retrieve_relevant_chunks(
         query, project_key, limit * 5, discovery_threshold,
         role_key=role_key,
         classification_filter=classification_filter,
         exclude_classification=exclude_classification
     )
+    
+    # ===== DEBUG LOGGING =====
+    logger.info(f"[HYBRID RETRIEVAL] Semantic Search returned {len(semantic_results.get('documents', []))} results")
+    # ===== END DEBUG =====
 
     # 2. Keyword-Suche mit grossem Limit (destillierte Query für BM25)
+    # ===== DEBUG LOGGING =====
+    logger.info(f"[HYBRID RETRIEVAL] Performing BM25 Keyword Search with query: {keyword_query!r}")
+    logger.info(f"[HYBRID RETRIEVAL] (This is the DISTILLED query, not the original)")
+    # ===== END DEBUG =====
+    
     keyword_docs = _keyword_search(
         keyword_query, project_key, limit * 10,
         role_key=role_key,
         classification_filter=classification_filter,
         exclude_classification=exclude_classification
     )
+    
+    # ===== DEBUG LOGGING =====
+    logger.info(f"[HYBRID RETRIEVAL] BM25 Keyword Search returned {len(keyword_docs)} results")
+    # ===== END DEBUG =====
 
     semantic_debug_docs = [dict(d) for d in semantic_results.get("documents", [])]
 
@@ -1017,7 +1170,45 @@ def retrieve_relevant_chunks_hybrid(
         RRF ist für Ranking, aber Schwellenwerte basieren auf absoluten Similarity-Scores."""
         return max(d.get("similarity", 0), d.get("match_score", 0))
 
-    def _debug_entry(d: dict, source: str) -> dict:
+    def _compute_matched_terms(query_text: str, chunk_text: str) -> list[str]:
+        """Berechnet die Schnittmenge zwischen Query-Tokens und Chunk-Text.
+        
+        Diese Funktion wird on-the-fly für JEDEN Kandidaten aufgerufen, unabhängig davon,
+        ob er von BM25 oder Semantic Search stammt. Das stellt sicher, dass die Debug-Anzeige
+        immer zeigt, welche Suchbegriffe im Text vorkommen.
+        
+        Args:
+            query_text: Die (distillierte) Query
+            chunk_text: Der Text des Chunks
+            
+        Returns:
+            Sortierte Liste der übereinstimmenden Tokens
+        """
+        if not query_text or not chunk_text:
+            return []
+        
+        # Tokenisiere Query und Chunk mit der selben Logik wie BM25
+        query_tokens = set(_tokenize_text(query_text))
+        chunk_tokens = set(_tokenize_text(chunk_text))
+        
+        # Schnittmenge berechnen
+        matched = query_tokens & chunk_tokens
+        
+        return sorted(matched)
+
+    def _debug_entry(d: dict, source: str, keyword_query_for_terms: str) -> dict:
+        """Erstellt einen Debug-Entry für die UI.
+        
+        Args:
+            d: Dokument-Dict mit Scores und Metadaten
+            source: "semantic", "keyword", oder "final"
+            keyword_query_for_terms: Die (distillierte) Query für Term-Matching
+        """
+        # Berechne matched_terms IMMER on-the-fly aus der Query und dem Chunk-Text
+        # (statt auf BM25-Metadaten zu verlassen, die bei Fusion verloren gehen können)
+        chunk_text = d.get("text", "") or ""
+        matched_terms = _compute_matched_terms(keyword_query_for_terms, chunk_text)
+        
         return {
             "source": source,
             "chunk_id": d.get("chunk_id"),
@@ -1032,11 +1223,11 @@ def retrieve_relevant_chunks_hybrid(
             "keyword_coverage": d.get("keyword_coverage", 0.0),
             "keyword_idf_score": d.get("keyword_idf_score", 0.0),
             "priority_hits": d.get("priority_hits", 0),
-            "matched_terms": d.get("matched_terms", []),
+            "matched_terms": matched_terms,  # ← On-the-fly berechnet!
             "rrf_score": d.get("rrf_score", 0.0),
             "quality_score": round(_quality_score(d), 3),
             "combined_score": round(_combined_score(d), 3),
-            "text_preview": _find_relevant_window((d.get("text", "") or "").replace("\n", " "), query, 220),
+            "text_preview": _find_relevant_window(chunk_text.replace("\n", " "), query, 220),
         }
 
     # 4. Dateiname-Boost: kleine Aufwertung wenn Query-Wörter im Dateinamen vorkommen
@@ -1147,10 +1338,23 @@ def retrieve_relevant_chunks_hybrid(
     semantic_results["debug"] = {
         "query": query,
         "keyword_query": keyword_query,
-        "semantic_candidates": [_debug_entry(d, "semantic") for d in semantic_debug_docs[:15]],
-        "keyword_candidates": [_debug_entry(d, "keyword") for d in keyword_docs[:15]],
-        "final_candidates": [_debug_entry(d, "final") for d in result_docs[:15]],
+        "semantic_candidates": [_debug_entry(d, "semantic", keyword_query) for d in semantic_debug_docs[:15]],
+        "keyword_candidates": [_debug_entry(d, "keyword", keyword_query) for d in keyword_docs[:15]],
+        "final_candidates": [_debug_entry(d, "final", keyword_query) for d in result_docs[:15]],
     }
+
+    # ===== DEBUG LOGGING =====
+    logger.info(f"[HYBRID RETRIEVAL] Final results: {len(result_docs[:limit])} documents")
+    logger.info(f"[HYBRID RETRIEVAL] Semantic candidates: {len(semantic_debug_docs)}")
+    logger.info(f"[HYBRID RETRIEVAL] Keyword candidates: {len(keyword_docs)}")
+    logger.info(f"[HYBRID RETRIEVAL] Final candidates (before limit): {len(result_docs)}")
+    if result_docs[:limit]:
+        logger.info("[HYBRID RETRIEVAL] Top-3 Final Results:")
+        for i, doc in enumerate(result_docs[:3]):
+            logger.info(f"  #{i+1}: chunk_id={doc.get('chunk_id')}, combined_score={doc.get('combined_score')}, filename={doc.get('filename', '?')[:50]}")
+    logger.info("[HYBRID RETRIEVAL] END")
+    logger.info("=" * 80)
+    # ===== END DEBUG =====
 
     _RAG_CACHE[cache_key] = semantic_results
     return semantic_results

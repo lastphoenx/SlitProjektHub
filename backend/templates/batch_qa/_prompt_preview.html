@@ -32,24 +32,33 @@
         <thead>
           <tr style="background:var(--color-surface-2)">
             <th class="th-sm">Dokument</th>
-            <th class="th-sm">Best-Score</th>
+            <th class="th-sm">Semantic</th>
+            <th class="th-sm">BM25</th>
+            <th class="th-sm">Keywords</th>
             <th class="th-sm">Status</th>
           </tr>
         </thead>
         <tbody>
           {% for d in rag_diagnostics %}
-          {% set score = d.best_score or d.score or 0 %}
-          {% set included = score >= rag_threshold %}
+          {% set sem_score = d.best_semantic or d.best_score or 0 %}
+          {% set kw_score = d.bm25_score or 0 %}
+          {% set included = d.included %}
           <tr style="{{ 'background:rgba(34,197,94,.06)' if included else '' }}">
-            <td class="td-sm">{{ d.filename or d.get('document_filename','?') }}</td>
-            <td class="td-sm" style="font-weight:600;color:{{ 'var(--color-success)' if included else 'var(--color-text-muted)' }}">
-              {{ "%.3f"|format(score) }}
+            <td class="td-sm" style="font-weight:600">{{ d.filename or '?' }}</td>
+            <td class="td-sm" style="color:{{ 'var(--color-success)' if sem_score >= rag_threshold else 'var(--color-text-muted)' }}">
+              {{ "%.3f"|format(sem_score) }}
+            </td>
+            <td class="td-sm" style="color:{{ 'var(--color-warning)' if kw_score > 0 else 'var(--color-text-muted)' }}">
+              {{ "%.2f"|format(kw_score) }}
+            </td>
+            <td class="td-sm" style="font-size:.65rem;color:var(--color-warning)">
+              {{ (d.matched_terms or []) | join(', ') }}
             </td>
             <td class="td-sm">
               {% if included %}
-              <span style="color:var(--color-success);font-weight:600">✓ eingeschlossen</span>
+              <span style="color:var(--color-success);font-weight:600">✓ Treffer</span>
               {% else %}
-              <span style="color:var(--color-text-muted)">— threshold {{ "%.2f"|format(rag_threshold) }}</span>
+              <span style="color:var(--color-text-muted)">— kein Treffer</span>
               {% endif %}
             </td>
           </tr>

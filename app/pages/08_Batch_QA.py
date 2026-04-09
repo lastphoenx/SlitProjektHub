@@ -113,6 +113,82 @@ def _get_csv_field(data: dict, field_name: str, fallback="") -> str:
             return str(val) if val is not None else fallback
     
     return fallback
+
+
+def parse_question_selection(selection_str: str, total_questions: int) -> set[int]:
+    """
+    Parst eine Fragen-Auswahl-String und gibt Set von 0-basierten Indizes zurück.
+    
+    Syntax:
+        - "all" oder leer: alle Fragen
+        - "1-20,25,51-105": Bereiche und Einzelwerte (1-basiert)
+        - Leerzeichen werden ignoriert
+    
+    Args:
+        selection_str: Auswahl-String (z.B. "1-20, 25, 51-105")
+        total_questions: Anzahl Fragen total (für Validierung)
+    
+    Returns:
+        Set von 0-basierten Indizes
+        
+    Raises:
+        ValueError: Bei ungültigem Format oder Out-of-Range
+    
+    Examples:
+        >>> parse_question_selection("1-3,5", 10)
+        {0, 1, 2, 4}
+        >>> parse_question_selection("all", 10)
+        {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+    """
+    selection_str = (selection_str or "").strip()
+    
+    # "all" oder leer = alle Fragen
+    if not selection_str or selection_str.lower() == "all":
+        return set(range(total_questions))
+    
+    selected_indices = set()
+    
+    # Splitte nach Komma
+    parts = [p.strip() for p in selection_str.split(",")]
+    
+    for part in parts:
+        if not part:
+            continue
+        
+        # Bereich (z.B. "1-20")
+        if "-" in part:
+            try:
+                start_str, end_str = part.split("-", 1)
+                start = int(start_str.strip())
+                end = int(end_str.strip())
+                
+                if start < 1 or end > total_questions:
+                    raise ValueError(f"Bereich {start}-{end} ausserhalb von 1-{total_questions}")
+                if start > end:
+                    raise ValueError(f"Ungültiger Bereich {start}-{end} (Start > End)")
+                
+                # Konvertiere zu 0-basierten Indizes
+                for i in range(start - 1, end):
+                    selected_indices.add(i)
+            except ValueError as e:
+                raise ValueError(f"Ungültiger Bereich '{part}': {e}")
+        
+        # Einzelwert (z.B. "25")
+        else:
+            try:
+                num = int(part)
+                if num < 1 or num > total_questions:
+                    raise ValueError(f"Frage {num} ausserhalb von 1-{total_questions}")
+                selected_indices.add(num - 1)  # 0-basiert
+            except ValueError as e:
+                raise ValueError(f"Ungültiger Wert '{part}': {e}")
+    
+    if not selected_indices:
+        raise ValueError("Keine Fragen ausgewählt")
+    
+    return selected_indices
+
+
 init_db()
 
 st.set_page_config(page_title="Fragen-Batch", page_icon="🔄", layout="wide")
@@ -808,6 +884,66 @@ if role_mode in ["individual", "single"] and not selected_roles:
     st.warning("⚠️ Bitte wählen Sie mindestens eine Rolle aus")
     st.stop()
 
+# --- Fragen-Auswahl ---
+st.markdown("#### 🎯 Fragen-Auswahl")
+
+col_mode, col_input, col_preview = st.columns([2, 4, 2])
+with col_mode:
+    selection_mode = st.selectbox(
+        "Modus",
+        options=["Alles", "Bereich"],
+        key="batch_selection_mode",
+        help="Wählen Sie, ob alle Fragen oder nur ein Bereich verarbeitet werden soll"
+    )
+
+with col_input:
+    if selection_mode == "Bereich":
+        question_selection = st.text_input(
+            "Fragen-Bereiche",
+            value="1-50",
+            help=(
+                "**Syntax für Bereiche:**\n\n"
+                "• **Einzelne Frage:** `25`\n"
+                "• **Bereich:** `1-50` (Fragen 1 bis 50)\n"
+                "• **Mehrere Bereiche:** `1-20,25,51-105`\n"
+                "• **Kombiniert:** `1-50,100,151-200`\n\n"
+                "Bereiche sind **inklusiv** (1-50 enthält Frage 1 UND 50)"
+            ),
+            key="batch_question_selection_input"
+        )
+    else:
+        question_selection = "all"
+        st.text_input(
+            "Alle Fragen",
+            value="✓ Alle verfügbaren Fragen werden verarbeitet",
+            disabled=True,
+            key="batch_all_indicator"
+        )
+
+with col_preview:
+    # Preview: Anzahl ausgewählte Fragen
+    try:
+        # Quick Count für Preview (ohne vollständiges CSV-Laden)
+        with get_session() as _preview_ses:
+            _preview_count = _preview_ses.exec(
+                select(DocumentChunk)
+                .where(DocumentChunk.document_id == selected_csv_id)
+            ).all()
+        _total_q = len(_preview_count)
+        
+        if question_selection.strip().lower() in ["", "all"]:
+            _sel_count = _total_q
+        else:
+            try:
+                _sel_indices = parse_question_selection(question_selection, _total_q)
+                _sel_count = len(_sel_indices)
+            except ValueError as _sel_err:
+                _sel_count = f"❌ {_sel_err}"
+        
+        st.metric("Zu verarbeiten", f"{_sel_count} von {_total_q}")
+    except Exception:
+        st.caption("Laden...")
+
 # Sanity check für "none" Modus
 if role_mode == "none":
     st.info("ℹ️ **Ohne Rollen-Kontext**: Fragen werden generisch beantwortet (keine rollenspezifische Perspektive)")
@@ -862,6 +998,27 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
         st.error("❌ CSV enthält keine gültigen Daten")
         st.stop()
     
+    # Parse Fragen-Auswahl
+    try:
+        selected_question_indices = parse_question_selection(
+            question_selection,  # Nutzt die Variable von oben (Lines ~888-920)
+            len(questions)
+        )
+    except ValueError as selection_err:
+        st.error(f"❌ Ungültige Fragen-Auswahl: {selection_err}")
+        st.stop()
+    
+    # Filtere questions basierend auf Auswahl
+    # Erstelle Mapping: original_index -> question_data
+    questions_map = {idx: q for idx, q in enumerate(questions)}
+    selected_questions = [(idx, questions_map[idx]) for idx in sorted(selected_question_indices)]
+    
+    if not selected_questions:
+        st.error("❌ Keine Fragen in Auswahl")
+        st.stop()
+    
+    st.info(f"📊 Verarbeite **{len(selected_questions)} von {len(questions)} Fragen** (Auswahl: {question_selection})")
+    
     # Checkpoint-Datei
     checkpoint_path = ROOT / "data" / f"batch_checkpoint_{selected_project}_{selected_csv_id}.json"
     # Metadaten der aktuellen Einstellungen für Validierung
@@ -875,6 +1032,7 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
         "model": _current_model,
         "role_mode": role_mode,
         "roles": _current_roles,
+        "question_selection": question_selection,  # Nutzt Variable
     }
     results = []
     resume_from = 0
@@ -885,7 +1043,8 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
             if isinstance(_saved_raw, dict) and "results" in _saved_raw:
                 _saved_meta = _saved_raw.get("__meta__", {})
                 _saved_results = _saved_raw["results"]
-                # Validierung: Einstellungen müssen übereinstimmen
+                # Validierung: Einstellungen müssen übereinstimmen (inkl. Fragen-Auswahl)
+                _current_selection = question_selection  # Nutzt Variable
                 _meta_ok = (
                     _saved_meta.get("project") == selected_project
                     and str(_saved_meta.get("csv_id")) == str(selected_csv_id)
@@ -893,23 +1052,22 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
                     and _saved_meta.get("model") == _current_model
                     and _saved_meta.get("role_mode") == role_mode
                     and sorted(_saved_meta.get("roles", [])) == _current_roles
+                    and _saved_meta.get("question_selection", "all") == _current_selection
                 )
                 if _meta_ok and isinstance(_saved_results, list) and len(_saved_results) > 0:
                     results = _saved_results
                     resume_from = len(results)
-                    st.info(f"♻️ **Checkpoint passt** – setze bei Frage {resume_from + 1} von {len(questions)} fort.")
+                    st.info(f"♻️ **Checkpoint passt** – setze bei Frage {resume_from + 1} von {len(selected_questions)} fort.")
                 elif not _meta_ok:
-                    st.warning("⚠️ Checkpoint übersprungen – Einstellungen haben sich geändert (anderes Modell, Rollen o.ä.)")
+                    st.warning("⚠️ Checkpoint übersprungen – Einstellungen haben sich geändert (anderes Modell, Rollen, Fragen-Auswahl o.ä.)")
             elif isinstance(_saved_raw, list) and len(_saved_raw) > 0:
                 # Altes Format (ohne Metadaten) – ignorieren, da Validierung nicht möglich
                 st.warning("⚠️ Alter Checkpoint ohne Metadaten ignoriert. Starte von vorne.")
         except Exception:
             pass
-
-    st.info(f"📊 Verarbeite **{len(questions)} Fragen**...")
     
-    # Progress Bar
-    progress_bar = st.progress(resume_from / len(questions) if questions else 0)
+    # Progress Bar (basierend auf ausgewählten Fragen)
+    progress_bar = st.progress(resume_from / len(selected_questions) if selected_questions else 0)
     status_text = st.empty()
     
     # Live-Vorschau Container
@@ -922,15 +1080,16 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
     if use_project_context:
         project_context_text = f"\n\nPROJEKT: {proj_obj.title}\nBESCHREIBUNG: {proj_obj.description or 'Keine Beschreibung'}"
     
-    # Batch-Loop
+    # Batch-Loop über AUSGEWÄHLTE Fragen
     _llm_model_buf: list = []        # [model_id, fallback_warning] – wird pro Aufruf befüllt
     _fallback_warned = False         # Warnung nur einmal anzeigen
     fallback_warning_container = st.empty()
-    for idx, question_data in enumerate(questions):
-        if idx < resume_from:
+    for enum_idx, (original_idx, question_data) in enumerate(selected_questions):
+        if enum_idx < resume_from:
             continue
+        # original_idx ist die echte Fragen-Nummer (0-basiert), enum_idx ist Position in selected_questions
         question_text = _get_csv_field(question_data, "Frage", "")
-        nr = _get_csv_field(question_data, "Nr", str(idx+1))
+        nr = _get_csv_field(question_data, "Nr", str(original_idx+1))  # Nutze original_idx für echte Fragen-Nr
         lieferant = _get_csv_field(question_data, "Lieferant", "")
         
         result_row = {
@@ -980,7 +1139,7 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
         # Je nach Rollen-Modus: 1 oder N Antworten generieren
         if role_mode == "none":
             # Keine Rollen: generische Antwort
-            status_text.text(f"Verarbeite Frage {idx+1}/{len(questions)}: Nr. {nr}")
+            status_text.text(f"Verarbeite Frage {enum_idx+1}/{len(selected_questions)}: Nr. {nr}")
             
             system_prompt = f"""Du bist ein technischer Berater der Fragen zu einem Pflichtenheft beantwortet.
 
@@ -1011,7 +1170,7 @@ AUFGABE: Beantworte die folgende Frage präzise und vollständig basierend auf d
             
         elif role_mode == "all_merged":
             # Alle Rollen als Sammelrolle
-            status_text.text(f"Verarbeite Frage {idx+1}/{len(questions)}: Nr. {nr} (Sammelrolle)")
+            status_text.text(f"Verarbeite Frage {enum_idx+1}/{len(selected_questions)}: Nr. {nr} (Sammelrolle)")
             
             # Baue Rollen-Kontext auf
             roles_context = "\n".join([
@@ -1056,7 +1215,7 @@ AUFGABE: Beantworte die folgende Frage vollständig, indem du die Perspektiven A
                 if not role_obj:
                     continue
                 
-                status_text.text(f"Verarbeite Frage {idx+1}/{len(questions)}: Nr. {nr} ({role_obj.title})")
+                status_text.text(f"Verarbeite Frage {enum_idx+1}/{len(selected_questions)}: Nr. {nr} ({role_obj.title})")
                 
                 role_description = role_obj.description or f"Rolle: {role_obj.title}"
                 
@@ -1095,7 +1254,7 @@ AUFGABE: Beantworte die folgende Frage AUS DER PERSPEKTIVE deiner Rolle. Fokussi
                     result_row[f"Antwort_{role_obj.title}"] = answer
         
         results.append(result_row)
-        progress_bar.progress((idx + 1) / len(questions))
+        progress_bar.progress((enum_idx + 1) / len(selected_questions))
 
         # Fallback-Warnung einmalig anzeigen
         if not _fallback_warned and len(_llm_model_buf) >= 2 and _llm_model_buf[1]:
@@ -1121,7 +1280,7 @@ AUFGABE: Beantworte die folgende Frage AUS DER PERSPEKTIVE deiner Rolle. Fokussi
         except Exception:
             preview_data = results
         with live_preview_container.container():
-            st.caption(f"**{len(preview_data)} von {len(questions)} Fragen bearbeitet** – letzte 5 Antworten:")
+            st.caption(f"**{len(preview_data)} von {len(selected_questions)} Fragen bearbeitet** – letzte 5 Antworten:")
             for entry in reversed(preview_data[-5:]):
                 _nr = entry.get("Nr", "?")
                 _lief = entry.get("Lieferant", "")

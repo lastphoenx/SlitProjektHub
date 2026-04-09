@@ -7,8 +7,10 @@ KI-gestütztes Tool zur Verwaltung von Ausschreibungsprojekten mit automatischer
 - **Projekte & Stammdaten**: Projekte, Rollen und Aufgaben verwalten
 - **Dokumente**: PDF, Word, CSV hochladen und durchsuchbar machen (ChromaDB, Embeddings)
 - **Fragen-Batch**: CSV mit Anbieter-Fragen einlesen → automatisch mit KI + RAG beantworten → als Excel/CSV exportieren  
-  Einstellbar: Antwort-Stil, Interpretations-Haltung (neutral / wohlwollend / restriktiv), Formulierungsweise (klar & abschliessend / vage)  
-  Export-Dateiname enthält automatisch Metadaten (CSV-Name, Provider, Modell, Rollen, Stil, Haltung)
+  - **Fragen-Auswahl**: Flexible Bereiche (`1-50`, `1-20,25,51-105`) statt "alle oder nichts"  
+  - **Einstellbar**: Antwort-Stil, Interpretations-Haltung (neutral / wohlwollend / restriktiv), Formulierungsweise (klar & abschliessend / vage)  
+  - **Export-Dateiname**: Enthält automatisch Metadaten (CSV-Name, Provider, Modell, Rollen, Stil, Haltung)  
+  - **Checkpoint-Resume**: Bei Abbruch automatisch weiterführen mit gespeichertem Fortschritt
 - **KI-Erkennung**: Analysiert Anbieter-Fragen auf KI-typische Merkmale (Heuristik + optionale AI-Tiefenanalyse)
 - **Chat**: Projektbezogener Chat mit Kontext aus hochgeladenen Dokumenten
 - **Multi-Provider LLM**: OpenAI (GPT-5.x, GPT-4o), Anthropic (Claude), Mistral — umschaltbar im UI
@@ -18,8 +20,30 @@ KI-gestütztes Tool zur Verwaltung von Ausschreibungsprojekten mit automatischer
 - **Frontend**: Streamlit (Python)
 - **Backend**: FastAPI (REST API, läuft lokal auf Port 8000)
 - **Datenbank**: SQLite via SQLModel
-- **Vektorsuche**: ChromaDB
+- **Vektorsuche**: ChromaDB (Embeddings)
+- **Lexikalische Suche**: BM25 mit spaCy-Lemmatisierung (Deutsch)
+- **Hybrid Retrieval**: Semantic + BM25 mit Reciprocal Rank Fusion (RRF)
 - **Betrieb**: Lokal unter Windows, Start via `start_app.ps1`
+
+## RAG-Features
+
+Das System verwendet **Hybrid Retrieval** für optimale Treffergenauigkeit:
+
+- **Semantic Search**: ChromaDB mit sentence-transformers Embeddings
+- **BM25 Keyword Search**: spaCy-basierte Lemmatisierung + custom Stemmer für deutsche Partizipien
+- **Query Distillation**: LLM extrahiert Suchbegriffe aus natürlicher Sprache
+- **On-the-fly Tokenization**: Immer aktuelle Tokens, keine veralteten DB-Caches
+- **Alphanumerische Codes**: Unterstützt ISO9001, SLA-1, 24/7, V1 etc.
+- **Matched Terms**: Debug-UI zeigt übereinstimmende Suchbegriffe für alle Kandidaten
+
+### Beispiel
+```
+Query: "Ist eine ISO9001-Zertifizierung erforderlich?"
+→ Distillation: "iso9001 zertifizierung erforderlich pflicht"
+→ Semantic: Chunks über Qualitätsmanagement-Anforderungen
+→ BM25: Chunks mit exaktem "iso9001" Token
+→ RRF Fusion: Beste Kombination beider Methoden
+```
 
 ## Voraussetzungen
 

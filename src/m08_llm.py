@@ -1,6 +1,9 @@
 from __future__ import annotations
 import os
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Hinweis: Dies ist die kanonische LLM-Bibliothek für die App.
 # Bitte keine Duplikate in scripts/ oder app/pages_* anlegen.
@@ -383,6 +386,15 @@ def rewrite_query_for_retrieval(query: str, provider: str = "openai", model: str
         "subunternehmen konzernverbund tochtergesellschaft konzernprivilegierung"
     """
     import json as _json
+    
+    # ===== DEBUG LOGGING =====
+    logger.info("=" * 80)
+    logger.info("[QUERY DISTILLATION] START")
+    logger.info(f"[QUERY DISTILLATION] Input Query: {query!r}")
+    logger.info(f"[QUERY DISTILLATION] Provider: {provider}")
+    logger.info(f"[QUERY DISTILLATION] Model: {model}")
+    # ===== END DEBUG =====
+    
     system_prompt = (
         "Du bist ein Experte fuer Informations-Retrieval. Aus einer Frage extrahierst du "
         "genau die Begriffe, die das KERNTHEMA dieser Frage benennen -- und nur die.\n\n"
@@ -401,6 +413,13 @@ def rewrite_query_for_retrieval(query: str, provider: str = "openai", model: str
         "Antworte NUR mit einem JSON-Array aus 3-6 deutschen Strings (lowercase). "
         "Keine Erklaerung."
     )
+    
+    # ===== DEBUG LOGGING =====
+    logger.info("[QUERY DISTILLATION] System Prompt:")
+    logger.info(system_prompt)
+    logger.info("=" * 80)
+    # ===== END DEBUG =====
+    
     try:
         result = try_models_with_messages(
             provider=provider,
@@ -410,15 +429,40 @@ def rewrite_query_for_retrieval(query: str, provider: str = "openai", model: str
             temperature=0.0,
             model=model,
         )
+        
+        # ===== DEBUG LOGGING =====
+        logger.info(f"[QUERY DISTILLATION] Raw LLM Response: {result!r}")
+        # ===== END DEBUG =====
+        
         if not result:
+            logger.warning("[QUERY DISTILLATION] No result from LLM, returning original query")
             return query
         match = re.search(r'\[.*?\]', result, re.DOTALL)
         if not match:
+            logger.warning(f"[QUERY DISTILLATION] No JSON array found in response, returning original query")
             return query
-        keywords = _json.loads(match.group())
+        
+        # Fix: LLM liefert manchmal Python-Syntax ['...'] statt JSON ["..."]
+        json_str = match.group().replace("'", '"')
+        keywords = _json.loads(json_str)
+        
+        # ===== DEBUG LOGGING =====
+        logger.info(f"[QUERY DISTILLATION] Parsed Keywords: {keywords}")
+        # ===== END DEBUG =====
+        
         cleaned = [str(k).lower().strip() for k in keywords if k and str(k).strip()]
-        return " ".join(cleaned) if cleaned else query
-    except Exception:
+        final_result = " ".join(cleaned) if cleaned else query
+        
+        # ===== DEBUG LOGGING =====
+        logger.info(f"[QUERY DISTILLATION] Final Output: {final_result!r}")
+        logger.info("[QUERY DISTILLATION] END")
+        logger.info("=" * 80)
+        # ===== END DEBUG =====
+        
+        return final_result
+    except Exception as e:
+        logger.error(f"[QUERY DISTILLATION] ERROR: {e}", exc_info=True)
+        logger.info("[QUERY DISTILLATION] Returning original query due to error")
         return query
 
 

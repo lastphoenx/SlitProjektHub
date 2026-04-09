@@ -205,6 +205,49 @@ window.__bqaProjects = {{ projects | tojson | safe }};
     <span>RAG: <strong x-text="$store.ki.rag_enabled ? 'aktiv (Top-'+$store.ki.rag_top_k+', ≥'+($store.ki.rag_similarity_threshold*100).toFixed(0)+'%)' : 'deaktiviert'"></strong></span>
   </div>
 
+  <!-- Fragen-Auswahl -->
+  <div style="margin-bottom:.9rem;padding:.75rem;background:var(--color-surface-2);border:1px solid var(--color-border);border-radius:.5rem">
+    <label class="form-label" style="margin-bottom:.5rem;font-weight:600;font-size:.85rem">Fragen-Auswahl</label>
+    <div style="display:grid;grid-template-columns:auto 1fr auto;gap:.75rem;align-items:flex-end">
+      <div>
+        <label class="form-label" style="font-size:.78rem">Modus</label>
+        <select class="form-select" style="width:140px" x-model="question_selection_mode">
+          <option value="all">Alles</option>
+          <option value="range">Bereich</option>
+        </select>
+      </div>
+      <div x-show="question_selection_mode === 'range'" x-cloak>
+        <label class="form-label" style="font-size:.78rem">
+          Fragen-Bereiche
+          <span style="font-weight:400;color:var(--color-text-muted);margin-left:.3rem">
+            (z.B. <code style="font-size:.7rem;padding:.1rem .3rem;background:var(--color-surface);border:1px solid var(--color-border);border-radius:3px">1-50</code> 
+            oder <code style="font-size:.7rem;padding:.1rem .3rem;background:var(--color-surface);border:1px solid var(--color-border);border-radius:3px">1-20,25,51-105</code>)
+          </span>
+        </label>
+        <input type="text" class="form-input" placeholder="z.B. 1-50" x-model="question_selection_range"
+               style="font-family:ui-monospace,monospace;font-size:.85rem">
+      </div>
+      <div x-show="question_selection_mode === 'all'" x-cloak>
+        <input type="text" class="form-input" disabled value="✓ Alle verfügbaren Fragen werden verarbeitet"
+               style="background:var(--color-surface);color:var(--color-text-muted);cursor:not-allowed">
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.78rem">Zu verarbeiten</label>
+        <div class="badge-muted" style="padding:.35rem .65rem;font-size:.82rem;font-weight:600;white-space:nowrap">
+          <span x-text="getSelectedQuestionCount()"></span> Fragen
+        </div>
+      </div>
+    </div>
+    <template x-if="question_selection_mode === 'range'">
+      <div style="margin-top:.5rem;font-size:.72rem;color:var(--color-text-muted);line-height:1.4">
+        <strong>Syntax:</strong>
+        • <strong>Einzelne Frage:</strong> <code>25</code>
+        • <strong>Bereich:</strong> <code>1-50</code> (Fragen 1 bis 50, inklusiv)
+        • <strong>Kombiniert:</strong> <code>1-20,25,51-105</code>
+      </div>
+    </template>
+  </div>
+
   <!-- Start / Stop controls -->
   <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin-bottom:.9rem">
     <button class="btn btn-primary"
@@ -415,7 +458,10 @@ function batchQA() {
     // Step 6
     preview_nr: 1,
     preview_loading: false,
-    // Step 7
+    // Step 7 - Question selection
+    question_selection_mode: 'all',
+    question_selection_range: '1-50',
+    // Step 7 - Batch execution
     batch_running: false,
     batch_done: false,
     batch_error: '',
@@ -577,6 +623,37 @@ function batchQA() {
         .map(cb => cb.value).join(',');
     },
 
+    getSelectedQuestionCount() {
+      if (!this.csv_row_count) return '0';
+      if (this.question_selection_mode === 'all') {
+        return this.csv_row_count.toString();
+      }
+      // Parse range to get count
+      try {
+        const selection = this.question_selection_range.trim();
+        if (!selection) return '0';
+        
+        let count = 0;
+        const parts = selection.split(',');
+        for (const part of parts) {
+          if (part.includes('-')) {
+            const [start, end] = part.split('-').map(s => parseInt(s.trim()));
+            if (!isNaN(start) && !isNaN(end) && start > 0 && end <= this.csv_row_count) {
+              count += (end - start + 1);
+            }
+          } else {
+            const num = parseInt(part.trim());
+            if (!isNaN(num) && num > 0 && num <= this.csv_row_count) {
+              count += 1;
+            }
+          }
+        }
+        return count.toString();
+      } catch {
+        return '?';
+      }
+    },
+
     startBatch() {
       if (!this.csv_doc_id || !this.project_key) return;
       this.batch_running = true;
@@ -602,6 +679,7 @@ function batchQA() {
         rag_enabled: this.$store.ki.rag_enabled,
         rag_top_k: this.$store.ki.rag_top_k,
         rag_threshold: this.$store.ki.rag_similarity_threshold,
+        question_selection: this.question_selection_mode === 'all' ? 'all' : this.question_selection_range,
       });
 
       const es = new EventSource('/batch-qa/stream?' + params.toString());
