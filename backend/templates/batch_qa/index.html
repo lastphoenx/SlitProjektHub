@@ -248,13 +248,22 @@ window.__bqaProjects = {{ projects | tojson | safe }};
     </template>
   </div>
 
-  <!-- Start / Stop controls -->
+  <!-- Start / Stop controls with checkpoint awareness -->
+  <div id="bqa-cp-step7" style="margin-bottom:.75rem"></div>
+
   <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin-bottom:.9rem">
     <button class="btn btn-primary"
             :disabled="batch_running || !csv_doc_id || !project_key"
-            @click="startBatch()">
+            @click="startBatch(false)">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       Batch starten
+    </button>
+    <button class="btn btn-secondary"
+            x-show="batch_cp_exists && !batch_running"
+            :disabled="batch_running || !csv_doc_id || !project_key"
+            @click="startBatch(true)">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
+      Neu starten (Checkpoint ignorieren)
     </button>
     <button class="btn btn-danger" x-show="batch_running" @click="stopBatch()">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
@@ -265,7 +274,12 @@ window.__bqaProjects = {{ projects | tojson | safe }};
   <!-- Progress bar -->
   <div x-show="batch_running || batch_done" x-cloak style="margin-bottom:.75rem">
     <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:.25rem">
-      <span x-text="'Frage ' + batch_current + ' von ' + batch_total + (batch_current_lief ? ' — ' + batch_current_lief : '')"></span>
+      <span>
+        Frage <strong x-text="batch_current"></strong> von <strong x-text="batch_total"></strong>
+        <span x-show="batch_current_nr" style="color:var(--color-text-muted)"> (Nr. <span x-text="batch_current_nr"></span>)</span>
+        <span x-show="batch_current_lief" style="color:var(--color-text-muted)"> — <span x-text="batch_current_lief"></span></span>
+        <span x-show="batch_total !== batch_total_csv && batch_total_csv > 0" style="color:var(--color-text-muted);font-size:.75rem"> · Auswahl aus <span x-text="batch_total_csv"></span></span>
+      </span>
       <span x-text="batch_total > 0 ? Math.round(batch_current/batch_total*100)+'%' : '0%'"></span>
     </div>
     <div style="height:6px;background:var(--color-border);border-radius:3px;overflow:hidden">
@@ -274,31 +288,119 @@ window.__bqaProjects = {{ projects | tojson | safe }};
     </div>
   </div>
 
-  <!-- Live preview (last 3 answers) -->
+  <!-- Live preview (last 50 answers) -->
   <div x-show="batch_results.length > 0" x-cloak>
-    <div style="font-size:.78rem;font-weight:600;color:var(--color-text-muted);margin-bottom:.4rem">
+    <div style="font-size:.78rem;font-weight:600;color:var(--color-text-muted);margin-bottom:.4rem;display:flex;align-items:center;gap:.4rem">
       Letzte Antworten (Live-Vorschau)
+      <span style="font-weight:400;font-style:italic" x-text="'(' + Math.min(batch_results.length, 50) + ' von ' + batch_results.length + ')'"></span>
     </div>
-    <div style="max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:.5rem">
-      <template x-for="(r, i) in batch_results.slice(-3)" :key="i">
-        <div style="border:1px solid var(--color-border);border-radius:.375rem;padding:.6rem .75rem;background:var(--color-surface)">
-          <div style="font-size:.72rem;color:var(--color-text-muted);margin-bottom:.25rem">
-            Nr. <strong x-text="r.Nr"></strong>
-            <span x-show="r.Lieferant"> · <span x-text="r.Lieferant"></span></span>
-          </div>
-          <div style="font-size:.8rem;font-style:italic;color:var(--color-text-muted);margin-bottom:.3rem;line-height:1.35" x-text="r.Frage ? r.Frage.substring(0,120)+'…' : ''"></div>
-          <template x-for="col in answerColumns(r)" :key="col">
-            <div>
-              <span style="font-size:.7rem;font-weight:600;color:var(--color-primary)" x-text="col" x-show="col !== 'Antwort'"></span>
-              <div style="font-size:.82rem;line-height:1.4;white-space:pre-wrap;max-height:100px;overflow:hidden" x-text="r[col]"></div>
+    <div style="max-height:600px;overflow-y:auto;display:flex;flex-direction:column;gap:.5rem">
+      <template x-for="(r, i) in batch_results.slice(-50).reverse()" :key="i">
+        <details style="border:1px solid var(--color-border);border-radius:.375rem;background:var(--color-surface)">
+          <summary style="cursor:pointer;padding:.6rem .75rem;user-select:none;list-style:none;display:flex;align-items:center;gap:.5rem">
+            <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;transition:transform .15s" :style="$el.closest('details').open ? 'transform:rotate(90deg)' : ''"><polyline points="9 18 15 12 9 6"/></svg>
+            <span style="font-size:.72rem;color:var(--color-text-muted);flex-shrink:0">
+              Nr. <strong x-text="r.Nr"></strong>
+              <span x-show="r.Lieferant"> · <span x-text="r.Lieferant"></span></span>
+            </span>
+            <span style="font-size:.8rem;font-style:italic;color:var(--color-text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="r.Frage ? r.Frage.substring(0,100) + (r.Frage.length > 100 ? '…' : '') : ''"></span>
+            <span x-show="r._RAG_Chunks && r._RAG_Chunks !== '(RAG deaktiviert)'" style="font-size:.7rem;color:var(--color-text-muted);white-space:nowrap;flex-shrink:0" x-text="r._RAG_Chunks ? r._RAG_Chunks.split(' | ').length + ' Quellen' : ''"></span>
+            <template x-if="r._Expansion">
+              <span style="font-size:.7rem;padding:.2rem .4rem;background:rgba(139,92,246,.15);color:#8b5cf6;border-radius:.25rem;font-weight:600;white-space:nowrap;flex-shrink:0">
+                🔄 Expansion
+              </span>
+            </template>
+            <template x-if="r._Reranking">
+              <span style="font-size:.7rem;padding:.2rem .4rem;background:rgba(147,51,234,.15);color:#9333ea;border-radius:.25rem;font-weight:600;white-space:nowrap;flex-shrink:0">
+                🎯 Reranking
+              </span>
+            </template>
+          </summary>
+          <div style="padding:.6rem .75rem;padding-top:0;border-top:1px solid var(--color-border)">
+            <!-- Frage vollständig -->
+            <div style="margin-bottom:.7rem;padding-top:.6rem">
+              <div style="font-size:.7rem;font-weight:600;color:var(--color-text-muted);margin-bottom:.2rem;text-transform:uppercase;letter-spacing:.02em">Frage</div>
+              <div style="font-size:.83rem;line-height:1.5;font-style:italic" x-text="r.Frage || '—'"></div>
             </div>
-          </template>
-        </div>
+            <!-- RAG Warnung -->
+            <template x-if="r._RAG_Warning">
+              <div style="display:flex;align-items:flex-start;gap:.4rem;padding:.4rem .55rem;margin-bottom:.5rem;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);border-radius:.3rem;font-size:.75rem;color:#f59e0b;line-height:1.4">
+                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:.1rem"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span x-text="r._RAG_Warning"></span>
+              </div>
+            </template>
+            <!-- Query Expansion Details -->
+            <template x-if="r._Expansion">
+              <div x-data="{ exp: JSON.parse(r._Expansion || '{}') }" style="margin-bottom:.6rem;padding:.5rem .6rem;background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.25);border-radius:.3rem;font-size:.73rem">
+                <div style="display:flex;align-items:center;gap:.35rem;margin-bottom:.35rem;color:#8b5cf6;font-weight:600">
+                  <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                  Query-Expansion
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;font-size:.72rem">
+                  <template x-for="(expansion, acronym) in exp.expansions || {}" :key="acronym">
+                    <div style="display:flex;align-items:center;gap:.3rem;padding:.25rem .45rem;background:var(--color-surface);border-radius:.25rem;border-left:2px solid #8b5cf6">
+                      <span style="font-weight:700;color:#8b5cf6" x-text="acronym"></span>
+                      <span style="color:var(--color-text-muted)">→</span>
+                      <span x-text="expansion"></span>
+                    </div>
+                  </template>
+                  <template x-if="exp.improvement > 0">
+                    <div style="padding:.2rem .4rem;background:rgba(34,197,94,.12);color:#22c55e;border-radius:.25rem;font-weight:600;white-space:nowrap">
+                      <span x-text="'Score: ' + (exp.original_max_score * 100).toFixed(0) + '% → ' + (exp.expanded_max_score * 100).toFixed(0) + '% (+' + (exp.improvement * 100).toFixed(0) + '%)'"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+            <!-- Reranking Details -->
+            <template x-if="r._Reranking">
+              <div x-data="{ rnk: JSON.parse(r._Reranking || '{}') }" style="margin-bottom:.6rem;padding:.5rem .6rem;background:rgba(147,51,234,.08);border:1px solid rgba(147,51,234,.25);border-radius:.3rem;font-size:.73rem">
+                <div style="display:flex;align-items:center;gap:.35rem;margin-bottom:.35rem;color:#9333ea;font-weight:600">
+                  <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="m9 14 2 2 4-4"/></svg>
+                  Reranking
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;font-size:.72rem">
+                  <div style="display:flex;align-items:center;gap:.3rem;padding:.25rem .45rem;background:var(--color-surface);border-radius:.25rem;border-left:2px solid #9333ea">
+                    <span style="font-weight:700;color:#9333ea" x-text="rnk.mode === 'score' ? 'Score-basiert' : 'LLM-basiert'"></span>
+                    <span style="color:var(--color-text-muted)">·</span>
+                    <span x-text="rnk.initial_k + ' → ' + rnk.final_k"></span>
+                  </div>
+                  <template x-if="rnk.improvement > 0">
+                    <div style="padding:.2rem .4rem;background:rgba(34,197,94,.12);color:#22c55e;border-radius:.25rem;font-weight:600;white-space:nowrap">
+                      <span x-text="'Score: ' + (rnk.score_before * 100).toFixed(0) + '% → ' + (rnk.score_after * 100).toFixed(0) + '% (+' + (rnk.improvement * 100).toFixed(0) + '%)'"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+            <!-- Antwort(en) -->
+            <template x-for="col in answerColumns(r)" :key="col">
+              <div style="margin-bottom:.7rem">
+                <div style="font-size:.7rem;font-weight:600;color:var(--color-primary);margin-bottom:.2rem;text-transform:uppercase;letter-spacing:.02em" x-text="col"></div>
+                <div style="font-size:.83rem;line-height:1.5;white-space:pre-wrap" x-text="r[col] || '—'"></div>
+              </div>
+            </template>
+            <!-- Quellen -->
+            <template x-if="r._RAG_Chunks && r._RAG_Chunks !== '(RAG deaktiviert)'">
+              <div style="margin-top:.5rem">
+                <div style="font-size:.7rem;font-weight:600;color:var(--color-text-muted);margin-bottom:.3rem;text-transform:uppercase;letter-spacing:.02em;display:flex;align-items:center;gap:.3rem">
+                  <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  Verwendete Quellen
+                </div>
+                <div style="font-size:.76rem;line-height:1.5;background:var(--color-surface-2);padding:.45rem .6rem;border-radius:.3rem;border:1px solid var(--color-border)">
+                  <template x-for="(chunk, ci) in (r._RAG_Chunks || '').split(' | ')" :key="ci">
+                    <div :style="ci > 0 ? 'margin-top:.3rem;padding-top:.3rem;border-top:1px solid var(--color-border)' : ''" x-text="chunk"></div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </details>
       </template>
     </div>
     <div x-show="batch_done" x-cloak style="margin-top:.5rem;font-size:.82rem;color:var(--color-success);display:flex;align-items:center;gap:.4rem">
       <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
-      Batch abgeschlossen — <strong x-text="batch_results.length"></strong> Antworten
+      Batch abgeschlossen — <strong x-text="batch_results.length"></strong> Antworten · Scroll nach unten für Ergebnisse &amp; Detail-Ansicht
     </div>
   </div>
 
@@ -320,7 +422,7 @@ window.__bqaProjects = {{ projects | tojson | safe }};
   <div style="font-size:.78rem;color:var(--color-text-muted);margin-bottom:.75rem">
     <span x-text="batch_results.length + ' Zeilen'"></span>
     · <span x-text="displayColumns().join(', ')"></span>
-    <span style="margin-left:.5rem;font-style:italic">(RAG-Debug-Spalten sind nur im Export enthalten)</span>
+    <span style="margin-left:.5rem;font-style:italic">(RAG-Debug-Spalten + Quellen-Detail unten, nur im Export als Spalten)</span>
   </div>
 
   <!-- Results table -->
@@ -328,6 +430,7 @@ window.__bqaProjects = {{ projects | tojson | safe }};
     <table style="width:100%;border-collapse:collapse;font-size:.8rem">
       <thead>
         <tr>
+          <th style="position:sticky;top:0;background:var(--color-surface-2);padding:.4rem .6rem;text-align:left;font-weight:600;border-bottom:2px solid var(--color-border);white-space:nowrap"></th>
           <template x-for="col in displayColumns()" :key="col">
             <th style="position:sticky;top:0;background:var(--color-surface-2);padding:.4rem .6rem;text-align:left;font-weight:600;border-bottom:2px solid var(--color-border);white-space:nowrap" x-text="col"></th>
           </template>
@@ -336,6 +439,12 @@ window.__bqaProjects = {{ projects | tojson | safe }};
       <tbody>
         <template x-for="(row, ri) in batch_results" :key="ri">
           <tr :style="ri%2===0 ? '' : 'background:var(--color-surface)'">
+            <td style="padding:.25rem .5rem;vertical-align:top;border-bottom:1px solid var(--color-border);white-space:nowrap">
+              <button class="btn btn-secondary" style="padding:.2rem .5rem;font-size:.72rem;line-height:1.3" @click="openDetail(ri)">
+                <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                Detail
+              </button>
+            </td>
             <template x-for="col in displayColumns()" :key="col">
               <td style="padding:.35rem .6rem;vertical-align:top;border-bottom:1px solid var(--color-border)" x-text="row[col] || ''"></td>
             </template>
@@ -343,6 +452,132 @@ window.__bqaProjects = {{ projects | tojson | safe }};
         </template>
       </tbody>
     </table>
+  </div>
+
+  <!-- Detail view with sources -->
+  <div style="margin-top:1.2rem">
+    <h3 style="font-size:.95rem;font-weight:600;margin-bottom:.6rem;display:flex;align-items:center;gap:.4rem">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+      Detail-Ansicht (Antworten + Quellen)
+    </h3>
+    <div style="display:flex;flex-direction:column;gap:.6rem">
+      <template x-for="(row, ri) in batch_results" :key="ri">
+        <details :id="'detail-row-' + ri" style="border:1px solid var(--color-border);border-radius:.5rem;padding:.75rem;background:var(--color-surface)">
+          <summary style="cursor:pointer;font-weight:600;font-size:.85rem;display:flex;align-items:center;gap:.5rem;user-select:none">
+            <span style="color:var(--color-primary)" x-text="'Nr. ' + (row.Nr || '?')"></span>
+            <span style="color:var(--color-text-muted);font-weight:400" x-show="row.Lieferant" x-text="'· ' + row.Lieferant"></span>
+            <span style="flex:1;font-weight:400;font-size:.82rem;color:var(--color-text-muted)" x-text="row.Frage ? row.Frage.substring(0,100) + (row.Frage.length > 100 ? '…' : '') : ''"></span>
+            <span x-show="row._RAG_Warning" title="Niedrige RAG-Konfidenz" style="color:#f59e0b;flex-shrink:0">
+              <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </span>
+          </summary>
+          <div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--color-border)">
+            <!-- Frage vollständig -->
+            <div style="margin-bottom:.9rem">
+              <div style="font-size:.72rem;font-weight:600;color:var(--color-text-muted);margin-bottom:.25rem;text-transform:uppercase;letter-spacing:.02em">Frage</div>
+              <div style="font-size:.85rem;line-height:1.5;font-style:italic" x-text="row.Frage || '—'"></div>
+            </div>
+            
+            <!-- Antwort(en) -->
+            <template x-for="col in answerColumns(row)" :key="col">
+              <div style="margin-bottom:.9rem">
+                <div style="font-size:.72rem;font-weight:600;color:var(--color-primary);margin-bottom:.25rem;text-transform:uppercase;letter-spacing:.02em" x-text="col"></div>
+                <div style="font-size:.85rem;line-height:1.6;white-space:pre-wrap" x-text="row[col] || '—'"></div>
+              </div>
+            </template>
+            
+            <!-- RAG Warnung -->
+            <template x-if="row._RAG_Warning">
+              <div style="display:flex;align-items:flex-start;gap:.5rem;padding:.5rem .65rem;margin-bottom:.6rem;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);border-radius:.375rem;font-size:.8rem;color:#f59e0b;line-height:1.4">
+                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:.1rem"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span x-text="row._RAG_Warning"></span>
+              </div>
+            </template>
+
+            <!-- Query Expansion Details -->
+            <template x-if="row._Expansion">
+              <div x-data="{ exp: JSON.parse(row._Expansion || '{}') }" style="margin-bottom:.75rem;padding:.6rem .75rem;background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.25);border-radius:.375rem">
+                <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.5rem;color:#8b5cf6;font-weight:600;font-size:.78rem">
+                  <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                  Query-Expansion (Akronym-Auflösung)
+                </div>
+                <div style="display:flex;flex-direction:column;gap:.45rem;font-size:.76rem">
+                  <template x-for="(expansion, acronym) in exp.expansions || {}" :key="acronym">
+                    <div style="display:flex;align-items:center;gap:.4rem;padding:.35rem .5rem;background:var(--color-surface);border-radius:.3rem;border-left:3px solid #8b5cf6">
+                      <span style="font-weight:700;color:#8b5cf6" x-text="acronym"></span>
+                      <span style="color:var(--color-text-muted)">→</span>
+                      <span x-text="expansion"></span>
+                    </div>
+                  </template>
+                  <template x-if="exp.improvement !== undefined">
+                    <div style="display:flex;align-items:center;gap:.5rem;padding:.35rem .5rem;background:var(--color-surface);border-radius:.3rem">
+                      <span style="color:var(--color-text-muted)">Score:</span>
+                      <span :style="(exp.original_max_score < 0.45 ? 'color:#ef4444' : 'color:#22c55e') + ';font-weight:600'" x-text="(exp.original_max_score * 100).toFixed(1) + '%'"></span>
+                      <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="5 12 19 12"/><polyline points="12 5 19 12 12 19"/></svg>
+                      <span :style="(exp.expanded_max_score >= 0.45 ? 'color:#22c55e' : 'color:#f59e0b') + ';font-weight:600'" x-text="(exp.expanded_max_score * 100).toFixed(1) + '%'"></span>
+                      <template x-if="exp.improvement > 0">
+                        <span style="padding:.15rem .4rem;background:rgba(34,197,94,.15);color:#22c55e;border-radius:.2rem;font-weight:700;white-space:nowrap" x-text="'+' + (exp.improvement * 100).toFixed(1) + '%'"></span>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <!-- Reranking Details -->
+            <template x-if="row._Reranking">
+              <div x-data="{ rnk: JSON.parse(row._Reranking || '{}') }" style="margin-bottom:.75rem;padding:.6rem .75rem;background:rgba(147,51,234,.08);border:1px solid rgba(147,51,234,.25);border-radius:.375rem">
+                <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.5rem;color:#9333ea;font-weight:600;font-size:.78rem">
+                  <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="m9 14 2 2 4-4"/></svg>
+                  Reranking (intelligente Neugewichtung)
+                </div>
+                <div style="display:flex;flex-direction:column;gap:.45rem;font-size:.76rem">
+                  <div style="display:flex;align-items:center;gap:.4rem;padding:.35rem .5rem;background:var(--color-surface);border-radius:.3rem;border-left:3px solid #9333ea">
+                    <span style="font-weight:700;color:#9333ea" x-text="rnk.mode === 'score' ? 'Score-basiert' : 'LLM-basiert'"></span>
+                    <span style="color:var(--color-text-muted)">·</span>
+                    <span x-text="rnk.initial_k + ' Kandidaten → Top-' + rnk.final_k"></span>
+                  </div>
+                  <template x-if="rnk.improvement !== undefined">
+                    <div style="display:flex;align-items:center;gap:.5rem;padding:.35rem .5rem;background:var(--color-surface);border-radius:.3rem">
+                      <span style="color:var(--color-text-muted)">Score:</span>
+                      <span style="color:var(--color-text);font-weight:600" x-text="(rnk.score_before * 100).toFixed(1) + '%'"></span>
+                      <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="5 12 19 12"/><polyline points="12 5 19 12 12 19"/></svg>
+                      <span style="color:#22c55e;font-weight:600" x-text="(rnk.score_after * 100).toFixed(1) + '%'"></span>
+                      <template x-if="rnk.improvement > 0">
+                        <span style="padding:.15rem .4rem;background:rgba(34,197,94,.15);color:#22c55e;border-radius:.2rem;font-weight:700;white-space:nowrap" x-text="'+' + (rnk.improvement * 100).toFixed(1) + '%'"></span>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <!-- RAG Quellen -->
+            <div x-show="row._RAG_Chunks && row._RAG_Chunks !== '(RAG deaktiviert)'" style="margin-bottom:.75rem">
+              <div style="font-size:.72rem;font-weight:600;color:var(--color-text-muted);margin-bottom:.35rem;text-transform:uppercase;letter-spacing:.02em;display:flex;align-items:center;gap:.3rem">
+                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                Verwendete Quellen
+              </div>
+              <div style="font-size:.78rem;line-height:1.5;background:var(--color-surface-2);padding:.5rem .65rem;border-radius:.375rem;border:1px solid var(--color-border)">
+                <template x-for="(chunk, ci) in (row._RAG_Chunks || '').split(' | ')" :key="ci">
+                  <div style="margin-bottom:.35rem;padding-bottom:.35rem;border-bottom:1px solid var(--color-border)" :style="ci === (row._RAG_Chunks || '').split(' | ').length - 1 ? 'border:none;margin-bottom:0;padding-bottom:0' : ''">
+                    <span x-text="chunk"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+            
+            <!-- RAG Debug (collapsible) -->
+            <details x-show="row._RAG_Debug && row._RAG_Debug !== '(RAG deaktiviert)'" style="margin-top:.5rem">
+              <summary style="cursor:pointer;font-size:.7rem;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.02em;user-select:none">
+                🔧 RAG Debug-Info
+              </summary>
+              <div style="margin-top:.4rem;font-size:.7rem;font-family:ui-monospace,monospace;line-height:1.5;background:var(--color-surface-2);padding:.5rem;border-radius:.375rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all" x-text="row._RAG_Debug || '—'"></div>
+            </details>
+          </div>
+        </details>
+      </template>
+    </div>
   </div>
 
   <!-- Export controls -->
@@ -467,8 +702,11 @@ function batchQA() {
     batch_error: '',
     batch_current: 0,
     batch_total: 0,
+    batch_total_csv: 0,
+    batch_current_nr: '',
     batch_current_lief: '',
     batch_results: [],
+    batch_cp_exists: false,
     _es: null,
     // Step 8
     export_tag: '',
@@ -573,8 +811,13 @@ function batchQA() {
       fetch('/batch-qa/checkpoint-info', { method: 'POST', body: fd })
         .then(r => r.text())
         .then(html => {
+          // Show in Step 2 (original location)
           const el = document.getElementById('bqa-checkpoint');
           if (el) el.innerHTML = html;
+          // Also show in Step 7 near the start button
+          const el7 = document.getElementById('bqa-cp-step7');
+          if (el7) el7.innerHTML = html ? html.replace('bqa-cp-step7','bqa-cp-step7-inner') : '';
+          this.batch_cp_exists = !!html.trim();
         });
     },
 
@@ -654,13 +897,15 @@ function batchQA() {
       }
     },
 
-    startBatch() {
+    startBatch(forceRestart = false) {
       if (!this.csv_doc_id || !this.project_key) return;
       this.batch_running = true;
       this.batch_done = false;
       this.batch_error = '';
       this.batch_current = 0;
       this.batch_total = 0;
+      this.batch_total_csv = this.csv_row_count || 0;
+      this.batch_current_nr = '';
       this.batch_current_lief = '';
       this.batch_results = [];
 
@@ -679,7 +924,9 @@ function batchQA() {
         rag_enabled: this.$store.ki.rag_enabled,
         rag_top_k: this.$store.ki.rag_top_k,
         rag_threshold: this.$store.ki.rag_similarity_threshold,
+        enable_expansion: this.$store.ki.enable_expansion,
         question_selection: this.question_selection_mode === 'all' ? 'all' : this.question_selection_range,
+        force_restart: forceRestart ? 'true' : 'false',
       });
 
       const es = new EventSource('/batch-qa/stream?' + params.toString());
@@ -691,10 +938,17 @@ function batchQA() {
         this.batch_total = d.total;
       });
 
+      es.addEventListener('checkpoint_skipped', evt => {
+        // Settings changed — checkpoint ignored, warn user once
+        const el7 = document.getElementById('bqa-cp-step7');
+        if (el7) el7.innerHTML = `<div style="font-size:.8rem;color:var(--color-warning,#f59e0b);padding:.4rem .6rem;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:.375rem;margin-bottom:.5rem">⚠️ Checkpoint ignoriert — Einstellungen haben sich geändert (Modell, Rollen oder Fragen-Auswahl). Starte neu von Anfang.</div>`;
+      });
+
       es.addEventListener('progress', evt => {
         const d = JSON.parse(evt.data);
         this.batch_current = d.current;
         this.batch_total = d.total;
+        this.batch_current_nr = d.nr || '';
         this.batch_current_lief = d.lieferant || '';
       });
 
@@ -706,9 +960,12 @@ function batchQA() {
       es.addEventListener('done', evt => {
         this.batch_running = false;
         this.batch_done = true;
+        this.batch_cp_exists = false;
         es.close();
         this._es = null;
         document.getElementById('bqa-checkpoint').innerHTML = '';
+        const el7 = document.getElementById('bqa-cp-step7');
+        if (el7) el7.innerHTML = '';
       });
 
       es.addEventListener('error', evt => {
@@ -738,6 +995,16 @@ function batchQA() {
       const all = new Set();
       this.batch_results.forEach(r => Object.keys(r).forEach(k => all.add(k)));
       return Array.from(all).filter(k => !k.startsWith('_'));
+    },
+
+    openDetail(ri) {
+      // Open details element and scroll to it
+      this.$nextTick(() => {
+        const el = document.getElementById('detail-row-' + ri);
+        if (!el) return;
+        el.open = true;
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
     },
 
     buildExportFilename() {
@@ -792,7 +1059,12 @@ function batchQA() {
       fd.append('project_key', this.project_key);
       fd.append('csv_doc_id', this.csv_doc_id);
       fetch('/batch-qa/checkpoint-delete', { method: 'POST', body: fd })
-        .then(() => { document.getElementById('bqa-checkpoint').innerHTML = ''; });
+        .then(() => {
+          document.getElementById('bqa-checkpoint').innerHTML = '';
+          const el7 = document.getElementById('bqa-cp-step7');
+          if (el7) el7.innerHTML = '';
+          this.batch_cp_exists = false;
+        });
     },
 
     // Called from preview partial — always uses current settings (no stale textarea)

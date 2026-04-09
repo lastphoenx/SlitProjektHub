@@ -185,6 +185,51 @@
           </div>
         </div>
       </details>
+
+      <!-- Query-Expansion Toggle -->
+      <div style="margin-top:.75rem;padding:.65rem .75rem;background:var(--color-surface-2);border:1px solid var(--color-border);border-radius:.5rem;display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;flex-direction:column;gap:.15rem">
+          <span style="font-size:.85rem;font-weight:600">Query-Expansion (Akronyme)</span>
+          <span class="text-muted" style="font-size:.75rem;line-height:1.4">
+            Bei niedrigem Confidence: Akronyme automatisch auflösen und erneut suchen (kostet 1 extra LLM-Call)
+          </span>
+        </div>
+        <label style="position:relative;display:inline-block;width:38px;height:20px;cursor:pointer;flex-shrink:0">
+          <input type="checkbox"
+                 :checked="$store.ki.enable_expansion"
+                 @change="$store.ki.enable_expansion = $event.target.checked; $store.ki.syncToggle('expansion', $event.target.checked)"
+                 style="opacity:0;width:0;height:0">
+          <span :style="'display:block;position:absolute;inset:0;border-radius:20px;background:'+($store.ki.enable_expansion ? 'var(--color-primary)' : 'var(--color-border)')+';transition:.25s'">
+            <span :style="'position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;transition:.25s;left:'+($store.ki.enable_expansion?'21px':'3px')"></span>
+          </span>
+        </label>
+      </div>
+
+      <!-- Auto-sync indicator -->
+      <div style="display:flex;align-items:center;gap:.4rem;padding:.3rem .75rem;font-size:.73rem;color:var(--color-text-muted)">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+        <span>Diese zwei Toggles sind <strong>automatisch gekoppelt</strong> — beide ein oder beide aus.
+        Expansion bringt mehr Kandidaten; Reranking sortiert diese intelligent.</span>
+      </div>
+
+      <!-- Reranking Toggle -->
+      <div style="margin-top:.75rem;padding:.65rem .75rem;background:var(--color-surface-2);border:1px solid var(--color-border);border-radius:.5rem;display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;flex-direction:column;gap:.15rem">
+          <span style="font-size:.85rem;font-weight:600">Reranking aktivieren</span>
+          <span class="text-muted" style="font-size:.75rem;line-height:1.4">
+            Top-15 Kandidaten holen und auf Top-7 reranken (bessere Präzision, findet relevante Chunks die initial nur Rang 8-15 hatten)
+          </span>
+        </div>
+        <label style="position:relative;display:inline-block;width:38px;height:20px;cursor:pointer;flex-shrink:0">
+          <input type="checkbox"
+                 :checked="$store.ki.enable_reranking"
+                 @change="$store.ki.enable_reranking = $event.target.checked; $store.ki.syncToggle('reranking', $event.target.checked)"
+                 style="opacity:0;width:0;height:0">
+          <span :style="'display:block;position:absolute;inset:0;border-radius:20px;background:'+($store.ki.enable_reranking ? 'var(--color-primary)' : 'var(--color-border)')+';transition:.25s'">
+            <span :style="'position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;transition:.25s;left:'+($store.ki.enable_reranking?'21px':'3px')"></span>
+          </span>
+        </label>
+      </div>
     </div>
   </div>
 

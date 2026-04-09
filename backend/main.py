@@ -39,7 +39,7 @@ from src.m08_llm import (providers_available, generate_role_text, generate_summa
 from src.m10_chat import (save_message, load_history, find_latest_session_for_project, build_project_map,
                            update_message_metadata, delete_message, delete_history, purge_history,
                            save_rag_feedback)
-from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results
+from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results, rag_low_confidence_warning
 from src.m01_config import load_user_settings, save_user_settings
 from sqlmodel import select
 import uuid as _uuid
@@ -850,6 +850,8 @@ async def chat_send(
                 project_key=project_key,
                 limit=s.get("rag_top_k", 7),
                 threshold=s.get("rag_similarity_threshold", 0.45),
+                enable_expansion=s.get("rag_query_expansion", False),
+                enable_reranking=s.get("rag_reranking_enabled", True),
             )
             rag_results = deduplicate_results(rag_results)
             rag_text = build_rag_context_from_search(rag_results)
@@ -1221,6 +1223,8 @@ def _load_settings_ctx() -> dict:
         "rag_chunk_size": int(merged.get("rag_chunk_size", 1000)),
         "rag_similarity_threshold": float(merged.get("rag_similarity_threshold", 0.45)),
         "rag_enabled": bool(merged.get("rag_enabled", True)),
+        "rag_query_expansion": bool(merged.get("rag_query_expansion", False)),
+        "rag_reranking_enabled": bool(merged.get("rag_reranking_enabled", True)),  # Reranking Toggle
     }
 
 
@@ -1247,6 +1251,8 @@ async def settings_save(
     rag_chunk_size: int = Form(1000),
     rag_similarity_threshold: float = Form(0.45),
     rag_enabled: str = Form("false"),
+    enable_expansion: str = Form("false"),
+    enable_reranking: str = Form("true"),  # Reranking Toggle
 ):
     settings_dict = {
         "provider": provider,
@@ -1256,6 +1262,8 @@ async def settings_save(
         "rag_chunk_size": rag_chunk_size,
         "rag_similarity_threshold": round(rag_similarity_threshold, 3),
         "rag_enabled": rag_enabled in ("true", "on", "1", "yes"),
+        "rag_query_expansion": enable_expansion in ("true", "on", "1", "yes"),
+        "rag_reranking_enabled": enable_reranking in ("true", "on", "1", "yes"),
     }
     save_user_settings(settings_dict)
     response = templates.TemplateResponse("settings/index.html", {
@@ -1347,6 +1355,9 @@ def _style_text(answer_style: str, answer_stance: str, answer_wording: str) -> s
     return style_map.get(answer_style, "") + stance_map.get(answer_stance, "") + wording_map.get(answer_wording, "")
 
 
+
+
+
 def _load_bqa_questions(csv_doc_id: int) -> list[dict]:
     """Load and parse all question-rows from a CSV DocumentChunk."""
     rows = []
@@ -1362,6 +1373,88 @@ def _load_bqa_questions(csv_doc_id: int) -> list[dict]:
         except Exception:
             pass
     return rows
+
+
+def _select_questions(questions: list[dict], selection_str: str) -> list[tuple[int, dict]]:
+    """
+    Select questions from list based on selection string.
+    
+    The selection is Nr-based (matches the "Nr." column in CSV) when all
+    questions have a numeric Nr field. Otherwise falls back to positional
+    selection (row index in DB order).
+    
+    Args:
+        questions: List of question dicts
+        selection_str: "all", "" or range like "1-10,25,51-60"
+    
+    Returns:
+        List of (original_db_index, question_dict) tuples sorted by Nr (or position)
+    """
+    if not questions:
+        return []
+    
+    sel = (selection_str or "").strip().lower()
+    if sel in ("", "all"):
+        return list(enumerate(questions))
+    
+    # Try Nr-based selection first (matches CSV Nr. column)
+    nr_to_idx: dict[int, int] = {}
+    for idx, q in enumerate(questions):
+        nr_str = _get_csv_field(q, "Nr", "")
+        try:
+            nr_to_idx[int(float(nr_str))] = idx
+        except (ValueError, TypeError):
+            pass
+    
+    use_nr_based = len(nr_to_idx) == len(questions)
+    
+    selected_db_indices: set[int] = set()
+    parts = [p.strip() for p in selection_str.split(",")]
+    
+    for part in parts:
+        if "-" in part:
+            try:
+                s_str, e_str = part.split("-", 1)
+                s, e = int(s_str.strip()), int(e_str.strip())
+                if s > e:
+                    raise ValueError(f"Bereich {s}-{e}: Start > Ende")
+                if use_nr_based:
+                    for n in range(s, e + 1):
+                        if n in nr_to_idx:
+                            selected_db_indices.add(nr_to_idx[n])
+                else:
+                    if s < 1 or e > len(questions):
+                        raise ValueError(f"Bereich {s}-{e} ausserhalb von 1-{len(questions)}")
+                    for i in range(s - 1, e):
+                        selected_db_indices.add(i)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from None
+        else:
+            try:
+                n = int(part.strip())
+                if use_nr_based:
+                    if n in nr_to_idx:
+                        selected_db_indices.add(nr_to_idx[n])
+                else:
+                    if n < 1 or n > len(questions):
+                        raise ValueError(f"Frage {n} ausserhalb von 1-{len(questions)}")
+                    selected_db_indices.add(n - 1)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from None
+    
+    if not selected_db_indices:
+        raise ValueError("Keine Fragen in Auswahl gefunden")
+    
+    # Sort by Nr if available, otherwise by db index
+    if use_nr_based:
+        def _sort_key(t: tuple[int, dict]) -> int:
+            try:
+                return int(float(_get_csv_field(t[1], "Nr", str(t[0] + 1)) or t[0] + 1))
+            except (ValueError, TypeError):
+                return t[0]
+        return sorted([(idx, questions[idx]) for idx in selected_db_indices], key=_sort_key)
+    else:
+        return sorted([(idx, questions[idx]) for idx in selected_db_indices], key=lambda t: t[0])
 
 
 def _parse_question_selection(selection_str: str, total_questions: int) -> set[int]:
@@ -1566,8 +1659,12 @@ async def batch_qa_prompt_preview(
     # RAG
     rag_ctx = ""
     rag_sources_html = "(RAG deaktiviert)"
+    pre_expansion_sources_html = ""
     rag_debug = None
     rag_diagnostics = []
+    rag_warning = None
+    expansion_info = {}
+    reranking_info = {}
     rag_threshold = float(s.get("rag_similarity_threshold", 0.45))
     if s.get("rag_enabled", True):
         try:
@@ -1576,16 +1673,31 @@ async def batch_qa_prompt_preview(
                 limit=int(s.get("rag_top_k", 5)),
                 threshold=rag_threshold,
                 exclude_classification="FAQ/Fragen-Katalog",
+                enable_expansion=s.get("rag_query_expansion", False),  # Query-Expansion nur wenn aktiviert
+                enable_reranking=s.get("rag_reranking_enabled", True),  # Reranking nur wenn aktiviert
             )
             rr = deduplicate_results(rr)
             rag_debug = rr.get("debug")
             rag_ctx = build_rag_context_from_search(rr)
+            rag_warning = rag_low_confidence_warning(rr, rag_threshold)
+            expansion_info = rr.get("expansion", {})  # Extract expansion metadata for detailed display
+            reranking_info = rr.get("reranking", {})  # Extract reranking metadata for detailed display
             docs = rr.get("documents", [])
+            pre_expansion_docs = rr.get("pre_expansion_documents", [])
+            # Expansion-Terme auch für Preview nutzen damit relevante Stelle angezeigt wird
+            _exp = rr.get("expansion", {})
+            _preview_q = (_exp.get("expansions") and q_text + " " + " ".join(_exp["expansions"].values())) or q_text
             rag_sources_html = "\n".join(
-                f"• {d.get('filename','?')} ({min(max(d.get('similarity',0),d.get('match_score',0)),1.0):.0%})\n  "
-                + format_chunk_preview((d.get('text','') or '').replace('\n',' '), max_length=150, query=q_text)
+                f"• {d.get('filename','?')} ({min(max(d.get('similarity',0),d.get('normalized_match_score',0)),1.0):.0%})\n  "
+                + format_chunk_preview((d.get('text','') or '').replace('\n',' '), max_length=150, query=_preview_q)
                 for d in docs
             ) or "(keine passenden Chunks)"
+            # 1. Lauf (vor Expansion) für Vergleich im UI
+            pre_expansion_sources_html = "\n".join(
+                f"• {d.get('filename','?')} ({min(max(d.get('similarity',0),d.get('normalized_match_score',0)),1.0):.0%})\n  "
+                + format_chunk_preview((d.get('text','') or '').replace('\n',' '), max_length=150, query=q_text)
+                for d in pre_expansion_docs
+            ) if pre_expansion_docs else ""
             rag_diagnostics = get_all_documents_with_best_scores(
                 (rag_debug or {}).get('keyword_query', q_text), project_key=project_key,
                 threshold=rag_threshold,
@@ -1621,6 +1733,10 @@ async def batch_qa_prompt_preview(
         "sys_prompt": sys_prompt,
         "user_prompt": user_prompt,
         "rag_sources_html": rag_sources_html,
+        "pre_expansion_sources_html": pre_expansion_sources_html,
+        "rag_warning": rag_warning,
+        "expansion_info": expansion_info,
+        "reranking_info": reranking_info,
         "rag_diagnostics": rag_diagnostics,
         "rag_debug": rag_debug,
         "rag_threshold": rag_threshold,
@@ -1729,6 +1845,7 @@ async def batch_qa_run_preview_answer(
                 q_text, project_key=project_key,
                 limit=rag_top_k, threshold=rag_threshold,
                 exclude_classification="FAQ/Fragen-Katalog",
+                enable_reranking=s.get("rag_reranking_enabled", True),
             )
             rr = deduplicate_results(rr)
             rag_ctx = build_rag_context_from_search(rr)
@@ -1965,7 +2082,10 @@ async def batch_qa_stream(
     rag_enabled: bool = True,
     rag_top_k: int = 5,
     rag_threshold: float = 0.45,
+    enable_expansion: bool = False,  # Query-Expansion (Akronym-Auflösung)
+    enable_reranking: bool = True,  # Reranking (Top-15→Top-7)
     question_selection: str = "all",
+    force_restart: bool = False,
 ):
     """
     SSE stream for batch execution. Events:
@@ -1998,14 +2118,10 @@ async def batch_qa_stream(
         
         # ── Parse question selection ───────────────────────────────────────
         try:
-            selected_indices = _parse_question_selection(question_selection, len(questions))
+            selected_questions = _select_questions(questions, question_selection)
         except ValueError as e:
             yield f"event: error\ndata: {json.dumps({'message': f'Ungültige Fragen-Auswahl: {e}'})}\n\n"
             return
-        
-        # Create mapping: original_index -> question_data
-        questions_map = {idx: q for idx, q in enumerate(questions)}
-        selected_questions = [(idx, questions_map[idx]) for idx in sorted(selected_indices)]
         
         if not selected_questions:
             yield f"event: error\ndata: {json.dumps({'message': 'Keine Fragen ausgewählt.'})}\n\n"
@@ -2014,7 +2130,13 @@ async def batch_qa_stream(
         # ── Checkpoint resume ──────────────────────────────────────────────
         results: list[dict] = []
         resume_from = 0
-        if cp_path.exists():
+        if force_restart and cp_path.exists():
+            # User explicitly wants to restart — delete existing checkpoint
+            try:
+                cp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        if not force_restart and cp_path.exists():
             try:
                 saved = json.loads(cp_path.read_text(encoding="utf-8"))
                 if isinstance(saved, dict) and "results" in saved:
@@ -2029,6 +2151,9 @@ async def batch_qa_stream(
                         results = saved["results"]
                         resume_from = len(results)
                         yield f"event: resume\ndata: {json.dumps({'from': resume_from, 'total': len(selected_questions)})}\n\n"
+                    else:
+                        # Settings changed — inform frontend
+                        yield f"event: checkpoint_skipped\ndata: {json.dumps({'reason': 'Einstellungen geändert (Modell, Rollen oder Fragen-Auswahl)'})}\n\n"
             except Exception:
                 pass
 
@@ -2067,12 +2192,30 @@ async def batch_qa_stream(
                         q_text, project_key=project_key,
                         limit=rag_top_k, threshold=rag_threshold,
                         exclude_classification="FAQ/Fragen-Katalog",
+                        enable_expansion=enable_expansion,  # Query-Expansion von URL-Parameter
+                        enable_reranking=enable_reranking,  # Reranking von URL-Parameter
                     )
                     rr = deduplicate_results(rr)
                     rag_ctx = build_rag_context_from_search(rr)
+                    rag_warn = rag_low_confidence_warning(rr, rag_threshold)
+                    expansion_info = rr.get("expansion", {})
+                    reranking_info = rr.get("reranking", {})
+                    if rag_warn:
+                        row["_RAG_Warning"] = rag_warn
+                    if expansion_info and expansion_info.get("triggered"):
+                        # Include expansion metadata for structured display in frontend
+                        row["_Expansion"] = json.dumps(expansion_info)
+                    if reranking_info and reranking_info.get("enabled"):
+                        # Include reranking metadata for structured display in frontend
+                        row["_Reranking"] = json.dumps(reranking_info)
+                    # Verwende distillierte Keywords für Preview (zeigt relevante Stelle im Chunk)
+                    # Falls Expansion ausgelöst wurde, sind die Expansions-Terme auch dabei
+                    _preview_query = expansion_info.get("expansions") and (
+                        q_text + " " + " ".join(expansion_info["expansions"].values())
+                    ) or q_text
                     row["_RAG_Chunks"] = " | ".join(
                         f"{d.get('filename','?')} ({min(max(d.get('similarity',0),d.get('match_score',0)),1.0):.0%}): "
-                        + format_chunk_preview((d.get('text','') or '').replace('\n',' '), max_length=120, query=q_text)
+                        + format_chunk_preview((d.get('text','') or '').replace('\n',' '), max_length=120, query=_preview_query)
                         for d in rr.get("documents", [])
                     )
                     dbg = rr.get("debug", {})

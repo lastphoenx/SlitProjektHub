@@ -257,6 +257,8 @@ def render_global_llm_settings():
         st.session_state["global_rag_chunk_size"] = user_settings.get("rag_chunk_size", defaults.get("rag_chunk_size", 1000))
         st.session_state["global_rag_similarity_threshold"] = user_settings.get("rag_similarity_threshold", defaults.get("rag_similarity_threshold", 0.5))
         st.session_state["global_rag_enabled"] = user_settings.get("rag_enabled", defaults.get("rag_enabled", True))
+        st.session_state["global_rag_query_expansion"] = user_settings.get("rag_query_expansion", defaults.get("rag_query_expansion", False))
+        st.session_state["global_rag_reranking_enabled"] = user_settings.get("rag_reranking_enabled", defaults.get("rag_reranking_enabled", True))
         st.session_state["settings_loaded"] = True
         st.session_state["_provider_test_cache"] = None
     
@@ -381,8 +383,33 @@ def render_global_llm_settings():
             st.session_state["global_rag_enabled"] = rag_enabled
             _save_settings_to_disk()
         
-        # Info-Expander: Parameter-Erklärungen
-        with st.expander("ℹ️ Was bedeuten diese Werte?", expanded=False):
+        query_expansion = st.toggle(
+            "Query-Expansion (Akronyme)",
+            value=st.session_state.get("global_rag_query_expansion", False),
+            help="Bei niedrigem Confidence: Akronyme automatisch auflösen und erneut suchen (kostet 1 extra LLM-Call)."
+        )
+        if st.session_state.get("global_rag_query_expansion") != query_expansion:
+            st.session_state["global_rag_query_expansion"] = query_expansion
+            # 🔄 Auto-Sync: Expansion ↔ Reranking sind immer gekoppelt
+            # Expansion bringt mehr Kandidaten → Reranking muss diese intelligent sortieren
+            st.session_state["global_rag_reranking_enabled"] = query_expansion
+            _save_settings_to_disk()
+            st.rerun()  # Zweiten Toggle visuell aktualisieren (liest value= neu)
+
+        st.caption("🔄 Expansion & Reranking sind gekoppelt — beide ein oder beide aus")
+
+        reranking_enabled = st.toggle(
+            "Reranking (Top-15 → Top-7)",
+            value=st.session_state.get("global_rag_reranking_enabled", True),
+            help="Top-15 Kandidaten holen und intelligent auf Top-7 reranken (60% Semantic + 25% BM25 + 10% Dateiname)."
+        )
+        if st.session_state.get("global_rag_reranking_enabled") != reranking_enabled:
+            st.session_state["global_rag_reranking_enabled"] = reranking_enabled
+            # 🔄 Auto-Sync: Reranking ↔ Expansion sind immer gekoppelt
+            # Ohne Reranking macht Expansion wenig Sinn (kein intelligentes Sortieren der Extra-Kandidaten)
+            st.session_state["global_rag_query_expansion"] = reranking_enabled
+            _save_settings_to_disk()
+            st.rerun()  # Zweiten Toggle visuell aktualisieren (liest value= neu)
             st.markdown("""
             **RAG-Kontexte (Top-K):** `7`  
             Anzahl der Dokument-Chunks die als Kontext eingefügt werden.
@@ -439,6 +466,8 @@ def _save_settings_to_disk():
         "rag_chunk_size": st.session_state.get("global_rag_chunk_size"),
         "rag_similarity_threshold": st.session_state.get("global_rag_similarity_threshold"),
         "rag_enabled": st.session_state.get("global_rag_enabled"),
+        "rag_query_expansion": st.session_state.get("global_rag_query_expansion"),
+        "rag_reranking_enabled": st.session_state.get("global_rag_reranking_enabled"),
     }
     save_user_settings(settings)
 

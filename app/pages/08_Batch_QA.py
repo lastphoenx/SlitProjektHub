@@ -22,7 +22,7 @@ from src.m03_db import init_db, get_session, Document, DocumentChunk
 from src.m06_ui import render_global_llm_settings
 from src.m07_projects import list_projects_df, load_project, get_project_roles
 from src.m08_llm import try_models_with_messages
-from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results, get_all_documents_with_best_scores, format_chunk_preview
+from src.m09_rag import retrieve_relevant_chunks_hybrid, build_rag_context_from_search, deduplicate_results, get_all_documents_with_best_scores, format_chunk_preview, rag_low_confidence_warning
 def render_retrieval_debug(debug_payload: dict | None, title: str = "🔎 Retrieval-Debug (BM25 / Semantic / Final)"):
     if not debug_payload:
         st.caption("Keine Retriever-Debugdaten verfügbar")
@@ -752,15 +752,21 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
             _rag_sources = "(RAG deaktiviert)"
             _rag_diagnostics = []
             _rag_debug = None
+            _rag_preview_warning = None
+            _expansion_info = {}
             if st.session_state.get("global_rag_enabled", True):
                 _rr = retrieve_relevant_chunks_hybrid(
                     _q1_text,
                     project_key=selected_project,
                     limit=st.session_state.get("global_llm_rag_top_k", 5),
                     threshold=st.session_state.get("global_rag_similarity_threshold", 0.5),
-                    exclude_classification="FAQ/Fragen-Katalog"  # CSV-Fragendatei aus RAG ausschliessen
+                    exclude_classification="FAQ/Fragen-Katalog",  # CSV-Fragendatei aus RAG ausschliessen
+                    enable_expansion=st.session_state.get("global_rag_query_expansion", False),  # Query-Expansion nur wenn aktiviert
+                    enable_reranking=st.session_state.get("global_rag_reranking_enabled", True),  # Reranking nur wenn aktiviert
                 )
                 _rr = deduplicate_results(_rr)
+                _rag_preview_warning = rag_low_confidence_warning(_rr, st.session_state.get("global_rag_similarity_threshold", 0.5))
+                _expansion_info = _rr.get("expansion", {})
                 _rag_debug = _rr.get("debug")
                 _rag_prev = build_rag_context_from_search(_rr)
                 
@@ -810,6 +816,8 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
             with st.expander(f"📋 Prompt-Vorschau — Frage {_q1_nr} · {_pp_tags}", expanded=True):
                 _pc1, _pc2 = st.columns([3, 1])
                 with _pc2:
+                    if _rag_preview_warning:
+                        st.warning(_rag_preview_warning)
                     st.caption("**Verwendete RAG-Quellen:**")
                     st.text(_rag_sources)
                     
@@ -832,6 +840,45 @@ if st.session_state.get("_show_prompt_preview") and selected_csv_id:
                                 for d in _excluded:
                                     _reason_short = d['reason'][:30] if len(d['reason']) <= 30 else d['reason'][:27] + "..."
                                     st.text(f"  {min(d['best_score'], 1.0):>3.0%} | {d['filename'][:25]:25} | {_reason_short}")
+
+                    # QUERY EXPANSION: Show acronym expansion attempts
+                    if _expansion_info and _expansion_info.get("triggered"):
+                        with st.expander("🔄 Query-Expansion (Akronym-Auflösung)", expanded=True):
+                            st.caption("Automatische Akronym-Auflösung wurde durchgeführt:")
+                            
+                            # Show detected acronyms
+                            if _expansion_info.get("acronyms"):
+                                st.markdown("**Erkannte Akronyme:**")
+                                for acr in _expansion_info["acronyms"]:
+                                    st.code(acr, language=None)
+                            
+                            # Show expansions
+                            if _expansion_info.get("expansions"):
+                                st.markdown("**LLM-Auflösungen:**")
+                                for acr, exp in _expansion_info["expansions"].items():
+                                    st.text(f"  {acr} → {exp}")
+                            
+                            # Show score comparison
+                            if _expansion_info.get("original_max_score") is not None:
+                                _orig_score = _expansion_info["original_max_score"] * 100
+                                _exp_score = _expansion_info.get("expanded_max_score", 0) * 100
+                                _improvement = _expansion_info.get("improvement", 0) * 100
+                                _threshold = st.session_state.get("global_rag_similarity_threshold", 0.5) * 100
+                                
+                                st.markdown("**Score-Vergleich:**")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Vorher", f"{_orig_score:.1f}%", delta=None)
+                                with col2:
+                                    st.metric("Nachher", f"{_exp_score:.1f}%", delta=f"+{_improvement:.1f}%" if _improvement > 0 else None)
+                                with col3:
+                                    st.metric("Threshold", f"{_threshold:.0f}%")
+                                
+                                # Status message
+                                if _exp_score >= _threshold:
+                                    st.success(f"✓ Expansion erfolgreich: Score liegt jetzt über dem Schwellenwert ({_threshold:.0f}%)")
+                                else:
+                                    st.warning(f"⚠ Expansion unzureichend: Score liegt trotz Auflösung noch unter dem Schwellenwert ({_threshold:.0f}%)")
 
                     render_retrieval_debug(_rag_debug)
                 
@@ -1109,10 +1156,16 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
                 project_key=selected_project,
                 limit=rag_top_k,
                 threshold=rag_threshold,
-                exclude_classification="FAQ/Fragen-Katalog"  # CSV-Fragendatei aus RAG ausschliessen
+                exclude_classification="FAQ/Fragen-Katalog",  # CSV-Fragendatei aus RAG ausschliessen
+                enable_expansion=st.session_state.get("global_rag_query_expansion", False),  # Query-Expansion nur wenn aktiviert
+                enable_reranking=st.session_state.get("global_rag_reranking_enabled", True),  # Reranking nur wenn aktiviert
             )
             rag_results = deduplicate_results(rag_results)
             rag_context = build_rag_context_from_search(rag_results)
+            # RAG-Warnung bei niedrigem Confidence-Score
+            _rag_warn = rag_low_confidence_warning(rag_results, rag_threshold)
+            if _rag_warn:
+                result_row["_RAG_Warning"] = _rag_warn
             # RAG-Debug: Quellen für Export-Spalte _RAG_Chunks
             result_row["_RAG_Chunks"] = " | ".join(
                 f"{d.get('filename','?')} ({min(max(d.get('similarity', 0), d.get('match_score', 0)), 1.0):.0%}): {format_chunk_preview((d.get('text','') or '').replace(chr(10),' '), max_length=120, query=question_text)}"
@@ -1135,6 +1188,7 @@ if st.button("🚀 Batch-Verarbeitung starten", type="primary", width="stretch")
         else:
             result_row["_RAG_Chunks"] = "(RAG deaktiviert)"
             result_row["_RAG_Debug"] = "(RAG deaktiviert)"
+            result_row["_RAG_Warning"] = None
         
         # Je nach Rollen-Modus: 1 oder N Antworten generieren
         if role_mode == "none":
@@ -1311,7 +1365,7 @@ if st.session_state.get("batch_results"):
     results_df = pd.DataFrame(st.session_state["batch_results"])
     
     # Interne RAG-Debugspalten in Anzeige versteckt, aber im CSV/Excel-Export enthalten
-    display_df = results_df[[c for c in results_df.columns if c not in ["_RAG_Chunks", "_RAG_Debug"]]]
+    display_df = results_df[[c for c in results_df.columns if c not in ["_RAG_Chunks", "_RAG_Debug", "_RAG_Warning"]]]
 
     # Dynamische Spalten-Konfiguration je nach Rollen-Modus
     column_config = {
@@ -1339,7 +1393,20 @@ if st.session_state.get("batch_results"):
         export_df["_RAG_Chunks"] = results_df["_RAG_Chunks"].values
     if "_RAG_Debug" in results_df.columns:
         export_df["_RAG_Debug"] = results_df["_RAG_Debug"].values
-    
+    if "_RAG_Warning" in results_df.columns:
+        export_df["_RAG_Warning"] = results_df["_RAG_Warning"].values
+
+    # RAG-Warnungen: Übersicht aller Fragen mit niedrigem Confidence-Score
+    if "_RAG_Warning" in results_df.columns:
+        _warn_rows = results_df[results_df["_RAG_Warning"].notna() & (results_df["_RAG_Warning"] != "")]
+        if not _warn_rows.empty:
+            with st.expander(f"⚠️ RAG-Warnungen ({len(_warn_rows)} Fragen)", expanded=False):
+                st.caption("Diese Fragen haben möglicherweise unpassende RAG-Quellen erhalten:")
+                for _, _wr in _warn_rows.iterrows():
+                    _wr_nr = _wr.get("Nr", "?")
+                    _wr_frage = str(_wr.get("Frage", ""))[:120]
+                    st.warning(f"**Nr. {_wr_nr}** — {_wr_frage}\n\n{_wr['_RAG_Warning']}")
+
     # Download-Button
     st.markdown("---")
 

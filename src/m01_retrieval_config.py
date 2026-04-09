@@ -54,6 +54,13 @@ class QueryConfig:
     enable_multi_hypothesis: bool = False
     hypothesis_count: int = 3
     strategies: list[str] = field(default_factory=lambda: ["distillation"])
+    
+    # Query Expansion (Akronym-Auflösung bei niedrigem Confidence)
+    enable_expansion: bool = False
+    expansion_provider: str = "openai"
+    expansion_model: str = "gpt-4o-mini"
+    expansion_temperature: float = 0.0
+    expansion_max_retries: int = 1  # Max. 1 Retry (nicht rekursiv)
 
 
 @dataclass
@@ -73,6 +80,19 @@ class CacheConfig:
 
 
 @dataclass
+class RerankingConfig:
+    """Reranking Configuration"""
+    enable: bool = False
+    mode: str = "score"  # "score" | "llm"
+    initial_k: int = 20
+    final_k: int = 7
+    llm_provider: str = "openai"
+    llm_model: str = "gpt-4o-mini"
+    llm_temperature: float = 0.0
+    llm_batch_size: int = 5
+
+
+@dataclass
 class RetrievalConfig:
     """Complete Retrieval Configuration"""
     bm25: BM25Config
@@ -81,6 +101,7 @@ class RetrievalConfig:
     query: QueryConfig
     filename_boost: FilenameBoostConfig
     cache: CacheConfig
+    reranking: RerankingConfig
     
     @classmethod
     def from_yaml(cls, path: Path | str | None = None) -> 'RetrievalConfig':
@@ -149,6 +170,11 @@ class RetrievalConfig:
                 enable_multi_hypothesis=q_data.get('enable_multi_hypothesis', False),
                 hypothesis_count=q_data.get('hypothesis_count', 3),
                 strategies=q_data.get('strategies', ['distillation']),
+                enable_expansion=q_data.get('enable_expansion', False),
+                expansion_provider=q_data.get('expansion_provider', 'openai'),
+                expansion_model=q_data.get('expansion_model', 'gpt-4o-mini'),
+                expansion_temperature=q_data.get('expansion_temperature', 0.0),
+                expansion_max_retries=q_data.get('expansion_max_retries', 1),
             )
             
             # Filename Boost Config
@@ -167,6 +193,19 @@ class RetrievalConfig:
                 max_size=c_data.get('max_size', 100),
             )
             
+            # Reranking Config
+            r_data = data.get('reranking', {})
+            reranking = RerankingConfig(
+                enable=r_data.get('enable', False),
+                mode=r_data.get('mode', 'score'),
+                initial_k=r_data.get('initial_k', 20),
+                final_k=r_data.get('final_k', 7),
+                llm_provider=r_data.get('llm_provider', 'openai'),
+                llm_model=r_data.get('llm_model', 'gpt-4o-mini'),
+                llm_temperature=r_data.get('llm_temperature', 0.0),
+                llm_batch_size=r_data.get('llm_batch_size', 5),
+            )
+            
             return cls(
                 bm25=bm25,
                 semantic=semantic,
@@ -174,6 +213,7 @@ class RetrievalConfig:
                 query=query,
                 filename_boost=filename_boost,
                 cache=cache,
+                reranking=reranking,
             )
             
         except Exception as e:
@@ -190,6 +230,7 @@ class RetrievalConfig:
             query=QueryConfig(),
             filename_boost=FilenameBoostConfig(),
             cache=CacheConfig(),
+            reranking=RerankingConfig(),
         )
 
 

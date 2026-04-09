@@ -184,6 +184,175 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return dot_product / (magnitude_a * magnitude_b)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# RERANKING: Intelligente Neugewichtung der Top-K Kandidaten
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _rerank_documents(
+    documents: list[dict],
+    query: str,
+    mode: str = "score",
+    final_k: int = 7,
+    llm_provider: str = "openai",
+    llm_model: str = "gpt-4o-mini",
+    llm_temperature: float = 0.0,
+    llm_batch_size: int = 5,
+) -> list[dict]:
+    """
+    Rerankt Dokumente basierend auf Score oder LLM-Bewertung.
+    
+    Args:
+        documents: Liste von Dokument-Dicts (mit similarity, match_score, etc.)
+        query: Original-Query
+        mode: "score" = Score-basiert | "llm" = LLM-Reranking
+        final_k: Anzahl finaler Ergebnisse
+        llm_provider, llm_model, llm_temperature: LLM-Config für mode="llm"
+        llm_batch_size: Chunks pro LLM-Call
+    
+    Returns:
+        Top-K Dokumente nach Reranking, sortiert nach Relevanz
+    """
+    if not documents:
+        return []
+    
+    if mode == "score":
+        return _rerank_by_score(documents, final_k)
+    elif mode == "llm":
+        return _rerank_by_llm(documents, query, final_k, llm_provider, llm_model, llm_temperature, llm_batch_size)
+    else:
+        # Fallback: Nimm einfach Top-K
+        return documents[:final_k]
+
+
+def _rerank_by_score(documents: list[dict], final_k: int) -> list[dict]:
+    """
+    Score-based Reranking: Gewichteter Score aus allen verfügbaren Signalen.
+    
+    Scoring-Strategie:
+    - Semantic: 60% Gewicht (Hauptsignal)
+    - BM25: 25% Gewicht (Keyword-Matching)
+    - Filename-Match: 10% Boost
+    - Chunk-Position: 5% Boost (frühere Chunks = wichtiger)
+    """
+    scored = []
+    for doc in documents:
+        # Hauptscores (0-1 Range)
+        semantic = doc.get("similarity", 0.0)
+        bm25_normalized = doc.get("normalized_match_score", 0.0)
+        
+        # Filename-Boost (0.0 oder 0.1)
+        filename_boost = 0.1 if doc.get("filename_matched", False) else 0.0
+        
+        # Position-Boost: Frühe Chunks sind oft wichtiger (first 3 chunks get small boost)
+        chunk_idx = doc.get("chunk_index", 999)
+        position_boost = max(0, (3 - chunk_idx) * 0.02) if chunk_idx < 3 else 0.0
+        
+        # Gewichteter Final-Score
+        rerank_score = (
+            semantic * 0.60 +
+            bm25_normalized * 0.25 +
+            filename_boost +
+            position_boost
+        )
+        
+        doc["rerank_score"] = round(rerank_score, 4)
+        scored.append((rerank_score, doc))
+    
+    # Sortiere nach Rerank-Score
+    scored.sort(key=lambda x: x[0], reverse=True)
+    
+    return [doc for _, doc in scored[:final_k]]
+
+
+def _rerank_by_llm(
+    documents: list[dict],
+    query: str,
+    final_k: int,
+    provider: str,
+    model: str,
+    temperature: float,
+    batch_size: int,
+) -> list[dict]:
+    """
+    LLM-based Reranking: LLM bewertet Relevanz jedes Chunks.
+    
+    Strategie:
+    - Batch-Verarbeitung (mehrere Chunks pro LLM-Call für Cost-Optimierung)
+    - LLM gibt Score 0-100 pro Chunk
+    - Sortiere nach LLM-Score
+    """
+    from .m08_llm import try_models_with_messages
+    
+    scored = []
+    
+    # Batch-Verarbeitung
+    for i in range(0, len(documents), batch_size):
+        batch = documents[i:i + batch_size]
+        
+        # Prompt für LLM
+        chunks_text = ""
+        for idx, doc in enumerate(batch):
+            preview = (doc.get("text") or "")[:300]
+            chunks_text += f"\n## Chunk {idx+1}\n**Datei:** {doc.get('filename', '?')}\n**Text:** {preview}\n"
+        
+        system_prompt = """Du bist ein Retrieval-Relevanz-Experte. 
+Bewerte die Relevanz jedes Chunks zur gegebenen Frage.
+
+Score-Skala:
+- 90-100: Perfekte Übereinstimmung (beantwortet Frage direkt)
+- 70-89: Sehr relevant (enthält wichtige Infos)
+- 50-69: Teilweise relevant (tangiert Thema)
+- 30-49: Marginal relevant (verwandte Begriffe)
+- 0-29: Irrelevant
+
+Gib NUR eine JSON-Array zurück: [score1, score2, ...]
+Beispiel: [85, 42, 91]"""
+        
+        user_prompt = f"""Frage: {query}
+
+{chunks_text}
+
+Bewerte alle {len(batch)} Chunks. Antworte NUR mit JSON-Array der Scores."""
+        
+        try:
+            response = try_models_with_messages(
+                provider=provider,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+                max_tokens=100,
+                temperature=temperature,
+                model=model,
+            )
+            
+            # Parse JSON-Array
+            import json
+            scores = json.loads(response.strip())
+            
+            # Validierung
+            if not isinstance(scores, list) or len(scores) != len(batch):
+                # Fallback: Use semantic scores
+                scores = [doc.get("similarity", 0.5) * 100 for doc in batch]
+            
+            # Scores zu Dokumenten hinzufügen
+            for doc, score in zip(batch, scores):
+                doc["llm_relevance_score"] = int(score)
+                doc["rerank_score"] = score / 100.0  # Normalisieren auf 0-1
+                scored.append((score, doc))
+        
+        except Exception as e:
+            logger.warning(f"LLM-Reranking Fehler: {e} - Fallback auf Semantic-Score")
+            # Fallback
+            for doc in batch:
+                fallback_score = doc.get("similarity", 0.5) * 100
+                doc["rerank_score"] = fallback_score / 100.0
+                scored.append((fallback_score, doc))
+    
+    # Sortiere nach LLM-Score
+    scored.sort(key=lambda x: x[0], reverse=True)
+    
+    return [doc for _, doc in scored[:final_k]]
+
+
 def index_role(role_key: str, force: bool = False) -> bool:
     """
     Erstellt Embedding für eine Rolle und speichert es in der DB.
@@ -955,7 +1124,12 @@ def retrieve_relevant_chunks_hybrid(
     threshold: float = 0.5,
     role_key: str | None = None,
     classification_filter: str | None = None,
-    exclude_classification: str | None = None
+    exclude_classification: str | None = None,
+    _expansion_attempt: int = 0,  # Internal: tracks query expansion retries
+    _distilled_keywords: str | None = None,  # Internal: original distilled keywords for expansion
+    _forced_expansion_terms: str | None = None,  # Internal: expansion terms appended directly to BM25 (bypass distillation)
+    enable_expansion: bool | None = None,  # Optional: override config.query.enable_expansion
+    enable_reranking: bool | None = None  # Optional: override config.reranking.enable
 ) -> dict:
     """
     Hybrid-Suche: Semantic + Keyword mit garantierter Dokument-Repräsentation.
@@ -1003,7 +1177,12 @@ def retrieve_relevant_chunks_hybrid(
     # ===== END DEBUG =====
     
     keyword_query = query
-    if config.query.enable_distillation:
+    if _forced_expansion_terms:
+        # Expansion-Lauf: Distillation NICHT nochmals aufrufen — Expansion-Terme direkt anhängen
+        # (Distillation würde "Schweizerische Informatikkonferenz" als Rauschen filtern)
+        keyword_query = (_distilled_keywords or query) + " " + _forced_expansion_terms
+        logger.info(f"[HYBRID RETRIEVAL] Using distilled+expansion query for BM25: {keyword_query!r}")
+    elif config.query.enable_distillation:
         try:
             # ===== DEBUG LOGGING =====
             logger.info("[HYBRID RETRIEVAL] Calling Query Distillation...")
@@ -1022,6 +1201,9 @@ def retrieve_relevant_chunks_hybrid(
             if distilled and distilled != query:
                 logger.info("RAG distillation: %r → %r", query[:80], distilled)
                 keyword_query = distilled
+                # Store distilled keywords for potential expansion
+                if _distilled_keywords is None:
+                    _distilled_keywords = distilled
                 
                 # ===== DEBUG LOGGING =====
                 logger.info(f"[HYBRID RETRIEVAL] Using distilled query for BM25: {keyword_query!r}")
@@ -1227,7 +1409,8 @@ def retrieve_relevant_chunks_hybrid(
             "rrf_score": d.get("rrf_score", 0.0),
             "quality_score": round(_quality_score(d), 3),
             "combined_score": round(_combined_score(d), 3),
-            "text_preview": _find_relevant_window(chunk_text.replace("\n", " "), query, 220),
+            # Verwende distillierte Query für Preview → zeigt relevante Stelle, nicht Chunk-Anfang
+            "text_preview": _find_relevant_window(chunk_text.replace("\n", " "), keyword_query_for_terms or query, 220),
         }
 
     # 4. Dateiname-Boost: kleine Aufwertung wenn Query-Wörter im Dateinamen vorkommen
@@ -1302,19 +1485,27 @@ def retrieve_relevant_chunks_hybrid(
     guaranteed.sort(key=_combined_score, reverse=True)
 
     # 8. Qualitäts-Füllung: restliche Slots mit top-Qualitäts-Chunks (>= threshold, diversity-cap)
+    # WICHTIG: Wenn Reranking aktiviert, hole initial_k Kandidaten (z.B. 15), sonst nur limit (7)
+    reranking_enabled = enable_reranking if enable_reranking is not None else config.reranking.enable
+    target_count = config.reranking.initial_k if reranking_enabled else limit
+    # Beim Reranking: höheres max_per_doc damit genug Kandidaten gesammelt werden können
+    # Beispiel: target_count=15, max_per_doc normal=2 → 4 Docs × 2 = 8 (zu wenig!)
+    # Mit max(2, 15//3) = 5 pro Doc → 4 Docs × 5 = 20 (genug für 15 Kandidaten)
+    fill_max_per_doc = max(max_per_doc, target_count // 3) if reranking_enabled else max_per_doc
+
     per_doc_count: dict[int, int] = {}
     for d in guaranteed:
         did = d["document_id"]
         per_doc_count[did] = per_doc_count.get(did, 0) + 1
 
-    result_docs = list(guaranteed[:limit])
+    result_docs = list(guaranteed[:target_count])
     result_cids: set[int] = {d["chunk_id"] for d in result_docs}
 
-    if len(result_docs) < limit:
+    if len(result_docs) < target_count:
         # Sortiere nach RRF Score, aber filtere nach quality threshold
         all_sorted = sorted(all_docs, key=_combined_score, reverse=True)
         for entry in all_sorted:
-            if len(result_docs) >= limit:
+            if len(result_docs) >= target_count:
                 break
             cid = entry["chunk_id"]
             # Schwellenwert-Check mit original scores (nicht RRF)
@@ -1323,7 +1514,7 @@ def retrieve_relevant_chunks_hybrid(
             if cid in result_cids:
                 continue
             did = entry["document_id"]
-            if per_doc_count.get(did, 0) < max_per_doc:
+            if per_doc_count.get(did, 0) < fill_max_per_doc:
                 result_docs.append(entry)
                 result_cids.add(cid)
                 per_doc_count[did] = per_doc_count.get(did, 0) + 1
@@ -1334,7 +1525,73 @@ def retrieve_relevant_chunks_hybrid(
         doc["combined_score"] = round(_combined_score(doc), 3)
         # Für Debug: Auch quality_score speichern
         doc["quality_score"] = round(_quality_score(doc), 3)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # RERANKING: Hole mehr Kandidaten (initial_k) und reranke auf final_k
+    # ═══════════════════════════════════════════════════════════════════════════
+    reranking_info = None
+    
+    if reranking_enabled and len(result_docs) > limit:
+        initial_k = len(result_docs)  # Tatsächlich geholte Kandidaten
+        final_k = limit  # User's rag_top_k
+        
+        # ▶▶ RERANKING DEBUG: Kandidaten VOR Reranking
+        run_label = "[Lauf 2 - NACH EXPANSION]" if _forced_expansion_terms else "[Lauf 1 - ohne Expansion]"
+        logger.info(f"[RERANKING] {run_label} Mode: {config.reranking.mode}, Initial: {initial_k}, Final: {final_k}")
+        logger.info(f"[RERANKING] {run_label} ▶▶ KANDIDATEN VOR RERANKING ({initial_k} Stück):")
+        for i, d in enumerate(result_docs):
+            sem = d.get('similarity', 0)
+            bm25 = d.get('normalized_match_score', 0)
+            comb = d.get('combined_score', 0)
+            src = 'KW' if d.get('match_score', 0) > 0 else 'SEM'
+            fname = (d.get('filename') or '?')[:40]
+            preview = (d.get('text') or '')[:80].replace('\n', ' ')
+            logger.info(f"[RERANKING]   #{i+1:2d}: chunk={d.get('chunk_id'):4d} [{src}] comb={comb:.3f} sem={sem:.3f} bm25={bm25:.3f} | {fname} | {preview!r}")
+        
+        # Reranking durchführen
+        reranked_docs = _rerank_documents(
+            result_docs,  # Alle initial_k Kandidaten
+            query=query,
+            mode=config.reranking.mode,
+            final_k=final_k,
+            llm_provider=config.reranking.llm_provider,
+            llm_model=config.reranking.llm_model,
+            llm_temperature=config.reranking.llm_temperature,
+            llm_batch_size=config.reranking.llm_batch_size,
+        )
+        
+        # Score-Vergleich für Diagnostics
+        if reranked_docs:
+            top_before = result_docs[0].get("combined_score", 0)
+            top_after = reranked_docs[0].get("rerank_score", reranked_docs[0].get("combined_score", 0))
+            improvement = top_after - top_before
+            
+            logger.info(f"[RERANKING] {run_label} Score: {top_before:.3f} → {top_after:.3f} (Δ {improvement:+.3f})")
+            
+            # ▶▶ RERANKING DEBUG: Ergebnis NACH Reranking
+            logger.info(f"[RERANKING] {run_label} ▶▶ ERGEBNIS NACH RERANKING (Top-{len(reranked_docs)}):")
+            for i, d in enumerate(reranked_docs):
+                rscore = d.get('rerank_score', d.get('combined_score', 0))
+                fname = (d.get('filename') or '?')[:40]
+                preview = (d.get('text') or '')[:80].replace('\n', ' ')
+                logger.info(f"[RERANKING]   #{i+1:2d}: chunk={d.get('chunk_id'):4d} rerank={rscore:.3f} | {fname} | {preview!r}")
+            
+            reranking_info = {
+                "enabled": True,
+                "mode": config.reranking.mode,
+                "initial_k": initial_k,
+                "final_k": len(reranked_docs),
+                "score_before": round(top_before, 3),
+                "score_after": round(top_after, 3),
+                "improvement": round(improvement, 3),
+            }
+            
+            result_docs = reranked_docs
+    
     semantic_results["documents"] = result_docs[:limit]
+    if reranking_info:
+        semantic_results["reranking"] = reranking_info
+    
     semantic_results["debug"] = {
         "query": query,
         "keyword_query": keyword_query,
@@ -1348,13 +1605,125 @@ def retrieve_relevant_chunks_hybrid(
     logger.info(f"[HYBRID RETRIEVAL] Semantic candidates: {len(semantic_debug_docs)}")
     logger.info(f"[HYBRID RETRIEVAL] Keyword candidates: {len(keyword_docs)}")
     logger.info(f"[HYBRID RETRIEVAL] Final candidates (before limit): {len(result_docs)}")
-    if result_docs[:limit]:
-        logger.info("[HYBRID RETRIEVAL] Top-3 Final Results:")
-        for i, doc in enumerate(result_docs[:3]):
-            logger.info(f"  #{i+1}: chunk_id={doc.get('chunk_id')}, combined_score={doc.get('combined_score')}, filename={doc.get('filename', '?')[:50]}")
+    _run_label = f"[Lauf 2 - NACH EXPANSION]" if _forced_expansion_terms else "[Lauf 1 - ohne Expansion]"
+    logger.info(f"[HYBRID RETRIEVAL] {_run_label} ▶▶ ALLE FINALE ERGEBNISSE (Top-{min(len(result_docs), limit)}):")
+    for i, doc in enumerate(result_docs[:limit]):
+        sem = doc.get('similarity', 0)
+        bm25 = doc.get('normalized_match_score', 0)
+        comb = doc.get('combined_score', 0)
+        terms = ','.join(doc.get('matched_terms') or []) or '—'
+        fname = (doc.get('filename') or '?')[:40]
+        preview = (doc.get('text_preview') or doc.get('text') or '')[:100].replace('\n', ' ')
+        logger.info(f"[HYBRID RETRIEVAL]   #{i+1:2d}: chunk={doc.get('chunk_id'):4d} comb={comb:.3f} sem={sem:.3f} bm25={bm25:.3f} terms=[{terms}] | {fname}")
+        logger.info(f"[HYBRID RETRIEVAL]        {preview!r}")
     logger.info("[HYBRID RETRIEVAL] END")
     logger.info("=" * 80)
     # ===== END DEBUG =====
+
+    # Query Expansion: Falls Scores niedrig UND Akronyme erkannt UND noch kein Retry
+    expansion_enabled = enable_expansion if enable_expansion is not None else config.query.enable_expansion
+    
+    if (expansion_enabled and 
+        _expansion_attempt < config.query.expansion_max_retries and
+        result_docs and _distilled_keywords):
+        
+        # Check: Sind die Scores niedrig?
+        max_sem = max(d.get("similarity", 0) for d in result_docs[:limit])
+        
+        if max_sem < threshold:
+            # Erkenne Akronyme
+            acronyms = _detect_acronyms(_distilled_keywords)
+            
+            if acronyms:
+                logger.info(f"[QUERY EXPANSION] Low confidence (max={max_sem:.0%} < {threshold:.0%}) + Akronyme erkannt: {acronyms}")
+                
+                # LLM-Expansion
+                expansions = _expand_acronyms_with_llm(
+                    acronyms,
+                    provider=config.query.expansion_provider,
+                    model=config.query.expansion_model
+                )
+                
+                if expansions:
+                    logger.info(f"[QUERY EXPANSION] Expansions: {expansions}")
+                    
+                    # Baue erweiterte Query: Akronyme ERSETZEN (nicht nur anhängen!)
+                    # Statt "...SIK-AGB? Schweizerische Informatikkonferenz"
+                    # → "...Schweizerische Informatikkonferenz Geschäftsbedingungen (SIK-AGB)?"
+                    # Das Embedding-Modell erhält damit einen viel prägnanteren Vektor.
+                    import re as _re
+                    substituted_query = query
+                    for _acr, _exp in expansions.items():
+                        substituted_query = _re.sub(
+                            _re.escape(_acr),
+                            f"{_exp} ({_acr})",
+                            substituted_query,
+                            flags=_re.IGNORECASE,
+                        )
+                    expansion_terms = " ".join(expansions.values())
+                    expanded_query = substituted_query
+                    
+                    logger.info(f"[QUERY EXPANSION] Substituted query for semantic search: {expanded_query!r}")
+                    logger.info(f"[QUERY EXPANSION] Retry with expanded query: {expanded_query!r}")
+                    
+                    # Rekursiver Call mit expansion_attempt = 1
+                    # WICHTIG: _forced_expansion_terms übergeben damit Distillation NICHT nochmals
+                    # läuft und die Expansion-Terme ("Schweizerische Informatikkonferenz") filtert!
+                    expanded_results = retrieve_relevant_chunks_hybrid(
+                        query=expanded_query,
+                        project_key=project_key,
+                        limit=limit,
+                        threshold=threshold,
+                        role_key=role_key,
+                        classification_filter=classification_filter,
+                        exclude_classification=exclude_classification,
+                        _expansion_attempt=_expansion_attempt + 1,
+                        _distilled_keywords=_distilled_keywords,  # Keep original for warning
+                        _forced_expansion_terms=expansion_terms,  # Bypass distillation für BM25!
+                        enable_expansion=expansion_enabled,  # Pass through
+                        enable_reranking=reranking_enabled  # Pass through
+                    )
+                    
+                    # Check ob Expansion geholfen hat
+                    expanded_docs = expanded_results.get("documents", [])
+                    if expanded_docs:
+                        max_sem_expanded = max(d.get("similarity", 0) for d in expanded_docs)
+                        improvement = max_sem_expanded - max_sem
+                        
+                        logger.info(f"[QUERY EXPANSION] Result: {max_sem:.0%} → {max_sem_expanded:.0%} (improvement: {improvement:+.0%})")
+                        
+                        # Speichere Expansion-Info in den Ergebnissen
+                        expanded_results["expansion"] = {
+                            "triggered": True,
+                            "acronyms": acronyms,
+                            "expansions": expansions,
+                            "original_max_score": max_sem,
+                            "expanded_max_score": max_sem_expanded,
+                            "improvement": improvement
+                        }
+                        
+                        # WICHTIG: 1. Lauf-Ergebnisse mitliefern für UI-Vergleich
+                        # Der 1. Lauf zeigt was OHNE Expansion gefunden wurde
+                        expanded_results["pre_expansion_documents"] = semantic_results.get("documents", [])
+                        
+                        # ▶▶ VERGLEICH 1. vs 2. Lauf
+                        pre_docs = semantic_results.get("documents", [])
+                        post_docs = expanded_results.get("documents", [])
+                        logger.info("[QUERY EXPANSION] ▶▶ VERGLEICH LAUF 1 vs LAUF 2:")
+                        logger.info(f"[QUERY EXPANSION]   BM25-Query Lauf 1: {semantic_results.get('debug', {}).get('keyword_query', '?')!r}")
+                        logger.info(f"[QUERY EXPANSION]   BM25-Query Lauf 2: {expanded_results.get('debug', {}).get('keyword_query', '?')!r}")
+                        logger.info(f"[QUERY EXPANSION]   Score Lauf 1 (max sem): {max_sem:.1%}")
+                        logger.info(f"[QUERY EXPANSION]   Score Lauf 2 (max sem): {max_sem_expanded:.1%} (+{improvement:.1%})")
+                        logger.info("[QUERY EXPANSION]   Lauf 1 Top-Chunks:")
+                        for i, d in enumerate(pre_docs[:7]):
+                            preview = (d.get('text') or '')[:80].replace('\n', ' ')
+                            logger.info(f"[QUERY EXPANSION]     L1 #{i+1}: chunk={d.get('chunk_id'):4d} sem={d.get('similarity', 0):.3f} | {(d.get('filename') or '?')[:35]} | {preview!r}")
+                        logger.info("[QUERY EXPANSION]   Lauf 2 Top-Chunks:")
+                        for i, d in enumerate(post_docs[:7]):
+                            preview = (d.get('text') or '')[:80].replace('\n', ' ')
+                            logger.info(f"[QUERY EXPANSION]     L2 #{i+1}: chunk={d.get('chunk_id'):4d} sem={d.get('similarity', 0):.3f} | {(d.get('filename') or '?')[:35]} | {preview!r}")
+                        
+                        return expanded_results
 
     _RAG_CACHE[cache_key] = semantic_results
     return semantic_results
@@ -1594,10 +1963,13 @@ def _find_relevant_window(text: str, query: str | None, max_length: int) -> str:
         stopwords = {
             "frage", "anbieter", "bitte", "kurz", "bündig", "antworten", "antwort",
             "konkret", "betrifft", "gilt", "gelten", "unsere", "unserer", "hier",
-            "wird", "werden", "eine", "einer", "eines", "dieses", "dieser", "auch"
+            "wird", "werden", "werde", "wurde", "wurden", "einer", "eines",
+            "dieses", "dieser", "diesem", "diesen", "nicht", "haben", "hatte",
+            "damit", "durch", "dabei", "davon", "daran", "daher", "darum",
+            "auch", "eine", "keinen", "keine", "keins", "falls", "sowie",
         }
         words = re.findall(r"\b\w+\b", (raw or "").lower())
-        candidates = [w for w in words if len(w) >= 5 and w not in stopwords]
+        candidates = [w for w in words if len(w) >= 6 and w not in stopwords]
         seen = set()
         ordered = []
         for item in candidates:
@@ -1834,3 +2206,146 @@ def deduplicate_results(results: dict) -> dict:
     
     results["documents"] = deduped
     return results
+
+
+def _detect_acronyms(distilled_keywords: str) -> list[str]:
+    """
+    Erkennt potentielle Akronyme in den distilled keywords.
+    
+    Patterns:
+    - Buchstaben-Kombinationen mit Bindestrichen: sik-agb, http-api, SIK-AGB
+    - Kurze Großbuchstaben-Wörter (original): API, DSGVO, REST
+    - Min. 2 Buchstaben, max. 10 Zeichen
+    
+    Returns:
+        Liste der erkannten Akronyme (in Originalschreibweise)
+    """
+    import re
+    tokens = distilled_keywords.split()
+    acronyms = []
+    
+    for token in tokens:
+        # Pattern 1: xxx-yyy (mehrere Buchstaben mit Bindestrichen, case-insensitive)
+        if re.match(r'^[a-zA-ZÄÖÜäöü]{2,}(-[a-zA-ZÄÖÜäöü]{2,})+$', token):
+            acronyms.append(token)
+        # Pattern 2: API, REST (kurze Großbuchstaben-Wörter)
+        elif 2 <= len(token) <= 10 and token.isupper() and token.isalpha():
+            acronyms.append(token)
+    
+    return acronyms
+
+
+def _expand_acronyms_with_llm(acronyms: list[str], provider: str = "openai", model: str = "gpt-4o-mini") -> dict[str, str]:
+    """
+    Verwendet LLM um Akronyme/Abkürzungen zu expandieren.
+    
+    Args:
+        acronyms: Liste der zu expandierenden Akronyme
+        provider: LLM Provider
+        model: LLM Modell
+    
+    Returns:
+        Dict mit {akronym: expansion} Mapping
+    """
+    from src.m08_llm import try_models_with_messages
+    
+    if not acronyms:
+        return {}
+    
+    system_prompt = """Du bist ein Experte für deutsche Verwaltungs-, IT- und Rechts-Terminologie.
+Erkläre folgende Begriffe/Akronyme KURZ (max. 3-5 Ersatzwörter pro Begriff).
+Fokus auf deutsche/schweizerische Verwaltung, IT-Verträge, Ausschreibungen.
+
+Wenn du einen Begriff nicht kennst, gib "unbekannt" zurück.
+
+Antworte NUR mit einem JSON-Dict (keine Erklärung):
+{"BEGRIFF": "ersatzwort1 ersatzwort2", ...}
+
+Beispiel:
+{"SIK-AGB": "Schweizerische Informatikkonferenz Geschäftsbedingungen", "DSGVO": "Datenschutz Grundverordnung"}"""
+    
+    user_prompt = f"Begriffe: {json.dumps(acronyms, ensure_ascii=False)}"
+    
+    try:
+        response = try_models_with_messages(
+            provider=provider,
+            model=model,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            temperature=0.0,
+            max_tokens=200
+        )
+        
+        # Parse JSON response — robust: extract JSON even if model adds prose extract JSON even if model adds prose
+        import re as _re2
+        _json_match = _re2.search(r'\{[^{}]*\}', response, _re2.DOTALL)
+        if not _json_match:
+            logger.warning(f"Query Expansion: Kein JSON in Antwort gefunden: {response!r}")
+            return {}
+        expansions = json.loads(_json_match.group())
+        
+        # Filter "unbekannt" entries
+        return {k: v for k, v in expansions.items() if v.lower() != "unbekannt"}
+    
+    except Exception as e:
+        logger.warning(f"Query Expansion fehlgeschlagen: {e}")
+        return {}
+
+
+def rag_low_confidence_warning(rr: dict, threshold: float) -> str | None:
+    """
+    Returns a warning string if RAG results are likely irrelevant.
+
+    Triggers when ALL final documents have semantic score below `threshold`
+    (i.e. nothing was found above the bar — only low-quality fallback results),
+    or when no documents were found at all.
+    
+    If query expansion was triggered, includes expansion details in warning.
+    
+    Returns None if results look fine.
+    """
+    docs = rr.get("documents", [])
+    if not docs:
+        return "⚠️ RAG: Keine Dokumente gefunden. Das Thema ist möglicherweise nicht im Corpus vorhanden."
+    
+    # Use ONLY semantic similarity (0-1 absolute range)
+    # normalized_match_score is relative to current result set, not absolute!
+    max_sem = max(d.get("similarity", 0) for d in docs)
+    
+    # Check if query expansion was used
+    expansion_info = rr.get("expansion", {})
+    
+    if max_sem < threshold:
+        warning = f"⚠️ RAG: Niedriger Confidence-Score (max. {max_sem:.0%} < Threshold {threshold:.0%}). "
+        warning += "Die gefundenen Passagen passen möglicherweise nicht zum Thema — "
+        warning += "das entsprechende Dokument könnte im Corpus fehlen."
+        
+        # Wenn Expansion aktiv war, zeige Details
+        if expansion_info.get("triggered"):
+            expansions = expansion_info.get("expansions", {})
+            improvement = expansion_info.get("improvement", 0)
+            original_score = expansion_info.get("original_max_score", 0)
+            
+            warning += f"\n\n🔄 Query-Expansion wurde versucht:"
+            for acronym, expansion in expansions.items():
+                warning += f"\n  • {acronym} → {expansion}"
+            warning += f"\n  Verbesserung: {original_score:.0%} → {max_sem:.0%} ({improvement:+.0%})"
+            
+            if improvement <= 0.05:  # Weniger als 5% Verbesserung
+                warning += "\n  ⚠️ Die Expansion hat nicht ausreichend geholfen."
+        
+        return warning
+    
+    # Expansion war erfolgreich (Score jetzt über Threshold) → Info-Meldung
+    elif expansion_info.get("triggered"):
+        expansions = expansion_info.get("expansions", {})
+        improvement = expansion_info.get("improvement", 0)
+        original_score = expansion_info.get("original_max_score", 0)
+        
+        info = f"✅ Query-Expansion erfolgreich! Score verbessert von {original_score:.0%} → {max_sem:.0%} ({improvement:+.0%})"
+        info += "\n\n🔄 Expandierte Begriffe:"
+        for acronym, expansion in expansions.items():
+            info += f"\n  • {acronym} → {expansion}"
+        return info
+    
+    return None

@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8" />
@@ -187,6 +187,41 @@
             </div>
           </div>
 
+          <!-- Query-Expansion toggle -->
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem 0">
+            <label style="font-size:.78rem;cursor:pointer" for="sidebar-expansion-toggle">Query-Expansion</label>
+            <div style="position:relative;display:inline-block;width:34px;height:19px">
+              <input type="checkbox" id="sidebar-expansion-toggle"
+                     :checked="$store.ki.enable_expansion"
+                     @change="$store.ki.enable_expansion = $event.target.checked; $store.ki.syncToggle('expansion', $event.target.checked)"
+                     style="opacity:0;width:0;height:0;position:absolute">
+              <label for="sidebar-expansion-toggle"
+                     :style="'position:absolute;cursor:pointer;inset:0;border-radius:19px;transition:.2s;background:'+($store.ki.enable_expansion ? 'var(--color-primary)' : 'var(--color-border)')">
+                <span :style="'position:absolute;width:13px;height:13px;border-radius:50%;background:#fff;top:3px;transition:.2s;left:'+($store.ki.enable_expansion?'18px':'3px')"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Auto-sync indicator -->
+          <div style="display:flex;align-items:center;gap:.3rem;padding:.1rem .5rem;font-size:.67rem;color:var(--color-text-muted);opacity:.75">
+            <svg width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            Auto-gekoppelt — beide ein oder beide aus</div>
+
+          <!-- Reranking toggle -->
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem 0">
+            <label style="font-size:.78rem;cursor:pointer" for="sidebar-reranking-toggle">Reranking</label>
+            <div style="position:relative;display:inline-block;width:34px;height:19px">
+              <input type="checkbox" id="sidebar-reranking-toggle"
+                     :checked="$store.ki.enable_reranking"
+                     @change="$store.ki.enable_reranking = $event.target.checked; $store.ki.syncToggle('reranking', $event.target.checked)"
+                     style="opacity:0;width:0;height:0;position:absolute">
+              <label for="sidebar-reranking-toggle"
+                     :style="'position:absolute;cursor:pointer;inset:0;border-radius:19px;transition:.2s;background:'+($store.ki.enable_reranking ? 'var(--color-primary)' : 'var(--color-border)')">
+                <span :style="'position:absolute;width:13px;height:13px;border-radius:50%;background:#fff;top:3px;transition:.2s;left:'+($store.ki.enable_reranking?'18px':'3px')"></span>
+              </label>
+            </div>
+          </div>
+
           <!-- Help: Was bedeuten diese Werte? -->
           <details style="font-size:.72rem">
             <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:.3rem;color:var(--color-text-muted);padding:.2rem 0">
@@ -312,12 +347,31 @@ document.addEventListener('alpine:init', () => {
     rag_top_k:               KI.rag_top_k               ?? 5,
     rag_chunk_size:          KI.rag_chunk_size          ?? 1000,
     rag_similarity_threshold:KI.rag_similarity_threshold?? 0.45,
+    enable_expansion:        KI.rag_query_expansion     ?? false,
+    enable_reranking:        KI.rag_reranking_enabled   ?? true,
     providers:               KI.providers               || ['openai'],
     allModels:               KI.allModels               || {},
     keyStatus:               KI.keyStatus               || {},
     saved: false,
     _saveTimer: null,
+    _syncing: false,  // Flag to prevent infinite loops during toggle sync
     get models() { return this.allModels[this.provider] || []; },
+    
+    // Bidirectional sync: expansion <-> reranking
+    syncToggle(changedToggle, newValue) {
+      if (this._syncing) return;  // Prevent infinite loop
+      this._syncing = true;
+      
+      if (changedToggle === 'expansion') {
+        this.enable_reranking = newValue;
+      } else if (changedToggle === 'reranking') {
+        this.enable_expansion = newValue;
+      }
+      
+      this._syncing = false;
+      this.save();
+    },
+    
     save() {
       clearTimeout(this._saveTimer);
       this._saveTimer = setTimeout(() => {
@@ -329,6 +383,8 @@ document.addEventListener('alpine:init', () => {
         fd.append('rag_top_k', this.rag_top_k);
         fd.append('rag_chunk_size', this.rag_chunk_size);
         fd.append('rag_similarity_threshold', this.rag_similarity_threshold);
+        fd.append('enable_expansion', this.enable_expansion ? 'true' : 'false');
+        fd.append('enable_reranking', this.enable_reranking ? 'true' : 'false');
         fetch('/settings', { method: 'POST', body: fd }).then(() => {
           this.saved = true;
           setTimeout(() => { this.saved = false; }, 2000);

@@ -2,7 +2,28 @@
 # RAG Retrieval Configuration
 # =============================================================================
 #
-# Steuert die vierstufige Query-Intelligence-Pipeline:
+# ⚙️ HIERARCHIE: User-Settings > YAML-Defaults
+#
+#   1. **User-Settings** (config/user_settings.yaml):
+#      Runtime-Toggles die im UI gesteuert werden:
+#      - rag_enabled (RAG an/aus)
+#      - rag_query_expansion (Query-Expansion an/aus)
+#      - rag_reranking_enabled (Reranking an/aus)
+#      - rag_top_k, rag_similarity_threshold, etc.
+#
+#   2. **YAML-Defaults** (retrieval.yaml):
+#      Technische Parameter für Power-User:
+#      - BM25 Gewichte, RRF k-Parameter, Discovery-Thresholds
+#      - Reranking mode/initial_k/final_k (wenn User-Toggle = ON)
+#      - Query-Expansion model/temperature (wenn User-Toggle = ON)
+#
+# 💡 **Praxis:**
+#   - UI-Toggles in user_settings.yaml (automatisch gespeichert)
+#   - Technische Feintuning-Parameter hier (manuell editieren)
+#
+# =============================================================================
+#
+# Vierstufige Query-Intelligence-Pipeline:
 #
 #   [1] Query Distillation   — LLM bereinigt Nutzer-Input zu Suchbegriffen
 #       └─ query.enable_distillation
@@ -79,11 +100,35 @@ query:
   enable_multi_hypothesis: false        # Advanced: Mehrere Query-Varianten
   hypothesis_count: 3                   # Anzahl paralleler Query-Varianten
   
+  # Query Expansion (Akronym-Auflösung bei niedrigem Confidence)
+  # ⚠️ Toggle wird aus user_settings.yaml gelesen (rag_query_expansion)
+  # Diese Werte hier sind nur für die technische Ausführung:
+  enable_expansion: true                # ⚠️ YAML-Fallback (wenn user_settings fehlt)
+  expansion_provider: "openai"          # Provider für Akronym-Expansion
+  expansion_model: "gpt-4o-mini"        # Modell für Expansion
+  expansion_temperature: 0.0            # Temperature (0.0 = deterministisch)
+  expansion_max_retries: 1              # Max. 1 Retry (nicht rekursiv)
+  
   # Query Enhancement Strategies
   strategies:
     - "distillation"                    # LLM-basierte Query-Bereinigung
     # - "expansion"                     # Synonym-Expansion (TODO: Phase 3)
     # - "entity_extraction"             # NER für gezielte Suche (TODO: Phase 3)
+
+# ==================== RERANKING ====================
+# ⚠️ Toggle wird aus user_settings.yaml gelesen (rag_reranking_enabled)
+# Diese Werte hier sind nur für die technische Ausführung:
+reranking:
+  enable: true                          # ⚠️ YAML-Fallback (wenn user_settings fehlt) - EMPFOHLEN: true
+  mode: "score"                         # "score" = Score-basiert (schnell) | "llm" = LLM-Reranking (teurer aber präziser)
+  initial_k: 15                         # Hole Top-15 Kandidaten für Reranking (mehr = bessere Chance den richtigen Chunk zu finden)
+  final_k: 7                            # Nimm finale Top-7 nach Reranking (sollte = user_settings.rag_top_k sein)
+  
+  # LLM-Reranking (nur wenn mode="llm")
+  llm_provider: "openai"                # Provider für LLM-Reranking
+  llm_model: "gpt-4o-mini"              # Modell für Relevanz-Bewertung
+  llm_temperature: 0.0                  # Temperature (0.0 = deterministisch)
+  llm_batch_size: 5                     # Chunks pro LLM-Call (Cost-Optimierung)
 
 # ==================== FILENAME BOOSTING ====================
 filename_boost:

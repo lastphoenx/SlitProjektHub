@@ -312,67 +312,104 @@ limit = rag_top_k * 10  # Standard: 7 × 10 = 70 Treffer
 
 ---
 
-### 2.4 Hybrid-Algorithmus
+### 2.4 Hybrid-Algorithmus (vollständige Pipeline)
 
 **Code:** `src/m09_rag.py` - Funktion `retrieve_relevant_chunks_hybrid()`
 
 ```
+User-Query
+    │
+    ▼
 ┌─────────────────────────────────────────────────┐
-│ 1. KANDIDATEN-SAMMLUNG                          │
-│    Semantic (limit×5, threshold×0.35)           │
-│    + Keyword (limit×10)                         │
-│    → Breites Netz spannen                       │
+│ 1. QUERY DISTILLATION (LLM)                     │
+│    gpt-4o-mini extrahiert 3-6 Kern-Keywords     │
+│    "Welche Klauseln der SIK-AGB..." →           │
+│    "klauseln sik-agb verhandelbar vertrags..."  │
+│    Ergebnis → keyword_query für BM25            │
 └─────────────────────────────────────────────────┘
-                    ↓
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+┌──────────────────┐ ┌──────────────────┐
+│  BM25 SEARCH     │ │ SEMANTIC SEARCH  │
+│  (keyword_query) │ │ (original query) │
+│  spaCy+Stemming  │ │ text-embedding   │
+│  on-the-fly tok. │ │ -3-small         │
+└──────────────────┘ └──────────────────┘
+          │                   │
+          └─────────┬─────────┘
+                    ▼
 ┌─────────────────────────────────────────────────┐
-│ 2. DATEINAME-BOOST                              │
-│    Query-Wörter im Dateinamen? → +0.04 Score   │
+│ 2. RRF-FUSION + DIVERSITY-CAP                   │
+│    Kombinierter Score: sem + bm25               │
+│    fill_max_per_doc = max(2, target//3)         │
+│    wenn Reranking: erhöhter Cap (z.B. 5)        │
+│    → 15 Kandidaten für Reranking                │
 └─────────────────────────────────────────────────┘
-                    ↓
+                    │
+    ┌───────────────┴──────────────────────────┐
+    │ Reranking aktiv?                         │
+    ▼                                          ▼
+┌───────────────────┐            (kein Reranking:
+│ 3. SCORE-RERANKING│             direkt Top-K)
+│   15 → 7 Chunks   │
+│   Gewichteter Score│
+│   sem×0.60        │
+│   bm25×0.25       │
+│   filename_boost  │
+└───────────────────┘
+                    │
+                    ▼
 ┌─────────────────────────────────────────────────┐
-│ 3. GARANTIERTE MINDEST-SLOTS                    │
-│    Pro Dokument: best_chunk ≥ threshold×0.45   │
-│    → mind. 1 Slot garantiert                    │
+│ 4. KONFIDENZ-CHECK → QUERY EXPANSION?           │
+│    max(semantic_scores) < threshold (45%)?      │
+│    + Akronyme erkannt (z.B. "sik-agb")?         │
+│    → JA: LLM expandiert Akronyme               │
+│      "sik-agb" → "Schweizerische Informatik-   │
+│                   konferenz Geschäftsbedingungen│
+│    → Akronym SUBSTITUIEREN in Query:            │
+│      "...der SIK-AGB..." →                     │
+│      "...der Schweizerische Informatikkonferenz │
+│       Geschäftsbedingungen (SIK-AGB)..."        │
+│    → Rekursiver Call (Lauf 2)                   │
+│      _forced_expansion_terms → skippt           │
+│      Distillation, hängt Terme an BM25-Query   │
 └─────────────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────────────┐
-│ 4. PFLICHTENHEFT-FALLBACK                       │
-│    "Pflichtenheft (Projekt)" immer vertreten    │
-│    (wenn Score > 0.10)                          │
-└─────────────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────────────┐
-│ 5. DIVERSITY-CAP + QUALITÄTS-FÜLLUNG           │
-│    Max max(2, limit//2) Chunks pro Dokument    │
-│    Restliche Slots: Score ≥ threshold×0.45      │
-└─────────────────────────────────────────────────┘
-                    ↓
-          [Top-K Results (sortiert)]
+                    │
+          ┌─────────┴─────────┐
+          │ Lauf 2 besser?    │
+          ▼                   ▼
+    [Lauf 2 Ergebnis]   [Lauf 1 bleibt]
+          │
+          ▼
+    [Top-K Final + pre_expansion_documents für UI]
 ```
 
-#### Parameter
+#### Key-Parameter
 ```python
-threshold = 0.45                              # User-konfigurierbar
-guaranteed_threshold = threshold * 0.45       # ~0.20
-discovery_threshold = min(threshold * 0.35, 0.15)  # ~0.15
-max_per_doc = max(2, limit // 2)             # Bei limit=7 → 3
+threshold = 0.45                    # User-konfigurierbar (Similarity-Schwelle)
+reranking.initial_k = 15           # Kandidaten für Reranking
+reranking.final_k = 7              # Finale Ergebnisse nach Reranking
+fill_max_per_doc = max(             # Diversity-Cap, erhöht bei Reranking
+    max_chunks_per_document,        # = 2 (Config)
+    target_count // 3               # = 5 (15÷3), damit Pool sich füllt
+) if reranking_enabled else max_chunks_per_document
 ```
 
-#### Beispiel-Ergebnis
-**Query:** "Preisblatt CHF Umsetzungskosten"  
-**limit=7, threshold=0.45**
+#### Score-Normalisierung
+```python
+# BM25: raw score (z.B. 16.4) → normalisiert (0-1) relativ zum besten Treffer
+normalized_match_score = raw_bm25_score / max_score
 
-| Rank | Score | Dokument | Grund |
-|---|---|---|---|
-| 1 | 0.54 | Preisblatt.pdf | Keyword (94%) + Dateiname-Boost (+4%) |
-| 2 | 0.50 | Preisblatt.pdf | Keyword (94%) + Semantic |
-| 3 | 0.46 | Pflichtenheft.docx | Semantic + Fallback |
-| 4 | 0.42 | Pflichtenheft.docx | Semantic (Diversity-Cap: 2/3) |
-| 5 | 0.40 | Pflichtenheft.docx | Semantic (Diversity-Cap: 3/3 erreicht) |
-| 6 | 0.35 | Beilagen.pdf | Garantierter Slot (best_chunk ≥ 0.20) |
-| 7 | 0.28 | Anhang.docx | Garantierter Slot (best_chunk ≥ 0.20) |
+# Score-Anzeige in UI: nimm den höheren der beiden normierten Werte
+display_pct = max(similarity, normalized_match_score)
+# NICHT match_score (roh) verwenden → würde 100% für BM25-Treffer zeigen!
+```
 
-**Diversität:** 4 verschiedene Dokumente ✅
+#### Query-Expansion Design-Prinzipien
+1. **Substitution statt Anhängen:** Akronyme im Query-Text ersetzen, damit das Embedding-Modell den vollen semantischen Kontext erhält
+2. **Distillation-Bypass:** `_forced_expansion_terms` umgeht die Destillation im 2. Lauf, damit Expansion-Terme nicht als "Rauschen" ausgefiltert werden
+3. **Robustes JSON-Parsing:** Regex-Extraktion `r'\{[^{}]*\}'` toleriert Prosa-Antworten stärkerer LLMs
 
 ---
 

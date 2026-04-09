@@ -428,6 +428,279 @@ Edge-Cases (ISO9001, 24/7) surfacen nicht in natürlichsprachigen Tests. Technis
 - `question_selection` Parameter optional, default `"all"` (verhält sich wie vorher)
 - DB-Feld `retrieval_keywords` wird ignoriert aber nicht gelöscht (könnte später entfernt werden)
 
+---
+
+# Changelog — Session 09.04.2026 (Nachmittag): Query-Expansion & Retrieval-Qualität
+
+## Zusammenfassung
+Mehrere kritische Bugs in der Query-Expansion-Pipeline gefunden und behoben. Fokus: Expansion-Terme kamen nicht beim Embedding-Modell an, Scores wurden falsch normalisiert, Preview zeigte falschen Chunk-Abschnitt.
+
+---
+
+## 6. Bug: Reranking Initial=8 statt 15 (Diversity-Cap)
+
+### Problem
+Log: `[RERANKING] Mode: score, Initial: 8, Final: 7` — erwartet: Initial: 15.
+
+**Root Cause:** `max_chunks_per_document: 2` × 4 Dokumente = max 8 Kandidaten. Reranking-Kandidaten-Pool wurde nie gefüllt.
+
+### Fix
+**Datei:** `src/m09_rag.py`
+
+```python
+# VORHER: fixe 2er-Cap auch bei Reranking
+max_per_doc = config.retrieval.max_chunks_per_document  # = 2
+
+# NACHHER: erhöhter Cap wenn Reranking nötig
+fill_max_per_doc = max(max_per_doc, target_count // 3) if reranking_enabled else max_per_doc
+# max(2, 15÷3) = 5 → 4 Docs × 5 = 20 mögliche → füllt 15 Kandidaten ✓
+```
+
+**Validierung:** Log zeigt `Initial: 15, Final: 7` ✓
+
+---
+
+## 7. Bug: Preview-Anker zeigt falschen Chunk-Abschnitt
+
+### Problem
+`_find_relevant_window` zeigte immer den Chunk-Anfang statt die relevante Passage.
+
+**Root Cause:**
+1. `_debug_entry` nutzte originale lange Query statt destillierte Keywords als Anker
+2. `_terms()` akzeptierte 5-Zeichen-Wörter inkl. "nicht", "haben" etc. → traf früh im Chunk
+
+### Fix
+**Datei:** `src/m09_rag.py`, Funktion `_find_relevant_window._terms()`
+
+```python
+# VORHER: min 5 Zeichen, kleine Stopword-Liste
+candidates = [w for w in words if len(w) >= 5 and w not in stopwords]
+
+# NACHHER: min 6 Zeichen, erweiterter Stopword-Set
+stopwords = {
+    "frage", "anbieter", "bitte", "kurz", "bündig", "antworten", "antwort",
+    "konkret", "betrifft", "gilt", "gelten", "unsere", "unserer", "hier",
+    "wird", "werden", "werde", "wurde", "wurden", "einer", "eines",
+    "dieses", "dieser", "diesem", "diesen", "nicht", "haben", "hatte",
+    "damit", "durch", "dabei", "davon", "daran", "daher", "darum",
+    "auch", "eine", "keinen", "keine", "keins", "falls", "sowie",
+}
+candidates = [w for w in words if len(w) >= 6 and w not in stopwords]
+```
+
+**Ergebnis:** Preview zeigt jetzt "...Vertragsvorschlag angelehnt an die SIK (Schweizerische Informatik Konferenz)..." statt Chunk-Anfang.
+
+---
+
+## 8. Bug (kritisch): Expansion-Terme wurden durch Distillation re-gefiltert
+
+### Problem
+2. Lauf BM25-Query identisch mit 1. Lauf: `'klauseln sik-agb nicht verhandelbar widersprüche vertragsvorschlag'`
+
+**Root Cause:** Rekursiver Aufruf übergab `expanded_query` an `retrieve_relevant_chunks_hybrid`, welches Distillation erneut aufrief. LLM filtrierte "Schweizerische Informatikkonferenz" als "Rauschen" heraus.
+
+### Fix
+**Datei:** `src/m09_rag.py`
+
+Neuer Parameter `_forced_expansion_terms: str | None = None`:
+
+```python
+# Am Funktionsanfang — VOR Distillation:
+if _forced_expansion_terms:
+    # Distillation ÜBERSPRINGEN — Expansion-Terme direkt anhängen
+    keyword_query = (_distilled_keywords or query) + " " + _forced_expansion_terms
+    logger.info(f"[HYBRID RETRIEVAL] Using distilled+expansion query for BM25: {keyword_query!r}")
+elif config.query.enable_distillation:
+    # Normaler Distillation-Pfad (nur Lauf 1)
+    ...
+
+# Rekursiver Aufruf übergibt jetzt:
+expanded_results = retrieve_relevant_chunks_hybrid(
+    query=expanded_query,
+    ...
+    _forced_expansion_terms=expansion_terms,  # ← Bypass Distillation!
+)
+```
+
+**Validierung:** Log zeigt `Using distilled+expansion query for BM25: '...vertragsvorschlag Schweizerische Informatikkonferenz Geschäftsbedingungen'` ✓
+
+---
+
+## 9. Bug: Expansion-Terme am Ende des Semantic-Query haben kaum Gewicht
+
+### Problem
+```python
+# VORHER: Terme anhängen
+expanded_query = query + " " + expansion_terms
+# → "...SIK-AGB?  Schweizerische Informatikkonferenz Geschäftsbedingungen"
+# Embedding-Modell gewichtet Ende eines langen Queries kaum
+```
+
+Chunk 854 ("Allgemeinen Geschäftsbedingungen für IKT der SIK") wurde semantisch kaum besser gefunden.
+
+### Fix
+**Datei:** `src/m09_rag.py`, Expansion-Block
+
+Akronym-**Substitution** statt Anhängen:
+
+```python
+import re as _re
+substituted_query = query
+for _acr, _exp in expansions.items():
+    substituted_query = _re.sub(
+        _re.escape(_acr),
+        f"{_exp} ({_acr})",
+        substituted_query,
+        flags=_re.IGNORECASE,
+    )
+expansion_terms = " ".join(expansions.values())
+expanded_query = substituted_query
+```
+
+**Vorher:** `"...der SIK-AGB sind nicht verhandelbar?..."`
+**Nachher:** `"...der Schweizerische Informatikkonferenz Geschäftsbedingungen (SIK-AGB) sind nicht verhandelbar?..."`
+
+**Ergebnis:** Embedding-Vektor liegt jetzt direkt neben "Allgemeinen Geschäftsbedingungen für IKT der SIK". Chunk 854 erscheint in Lauf 2 mit 38% statt zu fehlen.
+
+---
+
+## 10. Feature: 1./2. Lauf Vergleich im UI
+
+### Zweck
+User soll sehen was Expansion/Reranking effektiv verändert hat.
+
+### Implementation
+**`src/m09_rag.py`:** Lauf-1-Ergebnisse vor der Expansion speichern:
+```python
+expanded_results["pre_expansion_documents"] = semantic_results.get("documents", [])
+```
+
+**`backend/main.py`:** Beide Sets für Template aufbereiten:
+```python
+pre_expansion_docs = rr.get("pre_expansion_documents", [])
+_exp = rr.get("expansion", {})
+_preview_q = (_exp.get("expansions") and q_text + " " + " ".join(_exp["expansions"].values())) or q_text
+rag_sources_html = "..."          # Lauf 2 (mit Expansion)
+pre_expansion_sources_html = "..." # Lauf 1 (ohne)
+```
+
+**`backend/templates/batch_qa/_prompt_preview.html`:** Side-by-side Grid:
+```jinja2
+{% if pre_expansion_sources_html %}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+    <div>
+      <div style="color:muted">1. Lauf — ohne Expansion</div>
+      <pre style="opacity:.75">{{ pre_expansion_sources_html }}</pre>
+    </div>
+    <div>
+      <div style="color:#10b981">2. Lauf — nach Expansion + Reranking ✓</div>
+      <pre style="border:1px solid rgba(16,185,129,.35)">{{ rag_sources_html }}</pre>
+    </div>
+  </div>
+{% else %}
+  <pre>{{ rag_sources_html }}</pre>
+{% endif %}
+```
+
+---
+
+## 11. Feature: Umfassendes Debug-Logging mit ▶▶-Markern
+
+**Datei:** `src/m09_rag.py`
+
+Neue Log-Blöcke in `retrieve_relevant_chunks_hybrid()`:
+
+| Block | Inhalt |
+|---|---|
+| `▶▶ KANDIDATEN VOR RERANKING (N Stück)` | Alle 15 Kandidaten mit chunk_id, sem, bm25, comb, preview |
+| `▶▶ ERGEBNIS NACH RERANKING (Top-7)` | Alle 7 Ergebnisse mit rerank_score, preview |
+| `[Lauf 1/2] ▶▶ ALLE FINALE ERGEBNISSE` | Alle finale Chunks mit terms[], preview |
+| `▶▶ VERGLEICH LAUF 1 vs LAUF 2` | BM25-Queries, Scores, Top-Chunks beider Läufe |
+
+Lauf-Label basiert auf `_forced_expansion_terms`:
+```python
+run_label = "[Lauf 2 - NACH EXPANSION]" if _forced_expansion_terms else "[Lauf 1 - ohne Expansion]"
+```
+
+---
+
+## 12. Bugfix: Score-Anzeige 100% für BM25-Treffer (Normalisierungs-Fehler)
+
+### Problem
+Chunk 854 zeigte **100%** obwohl Rerank-Score nur 0.353.
+
+**Root Cause:** `max(similarity, match_score)` verwendete den **rohen BM25-Score** (z.B. 8.126) statt den normalisierten (0.495). Clipping auf 1.0 → 100%.
+
+### Fix
+**Datei:** `backend/main.py`
+
+```python
+# VORHER (falsch): match_score = roher BM25-Wert > 1.0
+f"({min(max(d.get('similarity',0), d.get('match_score',0)), 1.0):.0%})"
+
+# NACHHER (korrekt): normalized_match_score = 0-1 normalisiert
+f"({min(max(d.get('similarity',0), d.get('normalized_match_score',0)), 1.0):.0%})"
+```
+
+**Ergebnis:**
+- Chunk 947: `max(sem=0.502, norm_bm25=1.000)` → **100%** ✓ (BM25-Bestscore)
+- Chunk 854: `max(sem=0.382, norm_bm25=0.495)` → **50%** ✓ (nicht mehr 100%)
+
+---
+
+## 13. Robustheit: JSON-Parsing in `_expand_acronyms_with_llm`
+
+### Problem
+Starke LLM-Modelle (GPT-4o, Claude) antworten manchmal mit Prosa + JSON statt reinem JSON → `json.loads()` wirft Exception → leeres Dict → Expansion still failing.
+
+### Fix
+**Datei:** `src/m09_rag.py`
+
+```python
+# VORHER: Striktes Parsing
+expansions = json.loads(response.strip())
+
+# NACHHER: Regex-Extraktion toleriert Prosa um JSON herum
+import re as _re2
+_json_match = _re2.search(r'\{[^{}]*\}', response, _re2.DOTALL)
+if not _json_match:
+    logger.warning(f"Query Expansion: Kein JSON in Antwort gefunden: {response!r}")
+    return {}
+expansions = json.loads(_json_match.group())
+```
+
+---
+
+## Geänderte Dateien (Session-Total Nachmittag)
+
+### Core RAG
+- `src/m09_rag.py`:
+  - `fill_max_per_doc` Reranking-Cap-Fix
+  - `_forced_expansion_terms` Distillation-Bypass
+  - Akronym-Substitution statt Anhängen
+  - `_find_relevant_window._terms()` — min 6 Zeichen, erweiterter Stopword-Set
+  - `pre_expansion_documents` in returned dict
+  - `▶▶` Debug-Logging Blöcke
+  - JSON-Parsing robuster (Regex)
+
+### FastAPI Backend
+- `backend/main.py`:
+  - `pre_expansion_sources_html` hinzugefügt
+  - `_preview_q` mit Expansion-Termen für Ankering
+  - Score-Anzeige: `match_score` → `normalized_match_score`
+- `backend/templates/batch_qa/_prompt_preview.html`:
+  - Side-by-side 1./2. Lauf Grid
+
+## Testing Checklist (Nachmittag)
+
+- [x] Reranking Initial: 8 → 15 ✓
+- [x] BM25 Lauf 2 enthält Expansion-Terme: `'...vertragsvorschlag Schweizerische Informatikkonferenz Geschäftsbedingungen'` ✓
+- [x] Chunk 854 erscheint in Lauf 2 als #2 ✓
+- [x] Preview-Anker zeigt relevante Passage statt Chunk-Anfang ✓
+- [x] Score-Anzeige: Chunk 854 = 50%, nicht 100% ✓
+- [x] 1./2. Lauf Side-by-Side im UI ✓
+- [x] JSON-Parsing robust gegen Prosa-Antworten ✓
+
 **Performance Impact:**
 - BM25 indexing: +2-5% Zeit (alphanumeric check overhead - vernachlässigbar)
 - Query-Zeit: Unverändert (on-the-fly tokenization gleich schnell wie JSON-Parse)
