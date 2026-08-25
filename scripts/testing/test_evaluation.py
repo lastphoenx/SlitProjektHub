@@ -72,6 +72,7 @@ def test_ranking_ko_and_weighted_sum():
             Score(
                 bidder_id=b1.id,
                 criterion_id=eign.id,
+                source_key=f"user:{evaluator_id}",
                 evaluator_user_id=evaluator_id,
                 value=9.0,
             )
@@ -80,6 +81,7 @@ def test_ranking_ko_and_weighted_sum():
             Score(
                 bidder_id=b1.id,
                 criterion_id=z1.id,
+                source_key=f"user:{evaluator_id}",
                 evaluator_user_id=evaluator_id,
                 value=8.0,
             )
@@ -88,6 +90,7 @@ def test_ranking_ko_and_weighted_sum():
             Score(
                 bidder_id=b1.id,
                 criterion_id=z2.id,
+                source_key=f"user:{evaluator_id}",
                 evaluator_user_id=evaluator_id,
                 value=6.0,
             )
@@ -96,6 +99,7 @@ def test_ranking_ko_and_weighted_sum():
             Score(
                 bidder_id=b2.id,
                 criterion_id=eign.id,
+                source_key=f"user:{evaluator_id}",
                 evaluator_user_id=evaluator_id,
                 value=2.0,
             )
