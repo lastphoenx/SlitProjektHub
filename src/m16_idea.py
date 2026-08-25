@@ -236,7 +236,11 @@ def assess_project_idea_with_ai(
 
     parsed: dict[str, Any] = {}
     if raw:
-        m = _JSON_BLOCK_RE.search(raw)
+        text = raw.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, count=1)
+            text = re.sub(r"\s*```\s*$", "", text)
+        m = _JSON_BLOCK_RE.search(text)
         if m:
             try:
                 parsed = json.loads(m.group(0))

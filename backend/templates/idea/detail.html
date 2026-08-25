@@ -62,6 +62,9 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem">
+  {% if assess_error %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">KI-Bewertung fehlgeschlagen (Provider/Modell prüfen oder erneut versuchen).</p>
+  {% endif %}
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
     <h2 style="font-size:.95rem;font-weight:700">🤖 KI-Vorbewertung</h2>
     <form method="post" action="/idea/{{ idea.id }}/assess">

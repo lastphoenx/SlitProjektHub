@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from backend.app.jinja_env import templates
 
 from src.m01_config import get_settings, load_user_settings
-from src.m14_auth import get_user_id, get_username_by_id, session_username
+from src.m14_auth import get_user_id, get_username_by_id, is_super_user, session_username
 from src.m16_idea import (
     ALLOWED_IMAGE_EXT,
     assess_project_idea_with_ai,
@@ -32,6 +32,14 @@ def _username(request: Request) -> str:
     if validate_session_token(token, max_age_seconds=s.auth_session_timeout_minutes * 60):
         return session_username(token) or ""
     return ""
+
+
+def _may_edit_idea(idea, user_id: int | None, who: str) -> bool:
+    if is_super_user(who):
+        return True
+    if idea.submitted_by is None:
+        return True
+    return user_id is not None and idea.submitted_by == user_id
 
 
 def _idea_images_dir() -> Path:
@@ -111,6 +119,8 @@ async def idea_detail(request: Request, idea_id: int):
     who = _username(request)
     user_id = get_user_id(who) if who else None
     settings = load_user_settings()
+    may_edit = _may_edit_idea(idea, user_id, who)
+    assess_error = request.query_params.get("assess_error")
     return templates.TemplateResponse(
         "idea/detail.html",
         {
@@ -120,7 +130,8 @@ async def idea_detail(request: Request, idea_id: int):
             "challenges": idea.challenges,
             "phases": idea.phases,
             "submitter": get_username_by_id(idea.submitted_by) if idea.submitted_by else None,
-            "may_edit": idea.submitted_by == user_id or idea.submitted_by is None,
+            "may_edit": may_edit,
+            "assess_error": assess_error,
             "llm_provider": settings.get("provider", "openai"),
             "llm_model": settings.get("model", ""),
         },
@@ -137,7 +148,9 @@ async def idea_assess(
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
-    assess_project_idea_with_ai(idea_id, provider=provider, model=model)
+    result = assess_project_idea_with_ai(idea_id, provider=provider, model=model)
+    if not result or result.status != "bewertet":
+        return RedirectResponse(url=f"/idea/{idea_id}?assess_error=1", status_code=303)
     return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
 
 
@@ -160,6 +173,14 @@ async def idea_edit(
         except ValueError:
             return None
 
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    who = _username(request)
+    user_id = get_user_id(who) if who else None
+    if not _may_edit_idea(idea, user_id, who):
+        raise HTTPException(403, "Keine Berechtigung")
+
     obj = update_idea_intake(
         idea_id,
         title=title or None,
@@ -175,6 +196,13 @@ async def idea_edit(
 
 @router.post("/idea/{idea_id}/delete", response_class=HTMLResponse)
 async def idea_delete(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    who = _username(request)
+    user_id = get_user_id(who) if who else None
+    if not _may_edit_idea(idea, user_id, who):
+        raise HTTPException(403, "Keine Berechtigung")
     soft_delete_idea(idea_id)
     return RedirectResponse(url="/idea", status_code=303)
 
@@ -188,4 +216,6 @@ async def idea_image(idea_id: int):
     if not path.exists():
         raise HTTPException(404, "Kein Bild vorhanden")
     ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-    return FileResponse(path, media_type=ctype)
+    resp = FileResponse(path, media_type=ctype)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
