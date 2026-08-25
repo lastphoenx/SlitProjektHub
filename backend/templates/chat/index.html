@@ -3,6 +3,9 @@
 {% block content %}
 <div style="display:flex;flex-direction:column;height:calc(100vh - 2rem)" x-data>
 
+  {% set hint_context = 'chat' %}
+  {% include 'partials/_ki_model_hint.html' %}
+
   <!-- Toolbar -->
   <div class="page-header" style="flex-shrink:0;padding-bottom:.75rem;gap:.75rem;flex-wrap:wrap;align-items:flex-end">
     <div>

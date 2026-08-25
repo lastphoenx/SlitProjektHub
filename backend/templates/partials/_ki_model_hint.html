@@ -1,55 +1,128 @@
-{# Aufklapp-Hinweis: empfohlene Ollama-Modelle (EVO). hint_context: "idea" | "evaluation" #}
+{# Ollama-Modell-Empfehlungen (EVO). hint_context: settings | idea | evaluation | chat | batch-qa | taskgen #}
 <details style="margin-bottom:1rem;font-size:.78rem">
   <summary class="text-muted" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:.35rem;padding:.5rem .65rem;background:var(--color-surface-2);border:1px solid var(--color-border);border-radius:.5rem">
     <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-  {% if hint_context == 'idea' %}
-    Empfohlene Ollama-Modelle für Projektideen (lokal / EVO)
+  {% if hint_context == 'settings' %}
+    Ollama-Modell-Empfehlungen nach Bereich (EVO)
+  {% elif hint_context == 'idea' %}
+    Empfohlene Ollama-Modelle für Projektideen
+  {% elif hint_context == 'evaluation' %}
+    Empfohlene Ollama-Modelle für Offert-KI-Vorschläge
+  {% elif hint_context == 'chat' %}
+    Empfohlene Ollama-Modelle für Chat &amp; KI-Vorschläge
+  {% elif hint_context == 'batch-qa' %}
+    Empfohlene Ollama-Modelle für Batch QA
+  {% elif hint_context == 'taskgen' %}
+    Empfohlene Ollama-Modelle für Task-Generator
   {% else %}
-    Empfohlene Ollama-Modelle für Offert-KI-Vorschläge (lokal / EVO)
+    Empfohlene Ollama-Modelle (lokal / EVO)
   {% endif %}
     <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="margin-left:auto" class="details-chevron"><polyline points="6 9 12 15 18 9"/></svg>
   </summary>
   <div style="margin-top:.5rem;padding:.65rem .75rem;border:1px solid var(--color-border);border-radius:.5rem;line-height:1.55;color:var(--color-text-muted)">
+
+    {% if hint_context != 'settings' %}
     <p style="margin:0 0 .5rem">
-      Modellwahl in <a href="/settings">KI-Einstellungen</a> (Provider <strong>Ollama</strong>).
-      Auf dem EVO ist meist nur <strong>ein</strong> Modell im VRAM geladen — Umschalten kann kurz dauern.
-    </p>
-    {% if hint_context == 'idea' %}
-    <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
-      <li>
-        <strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — beste Ersteinschätzung:
-        Phasen, PT-/CHF-Schätzungen, Risiken und Empfehlung (ein Aufruf pro Idee, Qualität vor Tempo).
-      </li>
-      <li>
-        <strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — pragmatischer Allround:
-        strukturiertes JSON zuverlässig, schneller als 70b; gut wenn du viele Ideen nacheinander bewertest.
-      </li>
-      <li>
-        <strong style="color:var(--color-text)"><code>llama3:8b</code></strong> — nur zum Testen:
-        JSON-Schema kann unzuverlässig sein; nicht für Portfolio-Entscheide.
-      </li>
-    </ol>
-    <p style="margin:.5rem 0 0;font-size:.72rem">
-      Folien/Bilder werden noch nicht an die KI geschickt (nur Anzeige). Für Vision später: <code>qwen2.5vl:7b</code> oder <code>qwen2.5vl:32b</code>.
+      Provider <strong>Ollama</strong> in Sidebar oder <a href="/settings">KI-Einstellungen</a>.
+      Auf dem EVO ist meist nur <strong>ein</strong> Modell im VRAM — Umschalten kann kurz dauern.
+      {% if hint_context != 'settings' %}
+      <span style="display:block;margin-top:.25rem;font-size:.72rem">Vollständige Übersicht aller Bereiche: <a href="/settings">KI-Einstellungen</a>.</span>
+      {% endif %}
     </p>
     {% else %}
-    <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
-      <li>
-        <strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard für KI-Vorschläge:
-        liest Angebots-Chunks (RAG), liefert Score, Begründung und Zitat; schnell genug für viele Matrix-Zellen.
-      </li>
-      <li>
-        <strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — für schwierige Kriterien:
-        langer Anforderungstext, feine Abgrenzung im Angebot; langsamer, aber genauer.
-      </li>
-      <li>
-        <strong style="color:var(--color-text)"><code>llama3:8b</code></strong> — nur zum Ausprobieren:
-        Scores und Zitate oft zu oberflächlich; nicht für Vergabeentscheide.
-      </li>
-    </ol>
-    <p style="margin:.5rem 0 0;font-size:.72rem">
-      Nicht geeignet: <code>llama3.2:1b</code> (zu klein), Coding-Modelle (<code>qwen2.5-coder</code>).
+    <p style="margin:0 0 .65rem">
+      Lokale Modelle auf dem <strong>GMKtec EVO</strong> (<code>192.168.131.60:11434</code>).
+      Diese Liste gilt für Provider <strong>Ollama</strong> — Cloud-Provider (OpenAI, Anthropic) sind separate Produkte.
+      Pro Session ist meist nur <strong>ein</strong> Modell im VRAM geladen (<code>ollama ps</code>).
     </p>
     {% endif %}
+
+    {% if hint_context == 'settings' %}
+    <div style="display:flex;flex-direction:column;gap:.75rem">
+      <div>
+        <strong style="color:var(--color-text);font-size:.8rem">Chat, Rollen-/Projekt-KI-Vorschläge</strong>
+        <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
+          <li><code>qwen3:32b</code> — Standard: RAG-Kontext, Deutsch, gute Balance</li>
+          <li><code>llama3.3:70b</code> — komplexe Pflichtenheft-Fragen, mehr Tiefe</li>
+          <li><code>qwen3:8b</code> — schnelle Tests (weniger zuverlässig)</li>
+        </ol>
+        <p style="margin:.35rem 0 0;font-size:.72rem">Temperatur ~0.7 für Pflichtenheft-Antworten (siehe RAG-Parameter unten).</p>
+      </div>
+      <div>
+        <strong style="color:var(--color-text);font-size:.8rem">Batch QA (viele Fragen + RAG)</strong>
+        <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
+          <li><code>qwen3:32b</code> — Standard: hunderte Aufrufe, RAG pro Zeile</li>
+          <li><code>llama3.3:70b</code> — wenn Antworten zu oberflächlich</li>
+          <li><code>qwen3:8b</code> — nur Smoke-Tests mit wenigen Zeilen</li>
+        </ol>
+      </div>
+      <div>
+        <strong style="color:var(--color-text);font-size:.8rem">Task-Generator</strong>
+        <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
+          <li><code>qwen3:32b</code> — strukturierte Aufgabenlisten aus Pflichtenheft-RAG</li>
+          <li><code>llama3.3:70b</code> — feinere Zerlegung bei komplexen Rollen</li>
+        </ol>
+      </div>
+      <div>
+        <strong style="color:var(--color-text);font-size:.8rem">Offertbeurteilung (KI-Vorschläge pro Zelle)</strong>
+        <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
+          <li><code>qwen3:32b</code> — Angebots-Chunks, Score + Zitat, viele Matrix-Zellen</li>
+          <li><code>llama3.3:70b</code> — schwierige Kriterien, langer Anforderungstext</li>
+          <li><code>llama3:8b</code> — nur zum Ausprobieren</li>
+        </ol>
+      </div>
+      <div>
+        <strong style="color:var(--color-text);font-size:.8rem">Projektideen (Ersteinschätzung)</strong>
+        <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
+          <li><code>llama3.3:70b</code> — beste Phasen-/PT-/CHF-Schätzung (ein Aufruf pro Idee)</li>
+          <li><code>qwen3:32b</code> — schneller Allround, strukturiertes JSON</li>
+          <li><code>llama3:8b</code> — nur Tests, nicht für Portfolio-Entscheide</li>
+        </ol>
+        <p style="margin:.35rem 0 0;font-size:.72rem">Folien noch ohne Vision — später <code>qwen2.5vl:7b</code> / <code>qwen2.5vl:32b</code>.</p>
+      </div>
+      <div>
+        <strong style="color:var(--color-text);font-size:.8rem">RAG-Hilfsaufrufe (Query-Expansion, Reranking)</strong>
+        <p style="margin:.35rem 0 0;font-size:.78rem">
+          Kleine, schnelle Modelle reichen: <code>qwen3:8b</code> oder <code>llama3:8b</code>.
+          Embeddings separat: <code>bge-m3</code> (nicht im Chat-Dropdown).
+        </p>
+      </div>
+      <p style="margin:0;font-size:.72rem;border-top:1px solid var(--color-border);padding-top:.5rem">
+        <strong>Pragmatischer Default für alles:</strong> <code>qwen3:32b</code> — wenn du nicht ständig umschalten willst.<br>
+        Nicht geeignet: <code>llama3.2:1b</code> (zu klein), Coding-Modelle (<code>qwen2.5-coder</code>) für Vergabe/Portfolio.
+      </p>
+    </div>
+    {% elif hint_context == 'idea' %}
+    <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
+      <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — beste Ersteinschätzung (Phasen, PT/CHF, Risiken, Empfehlung).</li>
+      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — schneller Allround, zuverlässiges JSON.</li>
+      <li><strong style="color:var(--color-text)"><code>llama3:8b</code></strong> — nur zum Testen.</li>
+    </ol>
+  {% elif hint_context == 'evaluation' %}
+    <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
+      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard: RAG aus Angebot, Score + Zitat, viele Zellen.</li>
+      <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — schwierige Kriterien, feine Abgrenzung.</li>
+      <li><strong style="color:var(--color-text)"><code>llama3:8b</code></strong> — nur zum Ausprobieren.</li>
+    </ol>
+  {% elif hint_context == 'chat' %}
+    <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
+      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard für Chat mit RAG im Projekt-Kontext.</li>
+      <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — tiefe Pflichtenheft-Antworten, mehr Kontext-Tiefe.</li>
+      <li><strong style="color:var(--color-text)"><code>qwen3:8b</code></strong> — schnelle Tests, weniger zuverlässig.</li>
+    </ol>
+    <p style="margin:.5rem 0 0;font-size:.72rem">Gilt auch für KI-Vorschläge in Rollen- und Projekt-Formularen.</p>
+  {% elif hint_context == 'batch-qa' %}
+    <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
+      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard: viele Zeilen, RAG pro Frage, Checkpoint-tauglich.</li>
+      <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — wenn Antworten zu knapp oder ungenau.</li>
+      <li><strong style="color:var(--color-text)"><code>qwen3:8b</code></strong> — nur kurze Testläufe (wenige Fragen).</li>
+    </ol>
+  {% elif hint_context == 'taskgen' %}
+    <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
+      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard: Aufgaben aus Pflichtenheft-RAG (Rolle).</li>
+      <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — komplexe Rollen, feinere Aufgabenzerlegung.</li>
+    </ol>
+    {% endif %}
+
   </div>
 </details>
