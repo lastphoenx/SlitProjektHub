@@ -12,6 +12,9 @@
   </div>
 </div>
 
+{% set hint_context = 'idea' %}
+{% include 'partials/_ki_model_hint.html' %}
+
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Neue Idee erfassen</h2>
   <form method="post" action="/idea" enctype="multipart/form-data" style="display:grid;gap:.6rem;max-width:760px">
