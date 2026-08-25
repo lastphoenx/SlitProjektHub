@@ -1,0 +1,54 @@
+<div class="modal-backdrop">
+  <div class="modal" style="max-width:min(96vw,1100px);width:min(96vw,1100px);max-height:92vh;display:flex;flex-direction:column" role="dialog" aria-modal="true">
+
+    <div class="modal-header" style="flex-shrink:0">
+      <div style="min-width:0">
+        <h2 class="modal-title" style="font-size:.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ doc.filename }}</h2>
+        <p class="text-muted" style="font-size:.75rem;margin-top:.2rem">{{ doc.classification }} · {{ doc.chunk_count }} Chunks</p>
+      </div>
+      <div style="display:flex;gap:.35rem;align-items:center;flex-shrink:0">
+        {% if file_ok %}
+        <a class="btn btn-secondary btn-sm" href="/documents/{{ doc.id }}/file?disposition=inline" target="_blank" rel="noopener">
+          Vollansicht
+        </a>
+        <a class="btn btn-secondary btn-sm" href="/documents/{{ doc.id }}/file" download>
+          Download
+        </a>
+        {% endif %}
+        <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''" title="Schließen">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div style="flex:1;min-height:0;overflow:auto">
+      {% if not file_ok %}
+      <div class="alert alert-warning" style="margin-bottom:.75rem">
+        Originaldatei nicht auf dem Server — nur RAG-Text aus der Datenbank.
+      </div>
+      <pre style="font-size:.78rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--color-surface-2);padding:.75rem;border-radius:.375rem;border:1px solid var(--color-border)">{{ preview_text }}</pre>
+      {% elif preview_kind == 'pdf' %}
+      <iframe
+        src="/documents/{{ doc.id }}/file?disposition=inline"
+        title="{{ doc.filename }}"
+        style="width:100%;height:min(70vh,720px);border:1px solid var(--color-border);border-radius:.375rem;background:#fff">
+      </iframe>
+      {% elif preview_kind == 'image' %}
+      <div style="text-align:center;padding:.5rem">
+        <img src="/documents/{{ doc.id }}/file?disposition=inline" alt="{{ doc.filename }}"
+             style="max-width:100%;max-height:70vh;border-radius:.375rem;border:1px solid var(--color-border)">
+      </div>
+      {% elif preview_kind == 'text' %}
+      <pre style="font-size:.78rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--color-surface-2);padding:.75rem;border-radius:.375rem;border:1px solid var(--color-border);max-height:70vh;overflow:auto">{{ preview_text }}</pre>
+      {% elif preview_kind == 'docx' %}
+      <p class="text-muted" style="font-size:.8rem;margin-bottom:.5rem">DOCX — extrahierter Text (Vorschau):</p>
+      <pre style="font-size:.78rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--color-surface-2);padding:.75rem;border-radius:.375rem;border:1px solid var(--color-border);max-height:70vh;overflow:auto">{{ preview_text }}</pre>
+      {% else %}
+      <p class="text-muted" style="margin-bottom:.75rem">Keine Browser-Vorschau für diesen Dateityp.</p>
+      <a class="btn btn-primary btn-sm" href="/documents/{{ doc.id }}/file" download>Datei herunterladen</a>
+      {% endif %}
+    </div>
+  </div>
+</div>

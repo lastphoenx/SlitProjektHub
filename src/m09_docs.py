@@ -452,6 +452,73 @@ def list_documents(include_deleted: bool = False) -> List[Document]:
         query = query.order_by(Document.uploaded_at.desc())
         return session.exec(query).all()
 
+
+def get_document_by_id(doc_id: int) -> Optional[Document]:
+    with get_session() as session:
+        doc = session.get(Document, doc_id)
+        if not doc or doc.is_deleted:
+            return None
+        return doc
+
+
+def resolve_document_path(doc: Document) -> Optional[Path]:
+    """Absoluter Pfad zur Datei — DB-Pfad oder Fallback data/rag/docs/."""
+    candidates: list[Path] = []
+    if doc.file_path:
+        candidates.append(Path(doc.file_path))
+        candidates.append(DOCS_DIR / Path(doc.file_path).name)
+    candidates.append(DOCS_DIR / doc.filename)
+    seen: set[Path] = set()
+    for raw in candidates:
+        try:
+            p = raw.resolve()
+        except OSError:
+            continue
+        if p in seen:
+            continue
+        seen.add(p)
+        if p.is_file():
+            return p
+    return None
+
+
+def document_preview_kind(doc: Document) -> str:
+    path = resolve_document_path(doc)
+    ext = path.suffix.lower() if path else Path(doc.filename).suffix.lower()
+    if ext == ".pdf":
+        return "pdf"
+    if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
+        return "image"
+    if ext in (".md", ".txt", ".json", ".yaml", ".yml", ".csv"):
+        return "text"
+    if ext == ".docx":
+        return "docx"
+    return "download_only"
+
+
+def document_preview_text(doc: Document, max_chars: int = 8000) -> str:
+    path = resolve_document_path(doc)
+    if not path:
+        with get_session() as session:
+            chunk = session.exec(
+                select(DocumentChunk)
+                .where(DocumentChunk.document_id == doc.id)
+                .order_by(DocumentChunk.chunk_index)
+                .limit(1)
+            ).first()
+        return (chunk.chunk_text or "")[:max_chars] if chunk else "Datei nicht auf dem Server gefunden."
+    ext = path.suffix.lower()
+    try:
+        if ext == ".pdf":
+            return extract_text_from_pdf(path)[:max_chars]
+        if ext == ".docx":
+            return extract_text_from_docx(path)[:max_chars]
+        if ext in (".md", ".txt", ".json", ".yaml", ".yml", ".csv"):
+            return path.read_text(encoding="utf-8", errors="replace")[:max_chars]
+    except Exception:
+        pass
+    return "Vorschau konnte nicht gelesen werden."
+
 def get_project_documents(project_key: str) -> List[Document]:
     """Gibt alle Dokumente zurück, die einem Projekt zugeordnet sind."""
     with get_session() as session:

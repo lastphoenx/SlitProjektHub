@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import logging
+import mimetypes
 import sys
 import os
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Form, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -44,6 +45,7 @@ from src.m01_config import load_user_settings, save_user_settings
 from src.m09_docs import (
     ingest_document, list_documents, delete_document,
     link_document_to_project, unlink_document_from_project, get_project_documents,
+    get_document_by_id, resolve_document_path, document_preview_kind, document_preview_text,
 )
 from src.m03_db import DOCUMENT_CLASSIFICATIONS, init_db
 from src.m14_auth import is_setup_required, validate_session_token
@@ -910,6 +912,43 @@ async def documents_delete(doc_id: int):
     response = HTMLResponse(content="")
     response.headers["HX-Toast"] = json.dumps({"message": "Dokument gelöscht", "type": "success"})
     return response
+
+
+@app.get("/documents/{doc_id}/file")
+async def documents_file(doc_id: int, disposition: str = "attachment"):
+    doc = get_document_by_id(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Dokument nicht gefunden")
+    path = resolve_document_path(doc)
+    if not path:
+        raise HTTPException(status_code=404, detail="Datei nicht auf dem Server")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    disp = "inline" if disposition == "inline" else "attachment"
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=doc.filename,
+        content_disposition_type=disp,
+    )
+
+
+@app.get("/documents/{doc_id}/preview", response_class=HTMLResponse)
+async def documents_preview(request: Request, doc_id: int):
+    doc = get_document_by_id(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Dokument nicht gefunden")
+    kind = document_preview_kind(doc)
+    file_ok = resolve_document_path(doc) is not None
+    return templates.TemplateResponse(
+        "documents/_preview.html",
+        {
+            "request": request,
+            "doc": doc,
+            "preview_kind": kind,
+            "preview_text": document_preview_text(doc) if kind in ("text", "docx") else "",
+            "file_ok": file_ok,
+        },
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════════
