@@ -37,6 +37,13 @@ class ProjectIdea(SQLModel, table=True):
     internal_pt_human: Optional[float] = Field(default=None, sa_column=Column(Float))
     external_cost_human: Optional[float] = Field(default=None, sa_column=Column(Float))
     image_path: Optional[str] = Field(default=None, sa_column=Column(String(400)))
+    image_source: Optional[str] = Field(default=None, sa_column=Column(String(20)))
+    deck_path: Optional[str] = Field(default=None, sa_column=Column(String(400)))
+    deck_preview_path: Optional[str] = Field(default=None, sa_column=Column(String(400)))
+    deck_generated_at: Optional[datetime] = None
+    illustration_model: Optional[str] = Field(default=None, sa_column=Column(String(80)))
+    illustration_prompt_safe: Optional[str] = Field(default=None, sa_column=Column(String(500)))
+    illustration_generated_at: Optional[datetime] = None
 
     submitted_by: Optional[int] = None
     status: str = Field(default="neu", sa_column=Column(String(20), nullable=False))
@@ -84,6 +91,19 @@ def migrate_idea_db() -> None:
         tables = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()}
         if "project_idea" not in tables:
             return
+        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(project_idea)")).fetchall()}
+        migrations = [
+            ("image_source", "ALTER TABLE project_idea ADD COLUMN image_source VARCHAR(20)"),
+            ("deck_path", "ALTER TABLE project_idea ADD COLUMN deck_path VARCHAR(400)"),
+            ("deck_preview_path", "ALTER TABLE project_idea ADD COLUMN deck_preview_path VARCHAR(400)"),
+            ("deck_generated_at", "ALTER TABLE project_idea ADD COLUMN deck_generated_at DATETIME"),
+            ("illustration_model", "ALTER TABLE project_idea ADD COLUMN illustration_model VARCHAR(80)"),
+            ("illustration_prompt_safe", "ALTER TABLE project_idea ADD COLUMN illustration_prompt_safe VARCHAR(500)"),
+            ("illustration_generated_at", "ALTER TABLE project_idea ADD COLUMN illustration_generated_at DATETIME"),
+        ]
+        for col, stmt in migrations:
+            if col not in cols:
+                conn.execute(text(stmt))
         # zukünftige Spalten hier ergänzen
 
 
@@ -107,6 +127,7 @@ def create_idea(
             internal_pt_human=internal_pt_human,
             external_cost_human=external_cost_human,
             image_path=image_path,
+            image_source="upload" if image_path else None,
             submitted_by=submitted_by,
         )
         ses.add(obj)
