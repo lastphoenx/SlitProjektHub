@@ -25,10 +25,13 @@ from src.m16_idea import (
 )
 from src.m16_idea_visual import (
     DEFAULT_OPENAI_IMAGE_MODEL,
+    IDEA_VISUAL_OUTPUT_FORMATS,
     OPENAI_IMAGE_MODELS,
     generate_cloud_illustration,
+    generate_idea_visual,
     generate_portfolio_deck,
     idea_decks_dir,
+    idea_docx_dir,
     idea_images_dir,
     resolve_visual_llm,
     visual_text_models_map,
@@ -146,6 +149,8 @@ async def idea_detail(request: Request, idea_id: int):
             "assess_error": qp.get("assess_error"),
             "deck_error": qp.get("deck_error"),
             "illustration_error": qp.get("illustration_error"),
+            "visual_error": qp.get("visual_error"),
+            "visual_ok": qp.get("visual_ok"),
             "llm_provider": settings.get("provider", "openai"),
             "llm_model": settings.get("model", ""),
             "openai_image_models": OPENAI_IMAGE_MODELS,
@@ -153,6 +158,7 @@ async def idea_detail(request: Request, idea_id: int):
             "openai_key_ok": have_key("openai"),
             "visual_llm_providers": visual_text_providers_available(),
             "visual_llm_models": visual_text_models_map(),
+            "idea_visual_formats": IDEA_VISUAL_OUTPUT_FORMATS,
         },
     )
 
@@ -171,6 +177,39 @@ async def idea_assess(
     if not result or result.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?assess_error=1", status_code=303)
     return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+
+
+@router.post("/idea/{idea_id}/generate-visual", response_class=HTMLResponse)
+async def idea_generate_visual(
+    request: Request,
+    idea_id: int,
+    output_format: str = Form(...),
+    refinement_notes: str = Form(""),
+    llm_provider: str = Form("openai"),
+    llm_model: str = Form(""),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
+    image_model: str = Form(DEFAULT_OPENAI_IMAGE_MODEL),
+):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    if idea.status != "bewertet":
+        return RedirectResponse(url=f"/idea/{idea_id}?visual_error=not_assessed", status_code=303)
+    vp, vm = resolve_visual_llm(visual_llm_provider, visual_llm_model, llm_provider, llm_model)
+    if image_model not in OPENAI_IMAGE_MODELS:
+        image_model = DEFAULT_OPENAI_IMAGE_MODEL
+    obj, err = generate_idea_visual(
+        idea_id,
+        output_format=output_format,
+        refinement_notes=refinement_notes,
+        llm_provider=vp,
+        llm_model=vm,
+        image_model=image_model,
+    )
+    if not obj:
+        return RedirectResponse(url=f"/idea/{idea_id}?visual_error={err or 'failed'}", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}?visual_ok=1", status_code=303)
 
 
 @router.post("/idea/{idea_id}/generate-deck", response_class=HTMLResponse)
@@ -270,7 +309,7 @@ async def idea_clear_illustration(request: Request, idea_id: int):
     user_id = get_user_id(who) if who else None
     if not _may_edit_idea(idea, user_id, who):
         raise HTTPException(403)
-    if idea.image_source != "dalle":
+    if idea.image_source not in ("dalle", "diagram"):
         return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
     if idea.image_path:
         p = _idea_images_dir() / Path(idea.image_path).name
@@ -410,3 +449,42 @@ async def idea_deck_download(idea_id: int):
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         filename=f"{title[:60]}.pptx",
     )
+
+
+@router.get("/idea/docx/{idea_id}")
+async def idea_docx_download(idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or not idea.docx_path:
+        raise HTTPException(404, "Kein Word-Bericht")
+    path = idea_docx_dir() / Path(idea.docx_path).name
+    if not path.exists():
+        raise HTTPException(404, "Kein Word-Bericht")
+    title = (idea.ai_project_name or idea.title or f"Projektidee_{idea_id}").replace("/", "-")
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=f"{title[:60]}.docx",
+    )
+
+
+@router.post("/idea/{idea_id}/clear-docx", response_class=HTMLResponse)
+async def idea_clear_docx(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404)
+    who = _username(request)
+    user_id = get_user_id(who) if who else None
+    if not _may_edit_idea(idea, user_id, who):
+        raise HTTPException(403)
+    if idea.docx_path:
+        p = idea_docx_dir() / Path(idea.docx_path).name
+        if p.exists():
+            p.unlink()
+    with get_session() as ses:
+        obj = ses.get(ProjectIdea, idea_id)
+        if obj:
+            obj.docx_path = None
+            obj.docx_generated_at = None
+            ses.add(obj)
+            ses.commit()
+    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)

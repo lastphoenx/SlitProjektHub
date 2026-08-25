@@ -41,6 +41,8 @@ class ProjectIdea(SQLModel, table=True):
     deck_path: Optional[str] = Field(default=None, sa_column=Column(String(400)))
     deck_preview_path: Optional[str] = Field(default=None, sa_column=Column(String(400)))
     deck_generated_at: Optional[datetime] = None
+    docx_path: Optional[str] = Field(default=None, sa_column=Column(String(400)))
+    docx_generated_at: Optional[datetime] = None
     illustration_model: Optional[str] = Field(default=None, sa_column=Column(String(80)))
     illustration_prompt_safe: Optional[str] = Field(default=None, sa_column=Column(String(500)))
     illustration_generated_at: Optional[datetime] = None
@@ -100,6 +102,8 @@ def migrate_idea_db() -> None:
             ("illustration_model", "ALTER TABLE project_idea ADD COLUMN illustration_model VARCHAR(80)"),
             ("illustration_prompt_safe", "ALTER TABLE project_idea ADD COLUMN illustration_prompt_safe VARCHAR(500)"),
             ("illustration_generated_at", "ALTER TABLE project_idea ADD COLUMN illustration_generated_at DATETIME"),
+            ("docx_path", "ALTER TABLE project_idea ADD COLUMN docx_path VARCHAR(400)"),
+            ("docx_generated_at", "ALTER TABLE project_idea ADD COLUMN docx_generated_at DATETIME"),
         ]
         for col, stmt in migrations:
             if col not in cols:

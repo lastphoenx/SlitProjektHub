@@ -52,7 +52,9 @@
     <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.35rem">
       <label class="form-label" style="font-size:.72rem;margin:0">
         Visualisierung
-        {% if idea.image_source == 'dalle' %}<span class="text-muted">(Cloud-Illustration)</span>{% elif idea.image_source == 'upload' %}<span class="text-muted">(Upload)</span>{% endif %}
+        {% if idea.image_source == 'dalle' %}<span class="text-muted">(Cloud-Illustration)</span>
+        {% elif idea.image_source == 'diagram' %}<span class="text-muted">(Prozessdiagramm, lokal)</span>
+        {% elif idea.image_source == 'upload' %}<span class="text-muted">(Upload)</span>{% endif %}
       </label>
       {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-image' %}
       {% set inline_url = '/idea/image/' ~ idea.id ~ '?disposition=inline' %}
@@ -84,114 +86,121 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem">
-  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Portfolio-Visualisierung</h2>
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Visualisierung erstellen</h2>
+  <p class="text-muted" style="font-size:.78rem;margin-bottom:.75rem">
+    Text-Bewertung läuft über KI-Einstellungen. Hier nur Ausgabe-Format und optional eigene KI für Visualisierung (Standard / Anthropic / Ollama).
+  </p>
 
-  {% if deck_error %}
-  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Folie konnte nicht erstellt werden (zuerst KI bewerten).</p>
+  {% if visual_ok %}
+  <p class="text-muted" style="color:#86efac;margin-bottom:.75rem;font-size:.85rem">✓ Visualisierung erstellt.</p>
   {% endif %}
-  {% if illustration_error == 'no_key' %}
-  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">OpenAI API-Key fehlt (.env) — Cloud-Illustration nicht verfügbar.</p>
-  {% elif illustration_error == 'not_assessed' %}
-  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud-Illustration: zuerst KI bewerten.</p>
-  {% elif illustration_error %}
-  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud-Illustration fehlgeschlagen (Modell/Netzwerk prüfen).</p>
+  {% if visual_error == 'no_key' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">OpenAI API-Key fehlt für Cloud-PNG.</p>
+  {% elif visual_error == 'not_assessed' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Zuerst KI bewerten.</p>
+  {% elif visual_error == 'png_failed' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud-PNG fehlgeschlagen.</p>
+  {% elif visual_error %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Visualisierung fehlgeschlagen (Provider/Modell prüfen).</p>
+  {% endif %}
+  {% if deck_error or illustration_error %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5;font-size:.78rem">Hinweis: alte Einzel-Aktionen — bitte unten „Visualisierung erstellen“ nutzen.</p>
   {% endif %}
 
   {% if idea.status != 'bewertet' %}
-  <p class="text-muted">Nach der KI-Vorbewertung können Portfolio-Folie (lokal) und optional Cloud-Illustration erzeugt werden.</p>
+  <p class="text-muted">Nach der KI-Vorbewertung können Berichte, Folien und Bilder erzeugt werden.</p>
   {% else %}
-  <div style="display:grid;gap:1rem">
+  <form method="post" action="/idea/{{ idea.id }}/generate-visual" class="idea-gen-form" style="display:grid;gap:.6rem;max-width:560px;margin-bottom:1rem">
+    <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
+    <input type="hidden" name="llm_model" value="{{ llm_model }}" />
+    <div>
+      <label class="form-label">Ausgabe-Format</label>
+      <select class="form-select" name="output_format" id="idea-output-format">
+        {% for key, label in idea_visual_formats.items() %}
+        <option value="{{ key }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% set form_id = 'idea-visual' %}
+    {% set form_visual_provider = '' %}
+    {% set form_visual_model = '' %}
+    {% include 'partials/_visual_llm_fields.html' %}
+    <div id="idea-cloud-image-wrap" style="display:none">
+      <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell (nur Cloud-PNG)</label>
+      <select class="form-select" name="image_model">
+        {% for key in openai_image_models %}
+        <option value="{{ key }}" {% if key == default_image_model %}selected{% endif %}>{{ key }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Optionale Anpassung</label>
+      <textarea class="form-input" name="refinement_notes" rows="2"
+        placeholder="z.B. Phasen hervorheben, weniger Text, mehr Blau …"></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm idea-gen-btn">Visualisierung generieren</button>
+    <p class="idea-gen-status text-muted" style="font-size:.72rem;display:none;margin:0">Generiere … bitte warten (30s–2min).</p>
+  </form>
 
-    <div style="padding:.75rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.35rem">
-        <strong style="font-size:.8rem">Variante 1 — Portfolio-Folie (lokal, PPTX)</strong>
-        {% if idea.deck_path %}
+  <div style="display:grid;gap:.75rem">
+    {% if idea.deck_path %}
+    <div style="padding:.6rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
+        <strong style="font-size:.78rem">PowerPoint</strong>
         {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-deck' %}
         {% set inline_url = '/idea/deck-preview/' ~ idea.id ~ '?disposition=inline' if idea.deck_preview_path else None %}
         {% set download_url = '/idea/deck/' ~ idea.id %}
         {% include 'partials/_media_actions.html' %}
-        {% endif %}
       </div>
-      <p class="text-muted" style="font-size:.78rem;margin:.35rem 0 .6rem">
-        Erzeugt eine editierbare PowerPoint aus der KI-Bewertung (Zusammenfassung, PT/CHF, Phasen mit Prozessdiagramm). Keine Cloud, kein Rohtext-Export.
-      </p>
-      <form method="post" action="/idea/{{ idea.id }}/generate-deck" class="idea-gen-form" style="display:grid;gap:.5rem;max-width:520px">
-        <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
-        <input type="hidden" name="llm_model" value="{{ llm_model }}" />
-        {% set form_id = 'deck' %}
-        {% set form_visual_provider = '' %}
-        {% set form_visual_model = '' %}
-        {% include 'partials/_visual_llm_fields.html' %}
-        <div>
-          <label class="form-label" style="font-size:.72rem">Optionale Anpassung {% if idea.deck_path %}(bei Neu-Generierung){% endif %}</label>
-          <textarea class="form-input" name="refinement_notes" rows="2"
-            placeholder="z.B. weniger Text auf Titelfolie, Schwerpunkte Phase 2 hervorheben, Farben neutral …"></textarea>
-        </div>
-        <button type="submit" class="btn btn-primary btn-sm idea-gen-btn">
-          {% if idea.deck_path %}Portfolio-Folie neu generieren{% else %}Portfolio-Folie erstellen{% endif %}
-        </button>
-        <p class="idea-gen-status text-muted" style="font-size:.72rem;display:none;margin:0">Generiere … bitte warten (30s–2min).</p>
-      </form>
-      {% if idea.deck_path and may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="margin-top:.35rem" onsubmit="return confirm('PPTX und Vorschau löschen?')">
-        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.72rem">Folie löschen</button>
-      </form>
-      {% endif %}
       {% if idea.deck_preview_path %}
-      <div style="margin-top:.75rem">
-        <img src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="Folien-Vorschau" style="max-width:100%;max-height:200px;border-radius:8px;border:1px solid var(--color-border)" />
-        {% if idea.deck_generated_at %}
-        <p class="text-muted" style="font-size:.7rem;margin-top:.25rem">Erstellt: {{ idea.deck_generated_at.strftime('%d.%m.%Y %H:%M') }}</p>
-        {% endif %}
+      <img src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="PPTX" style="max-width:100%;max-height:160px;margin-top:.5rem;border-radius:6px;border:1px solid var(--color-border)" />
+      {% endif %}
+      {% if may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="margin-top:.35rem" onsubmit="return confirm('PPTX löschen?')">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if idea.docx_path %}
+    <div style="padding:.6rem;border:1px solid var(--color-border);border-radius:.5rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
+        <strong style="font-size:.78rem">Word-Bericht</strong>
+        {% set preview_hx_get = None %}
+        {% set inline_url = None %}
+        {% set download_url = '/idea/docx/' ~ idea.id %}
+        {% include 'partials/_media_actions.html' %}
       </div>
+      {% if may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/clear-docx" style="margin-top:.35rem" onsubmit="return confirm('Word-Bericht löschen?')">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
+      </form>
       {% endif %}
     </div>
+    {% endif %}
 
-    <div style="padding:.75rem;border:1px solid var(--color-border);border-radius:.5rem">
-      <strong style="font-size:.8rem">Variante 3 — Cloud-Illustration (OpenAI Images)</strong>
-      <p class="text-muted" style="font-size:.78rem;margin:.35rem 0 .5rem">
-        Abstrakte Hero-Grafik via OpenAI. <strong>DSGVO:</strong> Es wird nur ein gefilterter Prompt aus der KI-Bewertung gesendet —
-        kein Rohtext der Idee, keine Personennamen. Fachbereich/Projektname können enthalten sein.
-        Prompt wird lokal per KI-Einstellungen-Modell erzeugt und bereinigt.
-      </p>
-      {% if not openai_key_ok %}
-      <p class="text-muted" style="font-size:.72rem;color:#fca5a5">OPENAI_API_KEY in .env erforderlich.</p>
-      {% else %}
-      <form method="post" action="/idea/{{ idea.id }}/generate-illustration" class="idea-gen-form" style="display:grid;gap:.5rem;max-width:520px">
-        <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
-        <input type="hidden" name="llm_model" value="{{ llm_model }}" />
-        {% set form_id = 'cloud' %}
-        {% set form_visual_provider = '' %}
-        {% set form_visual_model = '' %}
-        {% include 'partials/_visual_llm_fields.html' %}
-        <div>
-          <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell</label>
-          <select class="form-select" name="image_model">
-            {% for key in openai_image_models %}
-            <option value="{{ key }}" {% if key == default_image_model %}selected{% endif %}>{{ key }}</option>
-            {% endfor %}
-          </select>
-          <p class="text-muted" style="font-size:.68rem;margin-top:.2rem">Empfohlen: dall-e-3 für Illustrationen. Nur für Bilder — Text-Bewertung bleibt in KI-Einstellungen.</p>
-        </div>
-        <div>
-          <label class="form-label" style="font-size:.72rem">Optionale Anpassung {% if idea.image_source == 'dalle' %}(bei Neu-Generierung){% endif %}</label>
-          <textarea class="form-input" name="refinement_notes" rows="2"
-            placeholder="z.B. im Grossen passt es, aber mehr Blau, weniger Icons, Fokus auf Digitalisierung …"></textarea>
-          <p class="text-muted" style="font-size:.68rem;margin-top:.2rem">Wird DSGVO-gefiltert vor Cloud-Übertragung.</p>
-        </div>
-        <button type="submit" class="btn btn-secondary btn-sm idea-gen-btn">
-          {% if idea.image_source == 'dalle' %}Cloud-Illustration neu generieren{% else %}Cloud-Illustration erzeugen{% endif %}
-        </button>
-        <p class="idea-gen-status text-muted" style="font-size:.72rem;display:none;margin:0">Generiere … bitte warten.</p>
-      </form>
+    {% if idea.image_path and idea.image_source in ['dalle', 'diagram'] %}
+    <div style="padding:.6rem;border:1px solid var(--color-border);border-radius:.5rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
+        <strong style="font-size:.78rem">PNG {% if idea.image_source == 'dalle' %}(Cloud){% else %}(lokal){% endif %}</strong>
+        {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-image' %}
+        {% set inline_url = '/idea/image/' ~ idea.id ~ '?disposition=inline' %}
+        {% set download_url = '/idea/image/' ~ idea.id %}
+        {% include 'partials/_media_actions.html' %}
+      </div>
+      <img src="/idea/image/{{ idea.id }}?disposition=inline" alt="PNG" style="max-width:100%;max-height:160px;margin-top:.5rem;border-radius:6px;border:1px solid var(--color-border)" />
       {% if idea.image_source == 'dalle' and may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Cloud-Illustration löschen?')">
-        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.72rem">Illustration löschen</button>
+      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Illustration löschen?')">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
+      </form>
+      {% elif idea.image_source == 'diagram' and may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Diagramm löschen?')">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
       </form>
       {% endif %}
-      {% endif %}
     </div>
-
+    {% endif %}
   </div>
   {% endif %}
 </div>
@@ -317,5 +326,14 @@ document.querySelectorAll('.idea-gen-form').forEach(form => {
     if (st) st.style.display = 'block';
   });
 });
+(function() {
+  const fmt = document.getElementById('idea-output-format');
+  const wrap = document.getElementById('idea-cloud-image-wrap');
+  if (fmt && wrap) {
+    function sync() { wrap.style.display = fmt.value === 'png_cloud' ? '' : 'none'; }
+    fmt.addEventListener('change', sync);
+    sync();
+  }
+})();
 </script>
 {% endblock %}
