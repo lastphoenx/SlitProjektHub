@@ -475,6 +475,7 @@ def init_db() -> None:
         Bidder,
         BidderDocumentLink,
         Criterion,
+        PriceItem,
         Score,
         migrate_evaluation_db,
     )

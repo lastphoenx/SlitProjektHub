@@ -1,0 +1,81 @@
+<div class="modal-backdrop">
+  <div class="modal" style="max-width:min(96vw,640px);width:min(96vw,640px);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true">
+    <div class="modal-header" style="flex-shrink:0">
+      <div style="min-width:0">
+        <h2 class="modal-title" style="font-size:.95rem">{{ bidder.name }} — {{ criterion.name }}</h2>
+        <p class="text-muted" style="font-size:.75rem;margin-top:.2rem">Skala 0–{{ criterion.scale_max }}{% if criterion.kind == 'zuschlag' and criterion.weight_pct %} · Gewicht {{ criterion.weight_pct }}%{% endif %}</p>
+        {% if criterion.description %}
+        <p style="font-size:.8rem;margin-top:.4rem;white-space:pre-wrap">{{ criterion.description }}</p>
+        {% endif %}
+      </div>
+      <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''" title="Schließen">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <div style="flex:1;min-height:0;overflow:auto">
+      <div class="card" style="margin-bottom:.75rem;background:var(--color-surface-2)">
+        <strong>Offiziell{% if criterion.auto_price %} (aus Preisblatt){% else %} (Ø Bewerter){% endif %}:</strong>
+        {{ "%.2f"|format(official) if official is not none else "—" }}
+      </div>
+
+      <div class="table-wrap" style="margin-bottom:.75rem">
+        <table>
+          <thead><tr><th>Quelle</th><th>Wert</th><th>Begründung</th></tr></thead>
+          <tbody>
+            {% if ai_row %}
+            <tr style="background:var(--color-surface-2)">
+              <td>🤖 KI-Vorschlag</td>
+              <td>{{ ai_row.value }}</td>
+              <td style="font-size:.8rem">{{ ai_row.justification or "" }}{% if ai_row.source_chunk_ref %}<br><span class="text-muted">{{ ai_row.source_chunk_ref[:200] }}</span>{% endif %}</td>
+            </tr>
+            {% endif %}
+            {% for sc in user_rows %}
+            <tr>
+              <td>
+                {% if may_see_evaluators %}Bewerter #{{ sc.evaluator_user_id }}{% else %}Bewerter{% endif %}
+                {% if sc.evaluator_user_id == my_user_id %}<span class="text-muted">(du)</span>{% endif %}
+              </td>
+              <td>{{ sc.value }}</td>
+              <td style="font-size:.8rem">{{ sc.justification or "" }}</td>
+            </tr>
+            {% else %}
+            {% if not ai_row %}<tr><td colspan="3" class="text-muted">Noch keine Bewertung.</td></tr>{% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if may_evaluate %}
+      <form method="post" action="/evaluation/score" style="display:grid;gap:.5rem" {% if request.headers.get('hx-request') %}hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML"{% endif %}>
+        <input type="hidden" name="project_key" value="{{ project_key }}" />
+        <input type="hidden" name="bidder_id" value="{{ bidder.id }}" />
+        <input type="hidden" name="criterion_id" value="{{ criterion.id }}" />
+        <label class="form-label">{{ "Deine Bewertung ändern" if my_user_id in user_rows|map(attribute='evaluator_user_id')|list else "Deine Bewertung" }}</label>
+        <input class="form-input" name="value" type="number" step="0.5" min="0" max="{{ criterion.scale_max }}" required />
+        <textarea class="form-input" name="justification" rows="2" placeholder="Begründung"></textarea>
+        <textarea class="form-input" name="source_chunk_ref" rows="2" placeholder="Zitat/Quelle aus dem Angebot"></textarea>
+        <div style="display:flex;gap:.5rem">
+          <button type="submit" class="btn btn-primary btn-sm">Speichern</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="cellSuggest(this)">KI-Vorschlag (RAG)</button>
+        </div>
+      </form>
+      <div id="cell-suggest-target" data-bidder="{{ bidder.id }}" data-criterion="{{ criterion.id }}" data-project="{{ project_key }}"></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+<script>
+async function cellSuggest(btn) {
+  const target = document.getElementById('cell-suggest-target');
+  const fd = new FormData();
+  fd.append('project_key', target.dataset.project);
+  fd.append('bidder_id', target.dataset.bidder);
+  fd.append('criterion_id', target.dataset.criterion);
+  fd.append('provider', window.KI?.provider || '{{ llm_provider }}');
+  fd.append('model', window.KI?.model || '{{ llm_model }}');
+  target.innerHTML = '<p class="text-muted" style="margin-top:.5rem">RAG + LLM …</p>';
+  const r = await fetch('/evaluation/suggest', { method: 'POST', body: fd });
+  target.innerHTML = await r.text();
+}
+</script>

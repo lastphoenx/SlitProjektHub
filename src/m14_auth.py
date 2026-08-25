@@ -535,6 +535,12 @@ def get_user_id(username: str) -> int | None:
     return user.id if user else None
 
 
+def get_username_by_id(user_id: int) -> str | None:
+    with Session(engine) as session:
+        user = session.get(AppUser, user_id)
+        return user.username if user else None
+
+
 def can_view_evaluator_details(username: str) -> bool:
     """Einzelbewertungen/Bewerter-Namen: nicht für Auftraggeber."""
     user = _get_user(username)
