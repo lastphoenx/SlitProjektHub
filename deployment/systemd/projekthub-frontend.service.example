@@ -1,0 +1,40 @@
+# Kopieren nach /etc/systemd/system/projekthub-frontend.service
+# APP_ROOT und APP_USER anpassen (z. B. APP_ROOT=/opt/slitprojekthub, APP_USER=projekthub)
+
+[Unit]
+Description=SlitProjektHub Streamlit Frontend
+After=network-online.target projekthub-backend.service
+Wants=network-online.target
+Requires=projekthub-backend.service
+
+[Service]
+Type=simple
+User=APP_USER
+Group=APP_USER
+WorkingDirectory=APP_ROOT
+EnvironmentFile=APP_ROOT/.env
+Environment=PATH=APP_ROOT/.venv/bin:/usr/bin
+Environment=PYTHONPATH=APP_ROOT
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+Environment=PYTHONUTF8=1
+
+ExecStart=APP_ROOT/.venv/bin/streamlit run app/streamlit_app.py \
+    --server.port=8501 \
+    --server.address=0.0.0.0 \
+    --server.headless=true \
+    --server.maxUploadSize=200 \
+    --server.enableCORS=false \
+    --browser.gatherUsageStats=false
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=APP_ROOT
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,85 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Backups
+backups/
+
+# KRITISCH: Auth-Credentials (NICHT in Git!)
+config/auth.yaml
+!config/auth.example.yaml
+
+# Lokale Instanz-Konfiguration (von *.example kopieren)
+config/config.yaml
+!config/config.example.yaml
+config/user_settings.yaml
+!config/user_settings.example.yaml
+
+# KRITISCH: ALLE Datenbanken (NICHT in Git!)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+data/db/
+data/sph.db
+
+# KRITISCH: ALLE ChromaDB / Vector Store Daten (NICHT in Git!)
+data/db/chroma/
+.chroma/
+chroma.sqlite3
+
+# KRITISCH: ALLE RAG Content (NICHT in Git!)
+data/rag/
+!data/rag/.gitkeep
+
+# KRITISCH: Interne Dokumente (NICHT in Git!)
+docs/interne_Dokumente/
+
+# Batch-QA Checkpoints (projektspezifische Laufdaten, vertraulich)
+data/batch_checkpoint_*.json
+
+# KRITISCH: Alle Dokumente (NICHT in Git!)
+*.pdf
+*.PDF
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.png
+*.PNG
+*.jpg
+*.jpeg
+*.gif
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Streamlit
+.streamlit/
+!.streamlit/config.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temp
+tmp/
+temp/

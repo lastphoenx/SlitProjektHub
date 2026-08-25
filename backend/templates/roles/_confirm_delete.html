@@ -1,0 +1,32 @@
+﻿<div class="modal-backdrop">
+  <div class="modal" style="max-width:420px" role="dialog" aria-modal="true">
+
+    <div class="modal-header">
+      <h2 class="modal-title">Rolle löschen?</h2>
+      <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''" title="Abbrechen">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <p style="color:var(--color-text-muted);margin-bottom:1.25rem">
+      Die Rolle <strong style="color:var(--color-text)">{{ role.title }}</strong>
+      wird als gelöscht markiert. Verknüpfungen zu Projekten und Tasks bleiben erhalten.
+    </p>
+
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" onclick="document.getElementById('modal-slot').innerHTML=''">
+        Abbrechen
+      </button>
+      <button
+        class="btn btn-danger"
+        hx-delete="/roles/{{ role.key }}"
+        hx-target="#role-row-{{ role.key }}"
+        hx-swap="outerHTML swap:300ms"
+        hx-on::after-request="if(event.detail.successful) document.getElementById('modal-slot').innerHTML=''"
+      >
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+        Löschen bestätigen
+      </button>
+    </div>
+  </div>
+</div>

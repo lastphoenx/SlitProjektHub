@@ -1,0 +1,131 @@
+# SlitProjektHub
+
+KI-gestütztes Tool zur Verwaltung von Ausschreibungsprojekten mit automatischer Fragenbeantwortung (RAG) und KI-Erkennung.
+
+## Was es tut
+
+- **Projekte & Stammdaten**: Projekte, Rollen und Aufgaben verwalten
+- **Dokumente**: PDF, Word, CSV hochladen und durchsuchbar machen (ChromaDB, Embeddings)
+- **Fragen-Batch**: CSV mit Anbieter-Fragen einlesen → automatisch mit KI + RAG beantworten → als Excel/CSV exportieren  
+  - **Fragen-Auswahl**: Flexible Bereiche (`1-50`, `1-20,25,51-105`) statt "alle oder nichts"  
+  - **Einstellbar**: Antwort-Stil, Interpretations-Haltung (neutral / wohlwollend / restriktiv), Formulierungsweise (klar & abschliessend / vage)  
+  - **Export-Dateiname**: Enthält automatisch Metadaten (CSV-Name, Provider, Modell, Rollen, Stil, Haltung)  
+  - **Checkpoint-Resume**: Bei Abbruch automatisch weiterführen mit gespeichertem Fortschritt
+- **KI-Erkennung**: Analysiert Anbieter-Fragen auf KI-typische Merkmale (Heuristik + optionale AI-Tiefenanalyse)
+- **Chat**: Projektbezogener Chat mit Kontext aus hochgeladenen Dokumenten
+- **Multi-Provider LLM**: OpenAI (GPT-5.x, GPT-4o), Anthropic (Claude), Mistral — umschaltbar im UI
+
+## Technologie
+
+- **Frontend**: Streamlit (Python)
+- **Backend**: FastAPI (REST API, läuft lokal auf Port 8000)
+- **Datenbank**: SQLite via SQLModel
+- **Vektorsuche**: ChromaDB (Embeddings)
+- **Lexikalische Suche**: BM25 mit spaCy-Lemmatisierung (Deutsch)
+- **Hybrid Retrieval**: Semantic + BM25 mit Reciprocal Rank Fusion (RRF)
+- **Betrieb**: Lokal unter Windows, Start via `start_app.ps1`
+
+## RAG-Features
+
+Das System verwendet **Hybrid Retrieval** für optimale Treffergenauigkeit:
+
+- **Semantic Search**: ChromaDB mit sentence-transformers Embeddings
+- **BM25 Keyword Search**: spaCy-basierte Lemmatisierung + custom Stemmer für deutsche Partizipien
+- **Query Distillation**: LLM extrahiert Suchbegriffe aus natürlicher Sprache
+- **On-the-fly Tokenization**: Immer aktuelle Tokens, keine veralteten DB-Caches
+- **Alphanumerische Codes**: Unterstützt ISO9001, SLA-1, 24/7, V1 etc.
+- **Matched Terms**: Debug-UI zeigt übereinstimmende Suchbegriffe für alle Kandidaten
+
+### Beispiel
+```
+Query: "Ist eine ISO9001-Zertifizierung erforderlich?"
+→ Distillation: "iso9001 zertifizierung erforderlich pflicht"
+→ Semantic: Chunks über Qualitätsmanagement-Anforderungen
+→ BM25: Chunks mit exaktem "iso9001" Token
+→ RRF Fusion: Beste Kombination beider Methoden
+```
+
+## Voraussetzungen
+
+- Python 3.11+
+- API-Key von OpenAI, Anthropic oder Mistral
+
+## Installation
+
+```powershell
+git clone https://github.com/lastphoenx/SlitProjektHub.git
+cd SlitProjektHub
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m spacy download de_core_news_sm
+cp config/config.example.yaml config/config.yaml
+cp config/auth.example.yaml config/auth.yaml
+cp config/user_settings.example.yaml config/user_settings.yaml
+cp .env.example .env
+# config/config.yaml, .env und auth.yaml lokal anpassen (Keys, trusted_proxy_ips)
+```
+
+> **Hinweis `de_core_news_sm`**: Das deutsche spaCy-Sprachmodell (~15 MB) wird für die BM25-Lemmatisierung benötigt. Es wird **nicht** über `requirements.txt` installiert, sondern mit dem separaten `spacy download`-Befehl. Ohne dieses Modell läuft das RAG-System im Fallback-Modus (einfaches Regex-Tokenizing).
+
+## Starten
+
+```powershell
+.\start_app.ps1
+```
+
+Das Skript beendet automatisch laufende Prozesse auf Port 8000/8501 und öffnet Backend und Frontend in separaten Fenstern.
+
+- **Frontend**: http://localhost:8501
+- **Backend API / Docs**: http://localhost:8000/docs
+
+## Projektstruktur
+
+```
+app/
+  streamlit_app.py       # Einstiegspunkt Streamlit
+  pages/                 # Einzelne App-Seiten (01–08)
+src/
+  m01_config.py          # Einstellungen
+  m03_db.py              # Datenbank-Modelle (SQLModel)
+  m07_*.py               # Domänenlogik (Projekte, Rollen, Tasks)
+  m08_llm.py             # LLM Provider Abstraction (OpenAI/Anthropic/Mistral)
+  m09_rag.py             # RAG (Retrieval Augmented Generation)
+  m10_chat.py            # Chat-Logik
+  m13_ki_detector.py     # KI-Erkennung für Ausschreibungsfragen
+backend/
+  main.py                # FastAPI REST API
+data/
+  db/                    # SQLite Datenbank (nicht in Git)
+  rag/                   # ChromaDB Vektoren (nicht in Git)
+config/
+  config.yaml            # App-Einstellungen
+scripts/
+  maintenance/           # Hilfsskripte (check_*, fix_*, debug_*)
+docs/
+  ARCHITECTURE.md        # Technische Architektur
+  PROJECT_STRUCTURE.md   # Dateistruktur & Feature-Übersicht
+```
+
+## Konfiguration
+
+`.env`-Datei im Root-Verzeichnis (Vorlage: `.env.example`):
+
+```env
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+MISTRAL_API_KEY=...
+```
+
+## KI-Erkennung
+
+Analysiert Fragen aus eingelesenen CSV-Dateien darauf, ob sie KI-generiert wirken:
+
+- **Heuristik** (kostenlos, 10 Signale): Strukturreferenzen, KI-Floskeln, Übergangsphrasing, Einstiege, Bullets, erschöpfende Aufzählungen, Burstiness, Längenuniformität, Volumen, Informal-Malus
+- **AI-Tiefenanalyse** (optional, OpenAI/Anthropic): Einzelner Anbieter oder alle Anbieter auf einmal, kalibrierter Prompt mit Gegenmerkmalen
+
+## Bekannte Einschränkungen
+
+- Läuft ausschliesslich lokal (kein Cloud-Deployment vorgesehen)
+- Keine Benutzerauthentifizierung (single-user)
+- Embedding-Modell: lokal via `sentence-transformers`

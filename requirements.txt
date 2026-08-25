@@ -1,0 +1,26 @@
+streamlit>=1.55.0
+streamlit-aggrid>=0.3.4
+sqlmodel>=0.0.22
+pydantic>=2.8
+SQLAlchemy>=2.0
+python-dotenv>=1.0
+pyyaml>=6.0
+openai>=1.51
+anthropic>=0.39
+mistralai>=1.2
+streamlit-elements==0.1.*
+chromadb>=0.3.21
+rank-bm25>=0.2.2
+spacy>=3.8
+compound-split>=1.0.2
+# Nach Installation: python -m spacy download de_core_news_sm
+pypdf>=3.9.0
+pdfplumber>=0.10
+python-docx>=1.2.0
+ocrmypdf>=14.0
+pdf2image>=1.16
+pillow>=10.0
+pyotp>=2.9
+bcrypt>=4.0
+itsdangerous>=2.1
+openpyxl>=3.1

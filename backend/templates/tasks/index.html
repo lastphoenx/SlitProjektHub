@@ -1,0 +1,100 @@
+﻿{% extends "base.html" %}
+
+{% block title %}Aufgaben — SlitProjektHub{% endblock %}
+{% block topbar_title %}Aufgaben{% endblock %}
+
+{% block topbar_actions %}
+  <button
+    class="btn btn-primary btn-sm"
+    hx-get="/tasks/new"
+    hx-target="#modal-slot"
+    hx-swap="innerHTML"
+  >
+    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    Neue Aufgabe
+  </button>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <div class="page-title">Alle Aufgaben</div>
+    <div class="page-subtitle">{{ tasks | length }} Aufgabe{% if tasks | length != 1 %}n{% endif %}{% if active_role_filter %} · gefiltert nach Rolle{% endif %}</div>
+  </div>
+</div>
+
+<!-- Filter bar -->
+<div class="card" style="padding:.75rem 1rem;margin-bottom:1rem"
+     x-data="{ q: '', roleFilter: '{{ active_role_filter }}' }"
+     x-init="$watch('q', v => $store.tasks.q = v); $watch('roleFilter', v => $store.tasks.role = v)"
+     x-effect="$store.tasks.q = q; $store.tasks.role = roleFilter">
+
+  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+
+    <!-- Text search -->
+    <div style="display:flex;align-items:center;gap:.5rem;flex:1;min-width:180px">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color:var(--color-text-muted);flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input
+        class="form-input"
+        style="border:none;background:transparent;padding:.25rem 0;outline:none"
+        type="text"
+        placeholder="Aufgaben filtern …"
+        x-model="q"
+      />
+    </div>
+
+    <!-- Role filter dropdown -->
+    <div style="display:flex;align-items:center;gap:.5rem">
+      <label style="font-size:.8rem;color:var(--color-text-muted);white-space:nowrap">Rolle:</label>
+      <select class="form-select" style="width:auto;min-width:160px" x-model="roleFilter">
+        <option value="">Alle Rollen</option>
+        {% for r in roles %}
+          <option value="{{ r.key }}" {% if active_role_filter == r.key %}selected{% endif %}>{{ r.title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Group toggle -->
+    <div style="display:flex;align-items:center;gap:.4rem">
+      <label style="font-size:.8rem;color:var(--color-text-muted)">Gruppiert:</label>
+      <button
+        class="btn btn-secondary btn-sm"
+        style="padding:.3rem .6rem"
+        @click="$store.tasks.grouped = !$store.tasks.grouped"
+        :style="$store.tasks.grouped ? 'border-color:var(--color-primary);color:var(--color-primary)' : ''"
+      >
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+        <span x-text="$store.tasks.grouped ? 'An' : 'Aus'"></span>
+      </button>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- Table -->
+<div class="card" style="padding:0">
+  <div class="table-wrap" id="tasks-table">
+    {% include "tasks/_table.html" %}
+  </div>
+</div>
+
+<!-- Modal slot -->
+<div id="modal-slot"></div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.store('tasks', { q: '', role: '', grouped: false });
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    if (typeof closeDrawer === 'function') closeDrawer();
+    else document.getElementById('modal-slot').innerHTML = '';
+  }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}SlitProjektHub{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <!-- Inject KI settings before Alpine loads -->
+  <script>window.KI = {{ _ki_global_json() | safe }};</script>
+  <!-- HTMX: Server-driven partial updates -->
+  <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer></script>
+  <!-- Alpine.js: lightweight client-side reactivity -->
+  <script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
+  <style>[x-cloak]{display:none!important}</style>
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">⚡ SlitProjektHub</div>
+
+    <a href="/dashboard" class="nav-item {% if active_page == 'dashboard' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </a>
+
+    <a href="/projects" class="nav-item {% if active_page == 'projects' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h3l2 2h9a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+      Projekte
+    </a>
+
+    <a href="/roles" class="nav-item {% if active_page == 'roles' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      Rollen
+    </a>
+
+    <a href="/tasks" class="nav-item {% if active_page == 'tasks' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      Aufgaben
+    </a>
+
+    <a href="/contexts" class="nav-item {% if active_page == 'contexts' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>
+      Kontexte
+    </a>
+
+    <a href="/documents" class="nav-item {% if active_page == 'documents' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      Dokumente
+    </a>
+
+    <a href="/chat" class="nav-item {% if active_page == 'chat' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      Chat / RAG
+    </a>
+
+    <a href="/taskgen" class="nav-item {% if active_page == 'taskgen' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      Task-Generator
+    </a>
+
+    <a href="/batch-qa" class="nav-item {% if active_page == 'batch-qa' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="17" width="18" height="4" rx="1"/><line x1="7" y1="5" x2="7" y2="5"/><line x1="7" y1="12" x2="7" y2="12"/><line x1="7" y1="19" x2="7" y2="19"/></svg>
+      Batch QA
+    </a>
+
+    <a href="/evaluation" class="nav-item {% if active_page == 'evaluation' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h16"/></svg>
+      Offertbeurteilung
+    </a>
+
+    <div style="flex:1"></div>
+
+    <a href="/account" class="nav-item {% if active_page == 'account' %}active{% endif %}" style="font-size:0.75rem">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      Account
+    </a>
+
+    <a href="/auth/logout" class="nav-item" style="font-size:0.75rem">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+      Abmelden
+    </a>
+
+    <a href="/settings" class="nav-item {% if active_page == 'settings' %}active{% endif %}">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      KI-Einstellungen
+    </a>
+
+    <a href="/docs" target="_blank" class="nav-item" style="font-size:0.75rem">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      API Docs
+    </a>
+
+    <!-- ── KI-Einstellungen Sidebar Panel ─────────── -->
+    <div style="border-top:1px solid var(--color-border);margin-top:.5rem;padding:.5rem .25rem .75rem" x-data>
+      <details id="ki-sidebar-details">
+        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:.4rem;padding:.3rem .5rem;border-radius:.375rem;font-size:.75rem;font-weight:600;letter-spacing:.04em;color:var(--color-text-muted);user-select:none"
+                 onmouseover="this.style.background='var(--color-surface-2)'" onmouseout="this.style.background=''">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          KI-Einstellungen
+          <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="margin-left:auto" class="details-chevron"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+
+        <div style="padding:.6rem .5rem 0;display:flex;flex-direction:column;gap:.55rem">
+
+          <!-- Provider -->
+          <div>
+            <label style="font-size:.68rem;font-weight:600;letter-spacing:.05em;color:var(--color-text-muted);display:block;margin-bottom:.2rem">PROVIDER</label>
+            <select class="form-select" style="font-size:.78rem;width:100%"
+                    @change="
+                      $store.ki.provider = $event.target.value;
+                      $store.ki.model = ($store.ki.allModels[$store.ki.provider] || [])[0] || '';
+                      $store.ki.save();
+                    ">
+              <template x-for="p in $store.ki.providers" :key="p">
+                <option :value="p" x-text="p" :selected="p === $store.ki.provider"></option>
+              </template>
+            </select>
+            <!-- Key status -->
+            <template x-for="p in $store.ki.providers" :key="'s-'+p">
+              <span x-show="p === $store.ki.provider"
+                    :style="'font-size:.68rem;display:flex;align-items:center;gap:.2rem;margin-top:.2rem;color:' + ($store.ki.keyStatus[p] ? 'var(--color-success)' : 'var(--color-danger)')">
+                <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" x-show="$store.ki.keyStatus[p]"><path d="M20 6L9 17l-5-5"/></svg>
+                <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" x-show="!$store.ki.keyStatus[p]"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <span x-text="$store.ki.keyStatus[p] ? p.toUpperCase() + ' konfiguriert' : p.toUpperCase() + ' kein Key'"></span>
+              </span>
+            </template>
+          </div>
+
+          <!-- Model -->
+          <div>
+            <label style="font-size:.68rem;font-weight:600;letter-spacing:.05em;color:var(--color-text-muted);display:block;margin-bottom:.2rem">MODELL</label>
+            <select class="form-select" style="font-size:.78rem;width:100%"
+                    @change="$store.ki.model = $event.target.value; $store.ki.save()">
+              <template x-for="m in ($store.ki.allModels[$store.ki.provider] || [])" :key="m">
+                <option :value="m" x-text="m" :selected="m === $store.ki.model"></option>
+              </template>
+            </select>
+          </div>
+
+          <!-- Temperature -->
+          <div>
+            <label style="font-size:.68rem;font-weight:600;letter-spacing:.05em;color:var(--color-text-muted);display:flex;justify-content:space-between;margin-bottom:.2rem">
+              <span>TEMPERATUR</span>
+              <span x-text="$store.ki.temperature.toFixed(1)" style="font-weight:700;color:var(--color-text)"></span>
+            </label>
+            <input type="range" min="0" max="2" step="0.1"
+                   :value="$store.ki.temperature"
+                   @input="$store.ki.temperature = parseFloat($event.target.value)"
+                   @change="$store.ki.save()"
+                   style="width:100%;accent-color:var(--color-primary)">
+          </div>
+
+          <!-- RAG-Kontexte (Top-K) -->
+          <div>
+            <label style="font-size:.68rem;font-weight:600;letter-spacing:.05em;color:var(--color-text-muted);display:flex;justify-content:space-between;margin-bottom:.2rem">
+              <span>RAG-KONTEXTE (TOP-K)</span>
+              <span x-text="$store.ki.rag_top_k" style="font-weight:700;color:var(--color-text)"></span>
+            </label>
+            <input type="range" min="1" max="25" step="1"
+                   :value="$store.ki.rag_top_k"
+                   @input="$store.ki.rag_top_k = parseInt($event.target.value)"
+                   @change="$store.ki.save()"
+                   style="width:100%;accent-color:var(--color-primary)">
+          </div>
+
+          <!-- Chunk-Größe -->
+          <div>
+            <label style="font-size:.68rem;font-weight:600;letter-spacing:.05em;color:var(--color-text-muted);display:flex;justify-content:space-between;margin-bottom:.2rem">
+              <span>CHUNK-GRÖSSE</span>
+              <span x-text="$store.ki.rag_chunk_size" style="font-weight:700;color:var(--color-text)"></span>
+            </label>
+            <input type="range" min="200" max="5000" step="100"
+                   :value="$store.ki.rag_chunk_size"
+                   @input="$store.ki.rag_chunk_size = parseInt($event.target.value)"
+                   @change="$store.ki.save()"
+                   style="width:100%;accent-color:var(--color-primary)">
+          </div>
+
+          <!-- Similarity-Threshold -->
+          <div>
+            <label style="font-size:.68rem;font-weight:600;letter-spacing:.05em;color:var(--color-text-muted);display:flex;justify-content:space-between;margin-bottom:.2rem">
+              <span>SIMILARITY-THRESHOLD</span>
+              <span x-text="$store.ki.rag_similarity_threshold.toFixed(2)" style="font-weight:700;color:var(--color-text)"></span>
+            </label>
+            <input type="range" min="0" max="1" step="0.05"
+                   :value="$store.ki.rag_similarity_threshold"
+                   @input="$store.ki.rag_similarity_threshold = parseFloat($event.target.value)"
+                   @change="$store.ki.save()"
+                   style="width:100%;accent-color:var(--color-primary)">
+          </div>
+
+          <!-- RAG toggle -->
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem 0">
+            <label style="font-size:.78rem;cursor:pointer" for="sidebar-rag-toggle">RAG aktivieren</label>
+            <div style="position:relative;display:inline-block;width:34px;height:19px">
+              <input type="checkbox" id="sidebar-rag-toggle"
+                     :checked="$store.ki.rag_enabled"
+                     @change="$store.ki.rag_enabled = $event.target.checked; $store.ki.save()"
+                     style="opacity:0;width:0;height:0;position:absolute">
+              <label for="sidebar-rag-toggle"
+                     :style="'position:absolute;cursor:pointer;inset:0;border-radius:19px;transition:.2s;background:'+($store.ki.rag_enabled ? 'var(--color-primary)' : 'var(--color-border)')">
+                <span :style="'position:absolute;width:13px;height:13px;border-radius:50%;background:#fff;top:3px;transition:.2s;left:'+($store.ki.rag_enabled?'18px':'3px')"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Query-Expansion toggle -->
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem 0">
+            <label style="font-size:.78rem;cursor:pointer" for="sidebar-expansion-toggle">Query-Expansion</label>
+            <div style="position:relative;display:inline-block;width:34px;height:19px">
+              <input type="checkbox" id="sidebar-expansion-toggle"
+                     :checked="$store.ki.enable_expansion"
+                     @change="$store.ki.enable_expansion = $event.target.checked; $store.ki.syncToggle('expansion', $event.target.checked)"
+                     style="opacity:0;width:0;height:0;position:absolute">
+              <label for="sidebar-expansion-toggle"
+                     :style="'position:absolute;cursor:pointer;inset:0;border-radius:19px;transition:.2s;background:'+($store.ki.enable_expansion ? 'var(--color-primary)' : 'var(--color-border)')">
+                <span :style="'position:absolute;width:13px;height:13px;border-radius:50%;background:#fff;top:3px;transition:.2s;left:'+($store.ki.enable_expansion?'18px':'3px')"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Auto-sync indicator -->
+          <div style="display:flex;align-items:center;gap:.3rem;padding:.1rem .5rem;font-size:.67rem;color:var(--color-text-muted);opacity:.75">
+            <svg width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            Auto-gekoppelt — beide ein oder beide aus</div>
+
+          <!-- Reranking toggle -->
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem 0">
+            <label style="font-size:.78rem;cursor:pointer" for="sidebar-reranking-toggle">Reranking</label>
+            <div style="position:relative;display:inline-block;width:34px;height:19px">
+              <input type="checkbox" id="sidebar-reranking-toggle"
+                     :checked="$store.ki.enable_reranking"
+                     @change="$store.ki.enable_reranking = $event.target.checked; $store.ki.syncToggle('reranking', $event.target.checked)"
+                     style="opacity:0;width:0;height:0;position:absolute">
+              <label for="sidebar-reranking-toggle"
+                     :style="'position:absolute;cursor:pointer;inset:0;border-radius:19px;transition:.2s;background:'+($store.ki.enable_reranking ? 'var(--color-primary)' : 'var(--color-border)')">
+                <span :style="'position:absolute;width:13px;height:13px;border-radius:50%;background:#fff;top:3px;transition:.2s;left:'+($store.ki.enable_reranking?'18px':'3px')"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Help: Was bedeuten diese Werte? -->
+          <details style="font-size:.72rem">
+            <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:.3rem;color:var(--color-text-muted);padding:.2rem 0">
+              <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              Was bedeuten diese Werte?
+            </summary>
+            <div style="margin-top:.5rem;padding:.55rem .6rem;background:var(--color-bg);border:1px solid var(--color-border);border-radius:.375rem;display:flex;flex-direction:column;gap:.65rem;line-height:1.45">
+
+              <div>
+                <strong>RAG-Kontexte (Top-K): </strong><code x-text="$store.ki.rag_top_k"></code><br>
+                Anzahl der Dokument-Chunks als Kontext.
+                <ul style="margin:.25rem 0 0 .9rem;padding:0">
+                  <li><strong>5:</strong> Schnell, Budget-freundlich</li>
+                  <li><strong>7: ✅ Optimal</strong> (3-5 Dokumente dank Diversity-Filter)</li>
+                  <li><strong>10+:</strong> Sehr detailliert, aber mehr Tokens</li>
+                </ul>
+              </div>
+
+              <div>
+                <strong>Chunk-Größe: </strong><code x-text="$store.ki.rag_chunk_size"></code><br>
+                Zeichenzahl pro Dokument-Abschnitt beim Upload.
+                <ul style="margin:.25rem 0 0 .9rem;padding:0">
+                  <li><strong>800–1000:</strong> Kurze FAQ/Snippets</li>
+                  <li><strong>1200: ✅ Optimal</strong> für Pflichtenheft</li>
+                  <li><strong>2000+:</strong> Sehr lange Fliesstexte</li>
+                </ul>
+              </div>
+
+              <div>
+                <strong>Similarity-Threshold: </strong><code x-text="($store.ki.rag_similarity_threshold*100).toFixed(0)+'%'"></code><br>
+                Mindest-Ähnlichkeit Frage ↔ Chunk.
+                <ul style="margin:.25rem 0 0 .9rem;padding:0">
+                  <li><strong>0.60:</strong> Hohe Präzision, wenig Recall</li>
+                  <li><strong>0.45: ✅ Balance</strong> – findet Relevantes, filtert Noise</li>
+                  <li><strong>0.30:</strong> Viel Recall, aber irrelevante Chunks möglich</li>
+                </ul>
+                <div style="margin-top:.25rem;color:var(--color-text-muted)">
+                  💡 Zu wenig Kontext → 0.35 senken<br>
+                  💡 Zu viel Irrelevantes → auf 0.55 erhöhen
+                </div>
+              </div>
+
+              <div>
+                <strong>Temperatur: </strong><code x-text="$store.ki.temperature.toFixed(1)"></code><br>
+                Kreativität vs. Faktentreue.
+                <ul style="margin:.25rem 0 0 .9rem;padding:0">
+                  <li><strong>0.0–0.3:</strong> Deterministisch (Code, Fakten)</li>
+                  <li><strong>0.7: ✅ Optimal</strong> für Pflichtenheft</li>
+                  <li><strong>1.0+:</strong> Kreativ, Brainstorming (Risiko: Halluzinationen)</li>
+                </ul>
+                <div style="margin-top:.25rem;color:var(--color-text-muted)">
+                  💡 Marketing/Storytelling → 1.0<br>
+                  💡 Technische Spezifikationen → 0.3–0.5
+                </div>
+              </div>
+
+            </div>
+          </details>
+
+          <!-- Save indicator -->
+          <div style="text-align:center;min-height:16px">
+            <span x-show="$store.ki.saved" x-transition style="font-size:.68rem;color:var(--color-success);display:flex;align-items:center;justify-content:center;gap:.3rem">
+              <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+              Gespeichert
+            </span>
+          </div>
+
+        </div>
+      </details>
+    </div>
+    <!-- /KI-Panel -->
+
+  </aside>
+
+  <!-- ── Main ── -->
+  <div class="main">
+    <header class="topbar">
+      <span class="topbar-title">{% block topbar_title %}{% endblock %}</span>
+      <div class="flex items-center gap-2">
+        {% block topbar_actions %}{% endblock %}
+      </div>
+    </header>
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+</div>
+
+<!-- Toast container for HTMX feedback -->
+<div id="toast-container"></div>
+
+<script>
+// HTMX: nach jedem Request ggf. Toast anzeigen
+document.addEventListener('htmx:afterRequest', function(evt) {
+  const header = evt.detail.xhr.getResponseHeader('HX-Toast');
+  if (header) {
+    const data = JSON.parse(header);
+    showToast(data.message, data.type || 'success');
+  }
+});
+
+function showToast(msg, type = 'success') {
+  const c = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = 'toast' + (type === 'error' ? ' toast-error' : '');
+  el.textContent = msg;
+  c.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// Alpine global helper
+document.addEventListener('alpine:init', () => {
+  Alpine.store('ui', { modalOpen: false, q: '' });
+
+  const KI = window.KI || {};
+  Alpine.store('ki', {
+    provider:                KI.provider               || 'openai',
+    model:                   KI.model                  || '',
+    temperature:             KI.temperature             ?? 0.7,
+    rag_enabled:             KI.rag_enabled             ?? true,
+    rag_top_k:               KI.rag_top_k               ?? 5,
+    rag_chunk_size:          KI.rag_chunk_size          ?? 1000,
+    rag_similarity_threshold:KI.rag_similarity_threshold?? 0.45,
+    enable_expansion:        KI.rag_query_expansion     ?? false,
+    enable_reranking:        KI.rag_reranking_enabled   ?? true,
+    providers:               KI.providers               || ['openai'],
+    allModels:               KI.allModels               || {},
+    keyStatus:               KI.keyStatus               || {},
+    saved: false,
+    _saveTimer: null,
+    _syncing: false,  // Flag to prevent infinite loops during toggle sync
+    get models() { return this.allModels[this.provider] || []; },
+    
+    // Bidirectional sync: expansion <-> reranking
+    syncToggle(changedToggle, newValue) {
+      if (this._syncing) return;  // Prevent infinite loop
+      this._syncing = true;
+      
+      if (changedToggle === 'expansion') {
+        this.enable_reranking = newValue;
+      } else if (changedToggle === 'reranking') {
+        this.enable_expansion = newValue;
+      }
+      
+      this._syncing = false;
+      this.save();
+    },
+    
+    save() {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = setTimeout(() => {
+        const fd = new FormData();
+        fd.append('provider', this.provider);
+        fd.append('model', this.model);
+        fd.append('temperature', this.temperature);
+        fd.append('rag_enabled', this.rag_enabled ? 'true' : 'false');
+        fd.append('rag_top_k', this.rag_top_k);
+        fd.append('rag_chunk_size', this.rag_chunk_size);
+        fd.append('rag_similarity_threshold', this.rag_similarity_threshold);
+        fd.append('enable_expansion', this.enable_expansion ? 'true' : 'false');
+        fd.append('enable_reranking', this.enable_reranking ? 'true' : 'false');
+        fetch('/settings', { method: 'POST', body: fd }).then(() => {
+          this.saved = true;
+          setTimeout(() => { this.saved = false; }, 2000);
+        });
+      }, 400);
+    },
+  });
+});
+</script>
+
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

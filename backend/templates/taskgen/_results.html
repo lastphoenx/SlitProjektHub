@@ -1,0 +1,99 @@
+﻿{% if not tasks %}
+<div class="card" style="text-align:center;padding:2.5rem 1rem;color:var(--color-text-muted)">
+  <p style="font-size:.9rem">Keine Aufgaben erzeugt. Möglicherweise hat die Rolle keine Verantwortlichkeiten.</p>
+</div>
+{% else %}
+<div x-data="taskgenResults({{ tasks | tojson | safe }})"
+     x-init="initAccepted()">
+
+  <!-- Result header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <div>
+      <span style="font-weight:700">{{ count }} Aufgaben generiert</span>
+      <span style="color:var(--color-text-muted);font-size:.85rem;margin-left:.4rem">für <strong>{{ role_title }}</strong></span>
+    </div>
+    <div style="display:flex;gap:.5rem">
+      <button class="btn btn-sm" style="background:var(--color-surface-2)" @click="acceptAll()">Alle akzeptieren</button>
+      <button class="btn btn-sm" style="background:var(--color-surface-2)" @click="rejectAll()">Alle ablehnen</button>
+    </div>
+  </div>
+
+  <!-- Task cards -->
+  <div style="display:flex;flex-direction:column;gap:.75rem;margin-bottom:1.25rem">
+    <template x-for="(t, i) in tasks" :key="i">
+      <div class="card"
+           :style="accepted[i] ? 'border-color:var(--color-primary);opacity:1' : 'opacity:.5'"
+           style="padding:.85rem 1rem;transition:opacity .15s,border-color .15s">
+
+        <div style="display:flex;align-items:flex-start;gap:.75rem">
+
+          <!-- Accept toggle -->
+          <div @click="toggle(i)" style="cursor:pointer;flex-shrink:0;padding-top:.15rem">
+            <div :style="accepted[i]
+                  ? 'width:20px;height:20px;border-radius:50%;background:var(--color-primary);display:flex;align-items:center;justify-content:center'
+                  : 'width:20px;height:20px;border-radius:50%;border:2px solid var(--color-border)'">
+              <template x-if="accepted[i]">
+                <svg width="11" height="11" fill="none" stroke="white" stroke-width="2.5" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+              </template>
+            </div>
+          </div>
+
+          <!-- Content -->
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.3rem;flex-wrap:wrap">
+              <span style="font-weight:600;font-size:.9rem" x-text="t.title"></span>
+              <span style="font-size:.72rem;padding:.1rem .45rem;background:var(--color-surface-2);border:1px solid var(--color-border);border-radius:.25rem;color:var(--color-text-muted);font-family:monospace" x-text="t.short_code"></span>
+            </div>
+            <p style="font-size:.83rem;color:var(--color-text-muted);margin:0 0 .4rem;line-height:1.5" x-text="t.description"></p>
+            <div style="font-size:.75rem;color:var(--color-text-muted);border-top:1px solid var(--color-border);padding-top:.3rem;margin-top:.3rem">
+              <span>Aus Verantwortlichkeit:</span>
+              <em x-text="t.source_responsibility" style="margin-left:.3rem"></em>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- Save bar -->
+  <div style="position:sticky;bottom:0;padding:.75rem 0;background:var(--color-bg)">
+    <div style="display:flex;align-items:center;gap:1rem">
+      <button class="btn btn-primary"
+              :disabled="!acceptedCount"
+              @click.prevent="saveAccepted()">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        <span x-text="'Speichern (' + acceptedCount + ')'"></span>
+      </button>
+      <span style="font-size:.83rem;color:var(--color-text-muted)" x-text="acceptedCount + ' von {{ count }} ausgewählt'"></span>
+      <div id="tg-save-result" style="flex:1"></div>
+    </div>
+  </div>
+
+</div><!-- /x-data -->
+
+<script>
+function taskgenResults(tasks) {
+  return {
+    tasks: tasks,
+    accepted: [],
+    initAccepted() { this.accepted = this.tasks.map(() => true); },
+    toggle(i) { this.accepted[i] = !this.accepted[i]; },
+    acceptAll() { this.accepted = this.tasks.map(() => true); },
+    rejectAll() { this.accepted = this.tasks.map(() => false); },
+    get acceptedCount() { return this.accepted.filter(Boolean).length; },
+    async saveAccepted() {
+      const toSave = this.tasks.filter((_, i) => this.accepted[i]);
+      const resp = await fetch('/taskgen/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ tasks: toSave })
+      });
+      const html = await resp.text();
+      const el = document.getElementById('tg-save-result');
+      if (el) el.innerHTML = html;
+    }
+  };
+}
+</script>
+{% endif %}

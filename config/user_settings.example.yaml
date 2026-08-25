@@ -1,0 +1,10 @@
+# Vorlage — Kopieren: cp config/user_settings.example.yaml config/user_settings.yaml
+# Persönliche UI-Defaults (Provider/Modell); gitignored.
+
+provider: anthropic
+model: sonnet
+temperature: 0.7
+rag_top_k: 5
+rag_chunk_size: 1000
+rag_similarity_threshold: 0.5
+rag_enabled: true
