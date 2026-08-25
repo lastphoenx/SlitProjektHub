@@ -410,6 +410,26 @@ def test_connection(provider: str, timeout: float = 10.0) -> tuple[bool, str]:
             return (True, "")
         except Exception as e:
             return (False, str(e))
+
+    if provider == "ollama":
+        try:
+            if not have_key("ollama"):
+                return (False, "OLLAMA_BASE_URL nicht in .env")
+            client = _openai_client("ollama")
+            model_id = DEFAULT_MODELS.get("ollama", "llama3.2")
+            client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=10,
+            )
+            return (True, "")
+        except Exception as e:
+            err_str = str(e)
+            if "connection" in err_str.lower() or "refused" in err_str.lower():
+                return (False, f"Ollama nicht erreichbar ({_ollama_base_url()})")
+            if "404" in err_str or "not found" in err_str.lower():
+                return (False, f"Modell nicht gefunden — ollama pull {model_id}?")
+            return (False, err_str[:100])
     
     return (False, "Provider unbekannt")
 
@@ -1167,6 +1187,18 @@ def test_provider_connection(provider: str) -> tuple[bool, str]:
             resp = client.chat.complete(
                 model="mistral-large-latest",
                 messages=[{"role":"system","content":system},{"role":"user","content":user}],
+                max_tokens=10,
+                temperature=0.0,
+            )
+            ans = resp.choices[0].message.content.strip()
+            return (True, f"Verbunden ({ans[:20]})")
+
+        elif provider == "ollama":
+            client = _openai_client("ollama")
+            model_id = DEFAULT_MODELS.get("ollama", "llama3.2")
+            resp = client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": user}],
                 max_tokens=10,
                 temperature=0.0,
             )
