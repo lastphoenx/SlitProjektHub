@@ -79,10 +79,29 @@ def get_visual_lab_run(run_id: int) -> Optional[VisualLabRun]:
 
 def _merge_prompt(prompt: str, refinement: str | None) -> str:
     base = (prompt or "").strip()
-    ref = sanitize_for_cloud_text((refinement or "").strip())
+    ref = (refinement or "").strip()
     if ref:
         return f"{base}\n\nAnpassung: {ref}".strip()
     return base
+
+
+def delete_visual_lab_run(run_id: int) -> bool:
+    run = get_visual_lab_run(run_id)
+    if not run:
+        return False
+    d = visual_lab_dir()
+    for name in (run.file_path, run.preview_path):
+        if name:
+            fp = d / Path(name).name
+            if fp.exists():
+                fp.unlink()
+    with get_session() as ses:
+        obj = ses.get(VisualLabRun, run_id)
+        if not obj:
+            return False
+        ses.delete(obj)
+        ses.commit()
+    return True
 
 
 def run_visual_lab(
@@ -94,13 +113,13 @@ def run_visual_lab(
     llm_provider: str = "openai",
     llm_model: str = "",
     created_by: int | None = None,
-) -> Optional[VisualLabRun]:
+) -> tuple[Optional[VisualLabRun], Optional[str]]:
     kind = (kind or "").strip().lower()
     if kind not in VISUAL_LAB_KINDS:
-        return None
+        return None, "invalid_kind"
     merged_input = _merge_prompt(prompt, refinement)
-    if not merged_input:
-        return None
+    if not merged_input.strip():
+        return None, "empty_prompt"
 
     file_path: str | None = None
     preview_path: str | None = None
@@ -110,18 +129,18 @@ def run_visual_lab(
     if kind == "png":
         safe = sanitize_for_cloud_text(merged_input)
         if len(safe) < 10:
-            return None
+            return None, "prompt_short"
         prompt_used = safe[:500]
         img = generate_openai_illustration(safe, image_model)
         if not img:
-            return None
+            return None, "png_failed"
         file_path = f"lab_{uuid.uuid4().hex[:12]}.png"
         (visual_lab_dir() / file_path).write_bytes(img)
         cloud = True
     elif kind in ("pptx", "preview"):
         content = deck_content_from_lab_prompt(merged_input, llm_provider, llm_model)
         if not content:
-            return None
+            return None, "llm_failed"
         prompt_used = merged_input[:500]
         if kind == "pptx":
             file_path = f"lab_{uuid.uuid4().hex[:12]}.pptx"
@@ -133,7 +152,7 @@ def run_visual_lab(
             (visual_lab_dir() / file_path).write_bytes(build_deck_preview_png(content))
 
     if not file_path:
-        return None
+        return None, "unknown"
 
     with get_session() as ses:
         row = VisualLabRun(
@@ -152,4 +171,4 @@ def run_visual_lab(
         ses.add(row)
         ses.commit()
         ses.refresh(row)
-        return row
+        return row, None
