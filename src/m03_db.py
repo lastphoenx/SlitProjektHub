@@ -479,11 +479,16 @@ def init_db() -> None:
         Score,
         migrate_evaluation_db,
     )
+    from src.m16_idea import (  # noqa: F401
+        ProjectIdea,
+        migrate_idea_db,
+    )
 
     def _run() -> None:
         SQLModel.metadata.create_all(engine)
         migrate_db()
         migrate_evaluation_db()
+        migrate_idea_db()
         seed_app_roles()
         migrate_yaml_users_to_db()
 
