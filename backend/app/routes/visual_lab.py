@@ -10,7 +10,7 @@ from backend.app.jinja_env import templates
 
 from src.m01_config import load_user_settings
 from src.m08_llm import have_key
-from src.m14_auth import get_user_id, session_username
+from src.m14_auth import get_user_id, is_super_user, session_username
 from src.m16_idea_visual import (
     DEFAULT_OPENAI_IMAGE_MODEL,
     OPENAI_IMAGE_MODELS,
@@ -99,6 +99,7 @@ async def visual_lab_generate(
     llm_model: str = Form(""),
     visual_llm_provider: str = Form(""),
     visual_llm_model: str = Form(""),
+    cloud_confirm: str = Form(""),
 ):
     who = _username(request)
     user_id = get_user_id(who) if who else None
@@ -118,6 +119,9 @@ async def visual_lab_generate(
     if kind == "png" and not have_key("openai"):
         ctx = _lab_context(request, error="no_key", **form_ctx)
         return templates.TemplateResponse("visual_lab/index.html", ctx)
+    if kind == "png" and cloud_confirm != "1":
+        ctx = _lab_context(request, error="cloud_confirm", **form_ctx)
+        return templates.TemplateResponse("visual_lab/index.html", ctx)
 
     row, err = run_visual_lab(
         kind=kind,
@@ -136,7 +140,14 @@ async def visual_lab_generate(
 
 
 @router.post("/visual-lab/{run_id}/delete", response_class=HTMLResponse)
-async def visual_lab_delete(run_id: int):
+async def visual_lab_delete(request: Request, run_id: int):
+    run = get_visual_lab_run(run_id)
+    if not run:
+        raise HTTPException(404)
+    who = _username(request)
+    user_id = get_user_id(who) if who else None
+    if run.created_by and user_id != run.created_by and not is_super_user(who):
+        raise HTTPException(403, "Keine Berechtigung")
     if not delete_visual_lab_run(run_id):
         raise HTTPException(404)
     return RedirectResponse(url="/visual-lab", status_code=303)

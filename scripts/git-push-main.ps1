@@ -1,8 +1,8 @@
-# SlitProjektHub — Push main zu GitHub (SSH, kein WSL)
-# Nutzung: .\scripts\git-push-main.ps1
+# SlitProjektHub — Push main zu GitHub (SSH)
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $repoRoot
-
-$env:GIT_SSH_COMMAND = "ssh -i C:/Users/tsant/.ssh/id_ed25519_github -o IdentitiesOnly=yes"
+$key = $env:SLIT_GITHUB_SSH_KEY
+if (-not $key) { $key = "$env:USERPROFILE\.ssh\id_ed25519_github" }
+$env:GIT_SSH_COMMAND = "ssh -i $key -o IdentitiesOnly=yes"
 git push git@github.com:lastphoenx/SlitProjektHub.git main

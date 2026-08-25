@@ -20,8 +20,8 @@
   {% if error == 'no_key' %}OpenAI API-Key fehlt für PNG-Generierung.
   {% elif error == 'prompt_short' %}Prompt zu kurz nach Filterung.
   {% elif error == 'png_failed' %}OpenAI Bildgenerierung fehlgeschlagen.
+  {% elif error == 'cloud_confirm' %}Bestätigung für Cloud-Übertragung an OpenAI erforderlich.
   {% elif error == 'llm_failed' %}KI-Aufruf fehlgeschlagen — Provider/Modell prüfen.
-  {% elif error == 'empty_prompt' %}Bitte Prompt eingeben.
   {% else %}Generierung fehlgeschlagen — Prompt prüfen.{% endif %}
   <span style="display:block;font-size:.72rem;margin-top:.25rem">Dein Prompt wurde nicht gelöscht.</span>
 </p>
@@ -35,7 +35,7 @@
     <div>
       <label class="form-label">Ausgabe-Typ</label>
       <select class="form-select" name="kind" id="vl-kind">
-        <option value="png" {% if form_kind == 'png' %}selected{% endif %}>PNG — Cloud-Illustration (OpenAI, DSGVO-gefiltert)</option>
+        <option value="png" {% if form_kind == 'png' %}selected{% endif %}>PNG — Cloud-Illustration (OpenAI, automatisch gefiltert)</option>
         <option value="pptx" {% if form_kind == 'pptx' %}selected{% endif %}>PPTX — Portfolio-Folie mit Prozessdiagramm</option>
         <option value="preview" {% if form_kind == 'preview' %}selected{% endif %}>Canvas-Vorschau — PNG (Prozessdiagramm / Titelfolie)</option>
       </select>
@@ -62,6 +62,10 @@
         <option value="{{ key }}" {% if key == default_image_model %}selected{% endif %}>{{ key }}</option>
         {% endfor %}
       </select>
+      <label id="vl-cloud-confirm-wrap" style="display:none;align-items:flex-start;gap:.4rem;margin-top:.5rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="cloud_confirm" value="1" id="vl-cloud-confirm" style="margin-top:.15rem" />
+        <span>Prompt automatisch gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an OpenAI gehen.</span>
+      </label>
     </div>
     <button type="submit" class="btn btn-primary" id="vl-submit-btn">Generieren</button>
     <p id="vl-loading" class="text-muted" style="font-size:.78rem;display:none;margin:0">
@@ -134,8 +138,13 @@ document.addEventListener('keydown', e => {
   const loading = document.getElementById('vl-loading');
   const kindSel = document.getElementById('vl-kind');
   const imgWrap = document.getElementById('vl-image-model-wrap');
+  const confirmWrap = document.getElementById('vl-cloud-confirm-wrap');
+  const confirmBox = document.getElementById('vl-cloud-confirm');
   function syncKind() {
-    imgWrap.style.display = kindSel.value === 'png' ? '' : 'none';
+    const isPng = kindSel.value === 'png';
+    imgWrap.style.display = isPng ? '' : 'none';
+    if (confirmWrap) confirmWrap.style.display = isPng ? 'flex' : 'none';
+    if (confirmBox) confirmBox.required = isPng;
   }
   kindSel.addEventListener('change', syncKind);
   syncKind();

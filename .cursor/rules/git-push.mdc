@@ -1,20 +1,18 @@
 ---
-description: Git push für SlitProjektHub — immer dieser Befehl, kein WSL
+description: Git push für SlitProjektHub — SSH-URL, kein WSL
 alwaysApply: true
 ---
 
 # Git Push (SlitProjektHub)
 
-Remote ist HTTPS; Push **immer** per SSH-URL und Windows-Pfad zur Key-Datei.
-
-**Nach Commit auf `main` pushen — genau so (PowerShell):**
+Remote ist oft HTTPS; Push **per SSH-URL** mit eigenem Deploy-Key.
 
 ```powershell
-cd "c:\Users\tsant\OneDrive\Dokumente\vsc\github_code\SlitProjektHub"
-$env:GIT_SSH_COMMAND = "ssh -i C:/Users/tsant/.ssh/id_ed25519_github -o IdentitiesOnly=yes"
+cd <REPO_ROOT>
+$env:GIT_SSH_COMMAND = "ssh -i <SSH_KEY_PATH> -o IdentitiesOnly=yes"
 git push git@github.com:lastphoenx/SlitProjektHub.git main
 ```
 
-Alternativ: `.\scripts\git-push-main.ps1`
+Alternativ: `.\scripts\git-push-main.ps1` (lokal konfiguriert).
 
-**Nicht:** WSL, `git push origin main` ohne SSH-URL, Backslash-Pfade in `GIT_SSH_COMMAND`, Heredoc-Commit in PowerShell.
+**Nicht:** WSL-Raten, `git push origin main` ohne SSH-URL wenn Remote HTTPS ist.

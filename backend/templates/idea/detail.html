@@ -66,7 +66,7 @@
     <p class="text-muted" style="font-size:.7rem;margin-top:.35rem">
       Modell: {{ idea.illustration_model }}
       {% if idea.illustration_generated_at %} · {{ idea.illustration_generated_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}
-      · Daten an OpenAI (DSGVO-gefilterter Prompt, kein Rohtext).
+      · Automatisch gefiltert vor Cloud-Übertragung — bitte trotzdem prüfen (kein Rohtext der Idee).
     </p>
     {% if idea.illustration_prompt_safe %}
     <details style="font-size:.7rem;margin-top:.25rem">
@@ -98,8 +98,8 @@
   <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">OpenAI API-Key fehlt für Cloud-PNG.</p>
   {% elif visual_error == 'not_assessed' %}
   <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Zuerst KI bewerten.</p>
-  {% elif visual_error == 'png_failed' %}
-  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud-PNG fehlgeschlagen.</p>
+  {% elif visual_error == 'cloud_confirm' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud-PNG: Bestätigung für Datenübertragung an OpenAI erforderlich.</p>
   {% elif visual_error %}
   <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Visualisierung fehlgeschlagen (Provider/Modell prüfen).</p>
   {% endif %}
@@ -132,6 +132,10 @@
         <option value="{{ key }}" {% if key == default_image_model %}selected{% endif %}>{{ key }}</option>
         {% endfor %}
       </select>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;margin-top:.5rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="cloud_confirm" value="1" id="idea-cloud-confirm" style="margin-top:.15rem" />
+        <span>Prompt wurde automatisch gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an OpenAI gehen.</span>
+      </label>
     </div>
     <div>
       <label class="form-label" style="font-size:.72rem">Optionale Anpassung</label>
@@ -329,8 +333,13 @@ document.querySelectorAll('.idea-gen-form').forEach(form => {
 (function() {
   const fmt = document.getElementById('idea-output-format');
   const wrap = document.getElementById('idea-cloud-image-wrap');
+  const cbox = document.getElementById('idea-cloud-confirm');
   if (fmt && wrap) {
-    function sync() { wrap.style.display = fmt.value === 'png_cloud' ? '' : 'none'; }
+    function sync() {
+      const cloud = fmt.value === 'png_cloud';
+      wrap.style.display = cloud ? '' : 'none';
+      if (cbox) cbox.required = cloud;
+    }
     fmt.addEventListener('change', sync);
     sync();
   }
