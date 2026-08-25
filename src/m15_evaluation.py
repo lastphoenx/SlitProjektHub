@@ -174,7 +174,10 @@ def create_criterion(
     name = (name or "").strip()
     if not name:
         raise ValueError("Kriteriumname erforderlich")
-    scale_max = max(1, int(scale_max))
+    # Eignungskriterien (BöB/IVöB): immer binär erfüllt/nicht erfüllt - keine
+    # Teilpunkte, keine Gewichtung. scale_max=1 erzwingen, sonst waere ein
+    # K.O.-Check wie "5 von 10 Punkten besteht" moeglich, was rechtlich falsch ist.
+    scale_max = 1 if kind == "eignung" else max(1, int(scale_max))
     if kind == "zuschlag" and weight_pct < 0:
         raise ValueError("Gewicht muss >= 0 sein")
     if auto_price and kind != "zuschlag":
@@ -264,6 +267,37 @@ def official_score(
     if not user_values:
         return None
     return round(sum(user_values) / len(user_values), 3)
+
+
+def rolled_up_score(
+    bidder_id: int,
+    criterion: Criterion,
+    all_criteria: list[Criterion],
+    scores_by_cell: dict[tuple[int, int], list[Score]],
+) -> tuple[Optional[float], int, int]:
+    """
+    Offizieller Wert eines TOP-LEVEL-Zuschlagskriteriums, inkl. Unterfragen-Rollup:
+    hat das Kriterium Einzelanforderungen (Unterfragen), ist sein Wert per
+    Ausschreibungs-Vorgabe der Mittelwert der einzeln bewerteten Anforderungen
+    ("Punkte = erreichte Punktzahl / Anzahl der Einzelanforderungen") - NICHT ein
+    eigener manueller Wert am Elternkriterium. Ohne Unterfragen (z.B. PoC,
+    Angebotspräsentation) bleibt es eine direkte Bewertung.
+
+    Gibt (wert, beantwortet, gesamt) zurück - beantwortet/gesamt für die Anzeige
+    "5 von 8 Anforderungen bewertet".
+    """
+    children = [c for c in all_criteria if c.parent_id == criterion.id and not c.is_deleted]
+    if not children:
+        val = official_score(bidder_id, criterion, scores_by_cell.get((bidder_id, criterion.id), []))
+        return val, (1 if val is not None else 0), 1
+    child_vals = [
+        official_score(bidder_id, ch, scores_by_cell.get((bidder_id, ch.id), []))
+        for ch in children
+    ]
+    answered = [v for v in child_vals if v is not None]
+    if not answered:
+        return None, 0, len(children)
+    return round(sum(answered) / len(answered), 3), len(answered), len(children)
 
 
 def upsert_score(
@@ -559,7 +593,7 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
             for crit in zuschlag_top:
                 if crit.weight_pct <= 0:
                     continue
-                val = _official(bidder.id, crit)
+                val, _answered, _total = rolled_up_score(bidder.id, crit, criteria, scores_by_cell)
                 if val is None:
                     continue
                 normalized = val / max(1, crit.scale_max)

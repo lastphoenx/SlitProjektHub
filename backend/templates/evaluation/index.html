@@ -77,8 +77,12 @@
               hx-target="#modal-slot" hx-swap="innerHTML">
             <strong>{{ cell.display }}</strong>
             <div style="font-size:.7rem;color:var(--color-text-muted)">
+              {% if row.has_children %}
+              Ø {{ cell.answered }}/{{ cell.total }} Anford.
+              {% else %}
               {% if cell.ai_value is not none %}🤖{{ "%.1f"|format(cell.ai_value) }}{% endif %}
               {% if cell.evaluator_count %} · {{ cell.evaluator_count }} Bewertung{{ "en" if cell.evaluator_count != 1 else "" }}{% endif %}
+              {% endif %}
             </div>
           </td>
           {% endfor %}
@@ -144,18 +148,21 @@
     </div>
     <div>
       <label class="form-label" style="font-size:.72rem">Art</label>
-      <select class="form-select" name="kind">
+      <select class="form-select" name="kind" id="crit-kind" onchange="toggleCritFields()">
         {% for k in criterion_kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
       </select>
     </div>
-    <div>
+    <div id="crit-weight-field">
       <label class="form-label" style="font-size:.72rem">Gewicht %</label>
       <input class="form-input" name="weight_pct" type="number" step="1" value="10" />
     </div>
-    <div>
+    <div id="crit-scale-field">
       <label class="form-label" style="font-size:.72rem">Skala max.</label>
       <input class="form-input" name="scale_max" type="number" value="10" min="1" />
     </div>
+    <p id="crit-eignung-hint" class="text-muted" style="display:none;font-size:.75rem;grid-column:span 2;align-self:center">
+      Eignung ist immer binär Ja/Nein (BöB/IVöB) — kein Gewicht, keine Teilpunkte.
+    </p>
     <div>
       <label class="form-label" style="font-size:.72rem">Übergeordnet (optional)</label>
       <select class="form-select" name="parent_id">
@@ -208,5 +215,15 @@ document.getElementById('modal-slot').addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') document.getElementById('modal-slot').innerHTML = '';
 });
+
+function toggleCritFields() {
+  const kindEl = document.getElementById('crit-kind');
+  if (!kindEl) return;
+  const isEignung = kindEl.value === 'eignung';
+  document.getElementById('crit-weight-field').style.display = isEignung ? 'none' : '';
+  document.getElementById('crit-scale-field').style.display = isEignung ? 'none' : '';
+  document.getElementById('crit-eignung-hint').style.display = isEignung ? '' : 'none';
+}
+toggleCritFields();
 </script>
 {% endblock %}

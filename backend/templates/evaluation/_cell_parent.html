@@ -1,0 +1,47 @@
+<div class="modal-backdrop">
+  <div class="modal" style="max-width:min(96vw,720px);width:min(96vw,720px);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true">
+    <div class="modal-header" style="flex-shrink:0">
+      <div style="min-width:0">
+        <h2 class="modal-title" style="font-size:.95rem">{{ bidder.name }} — {{ criterion.name }}</h2>
+        <p class="text-muted" style="font-size:.75rem;margin-top:.2rem">
+          {{ answered }} von {{ total }} Anforderungen bewertet · Wert = Mittelwert der Einzelanforderungen (Ausschreibungsvorgabe)
+        </p>
+      </div>
+      <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''" title="Schließen">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <div style="flex:1;min-height:0;overflow:auto">
+      <div class="card" style="margin-bottom:.75rem;background:var(--color-surface-2)">
+        <strong>Kriteriumswert (automatisch): {{ "%.2f"|format(official) if official is not none else "—" }}</strong>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Anforderung</th><th>Wert</th><th></th></tr></thead>
+          <tbody>
+            {% for row in child_rows %}
+            <tr style="cursor:pointer"
+                hx-get="/evaluation/cell?bidder_id={{ bidder.id }}&criterion_id={{ row.criterion.id }}&project_key={{ project_key }}"
+                hx-target="#modal-slot" hx-swap="innerHTML">
+              <td>{{ row.criterion.name }}</td>
+              <td>
+                {{ "%.1f"|format(row.official) if row.official is not none else "—" }}
+                <span style="font-size:.7rem;color:var(--color-text-muted)">
+                  {% if row.ai_value is not none %}· 🤖{{ "%.1f"|format(row.ai_value) }}{% endif %}
+                  {% if row.evaluator_count %} · {{ row.evaluator_count }} Bewertung{{ "en" if row.evaluator_count != 1 else "" }}{% endif %}
+                </span>
+              </td>
+              <td class="text-muted" style="font-size:.75rem">öffnen ›</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if not may_evaluate %}
+      <p class="text-muted" style="font-size:.8rem;margin-top:.5rem">Bewertungen erfassen nur Super-User, PL intern und Product Owner.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
