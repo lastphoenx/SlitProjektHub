@@ -1,20 +1,32 @@
-<div class="card" style="margin-top:.75rem;background:var(--color-surface-2)">
-  <strong>KI-Vorschlag</strong>
+<div class="card" style="margin-top:.5rem;background:var(--color-surface-2)">
+  <strong>🤖 KI-Vorschlag</strong>
   {% if suggestion.value is not none %}
   <p>Wert: <strong>{{ suggestion.value }}</strong></p>
   <p style="font-size:.85rem">{{ suggestion.justification }}</p>
   {% if suggestion.source_chunk_ref %}
   <p style="font-size:.8rem;color:var(--color-text-muted)">{{ suggestion.source_chunk_ref[:400] }}</p>
   {% endif %}
-  <form method="post" action="/evaluation/score" style="margin-top:.5rem">
-    <input type="hidden" name="project_key" value="{{ project_key }}" />
-    <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
-    <input type="hidden" name="criterion_id" value="{{ criterion_id }}" />
-    <input type="hidden" name="value" value="{{ suggestion.value }}" />
-    <input type="hidden" name="justification" value="{{ suggestion.justification or '' }}" />
-    <input type="hidden" name="source_chunk_ref" value="{{ suggestion.source_chunk_ref or '' }}" />
-    <button type="submit" class="btn btn-primary btn-sm">Vorschlag übernehmen</button>
-  </form>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
+    <form method="post" action="/evaluation/score/ai" hx-post="/evaluation/score/ai" hx-target="#modal-slot" hx-swap="innerHTML">
+      <input type="hidden" name="project_key" value="{{ project_key }}" />
+      <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+      <input type="hidden" name="criterion_id" value="{{ criterion_id }}" />
+      <input type="hidden" name="value" value="{{ suggestion.value }}" />
+      <input type="hidden" name="justification" value="{{ suggestion.justification or '' }}" />
+      <input type="hidden" name="source_chunk_ref" value="{{ suggestion.source_chunk_ref or '' }}" />
+      <button type="submit" class="btn btn-secondary btn-sm">Nur als KI-Vorschlag speichern</button>
+    </form>
+    <form method="post" action="/evaluation/score" hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML">
+      <input type="hidden" name="project_key" value="{{ project_key }}" />
+      <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+      <input type="hidden" name="criterion_id" value="{{ criterion_id }}" />
+      <input type="hidden" name="value" value="{{ suggestion.value }}" />
+      <input type="hidden" name="justification" value="{{ suggestion.justification or '' }}" />
+      <input type="hidden" name="source_chunk_ref" value="{{ suggestion.source_chunk_ref or '' }}" />
+      <button type="submit" class="btn btn-primary btn-sm">Als meine Bewertung übernehmen</button>
+    </form>
+  </div>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.4rem">"Nur als KI-Vorschlag" bleibt als eigene Spalte sichtbar, ohne dir zugeschrieben zu sein. "Als meine Bewertung" zählt in deinen Ø-Wert.</p>
   {% else %}
   <p class="text-muted">Kein Vorschlag — bitte manuell bewerten.</p>
   {% endif %}

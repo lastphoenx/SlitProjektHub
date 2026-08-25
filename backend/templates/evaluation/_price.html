@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Preisblatt — SlitProjektHub{% endblock %}
+{% block topbar_title %}Preisblatt{% endblock %}
+
+{% block content %}
+<div style="max-width:1100px">
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Preisblatt — {{ project_title }}</h1>
+    <p class="page-subtitle">4-Jahres-TCO. Das Kriterium "Preis" wird daraus automatisch berechnet (günstigstes Angebot = volle Punktzahl).</p>
+  </div>
+  <a class="btn btn-secondary" href="/evaluation?project_key={{ project_key }}">← zur Matrix</a>
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+  <form method="get" action="/evaluation/price" style="display:flex;gap:.5rem;align-items:flex-end">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <div>
+      <label class="form-label">Bieter</label>
+      <select class="form-select" name="bidder_id" onchange="this.form.submit()" style="min-width:240px">
+        {% for b in bidders %}<option value="{{ b.id }}" {% if b.id == bidder_id %}selected{% endif %}>{{ b.name }}</option>{% endfor %}
+      </select>
+    </div>
+  </form>
+</div>
+
+{% if bidder_id %}
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Umsetzungs- und Entwicklungskosten (einmalig)</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Referenz</th><th>Leistungsbeschreibung</th><th>Anzahl</th><th>Einheit</th><th>Kosten/Einheit</th><th>CHF</th><th>Bemerkung</th><th></th></tr></thead>
+      <tbody>
+        {% for i in einmalig %}
+        <tr>
+          <td>{{ i.referenz or "" }}</td>
+          <td>{{ i.leistungsbeschreibung }}</td>
+          <td>{{ i.anzahl }}</td>
+          <td>{{ i.einheit or "" }}</td>
+          <td>{{ "%.2f"|format(i.kosten_pro_einheit) }}</td>
+          <td>{{ "%.2f"|format(i.chf) }}</td>
+          <td style="font-size:.78rem;max-width:220px">{{ i.bemerkung or "" }}</td>
+          <td>
+            {% if may_evaluate %}
+            <form method="post" action="/evaluation/price-item/delete" style="display:inline">
+              <input type="hidden" name="project_key" value="{{ project_key }}" />
+              <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+              <input type="hidden" name="item_id" value="{{ i.id }}" />
+              <button type="submit" class="btn btn-danger btn-sm">×</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if may_evaluate %}
+  <form method="post" action="/evaluation/price-item" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem;margin-top:.75rem;align-items:end">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+    <input type="hidden" name="category" value="einmalig" />
+    <input class="form-input" name="referenz" placeholder="Referenz (F-01)" />
+    <input class="form-input" name="leistungsbeschreibung" placeholder="Leistungsbeschreibung" required style="grid-column:span 2" />
+    <input class="form-input" name="anzahl" type="number" step="0.01" placeholder="Anzahl" />
+    <input class="form-input" name="einheit" placeholder="Einheit (Tage, Std.)" />
+    <input class="form-input" name="kosten_pro_einheit" type="number" step="0.01" placeholder="Kosten/Einheit CHF" />
+    <input class="form-input" name="bemerkung" placeholder="Bemerkung" style="grid-column:span 2" />
+    <button type="submit" class="btn btn-primary">Hinzufügen</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Betriebskosten (wiederkehrend, 2027–2030)</h2>
+  {% for year, items in by_year.items() %}
+  <div style="margin-bottom:.75rem">
+    <strong style="font-size:.85rem">{{ year }}</strong>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Leistungsbeschreibung</th><th>Anzahl</th><th>Einheit</th><th>Kosten/Einheit</th><th>CHF</th><th>Bemerkung</th><th></th></tr></thead>
+        <tbody>
+          {% for i in items %}
+          <tr>
+            <td>{{ i.leistungsbeschreibung }}</td>
+            <td>{{ i.anzahl }}</td>
+            <td>{{ i.einheit or "" }}</td>
+            <td>{{ "%.2f"|format(i.kosten_pro_einheit) }}</td>
+            <td>{{ "%.2f"|format(i.chf) }}</td>
+            <td style="font-size:.78rem;max-width:220px">{{ i.bemerkung or "" }}</td>
+            <td>
+              {% if may_evaluate %}
+              <form method="post" action="/evaluation/price-item/delete" style="display:inline">
+                <input type="hidden" name="project_key" value="{{ project_key }}" />
+                <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+                <input type="hidden" name="item_id" value="{{ i.id }}" />
+                <button type="submit" class="btn btn-danger btn-sm">×</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <p class="text-muted">Noch keine wiederkehrenden Kosten.</p>
+  {% endfor %}
+  {% if may_evaluate %}
+  <form method="post" action="/evaluation/price-item" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem;align-items:end">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+    <input type="hidden" name="category" value="wiederkehrend" />
+    <select class="form-select" name="year" required>
+      <option value="2027">2027</option><option value="2028">2028</option>
+      <option value="2029">2029</option><option value="2030">2030</option>
+    </select>
+    <input class="form-input" name="leistungsbeschreibung" placeholder="Leistungsbeschreibung" required style="grid-column:span 2" />
+    <input class="form-input" name="anzahl" type="number" step="0.01" placeholder="Anzahl" />
+    <input class="form-input" name="einheit" placeholder="Einheit (Monat, Lizenzen)" />
+    <input class="form-input" name="kosten_pro_einheit" type="number" step="0.01" placeholder="Kosten/Einheit CHF" />
+    <input class="form-input" name="bemerkung" placeholder="Bemerkung" style="grid-column:span 2" />
+    <button type="submit" class="btn btn-primary">Hinzufügen</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">TCO über gesamte Laufzeit</h2>
+  {% if tco %}
+  <table>
+    <tr><td>Einmalig</td><td>CHF {{ "%.2f"|format(tco.einmalig_total) }}</td></tr>
+    {% for year, sum in tco.by_year.items() %}
+    <tr><td>{{ year }}</td><td>CHF {{ "%.2f"|format(sum) }}</td></tr>
+    {% endfor %}
+    <tr><td><strong>Total exkl. MwSt</strong></td><td><strong>CHF {{ "%.2f"|format(tco.total_exkl_mwst) }}</strong></td></tr>
+    <tr><td>MwSt (8.1%)</td><td>CHF {{ "%.2f"|format(tco.mwst) }}</td></tr>
+    <tr><td><strong>Total inkl. MwSt</strong></td><td><strong>CHF {{ "%.2f"|format(tco.total_inkl_mwst) }}</strong></td></tr>
+  </table>
+  {% endif %}
+</div>
+{% else %}
+<div class="card"><p class="text-muted">Zuerst einen Bieter anlegen (in der Matrix-Ansicht).</p></div>
+{% endif %}
+
+</div>
+{% endblock %}

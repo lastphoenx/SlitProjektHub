@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import Column, Float, Integer, String, UniqueConstraint, text
+from sqlalchemy import Boolean, Column, Float, Integer, String, UniqueConstraint, text
 from sqlmodel import Field, Session, SQLModel, select
 
 from .m03_db import engine, get_session
@@ -40,21 +40,38 @@ class Criterion(SQLModel, table=True):
     project_key: str = Field(sa_column=Column(String(80), nullable=False, index=True))
     kind: str = Field(sa_column=Column(String(16), nullable=False))  # eignung | zuschlag
     name: str = Field(sa_column=Column(String(200), nullable=False))
+    # Voller Anforderungstext (kann lang sein, z.B. mehrere Absaetze) - name bleibt
+    # das kurze Label fuer Matrix/Listen.
+    description: Optional[str] = Field(default=None, sa_column=Column(String))
     weight_pct: float = Field(default=0.0, sa_column=Column(Float, nullable=False, default=0.0))
     parent_id: Optional[int] = Field(default=None, foreign_key="criterion.id")
     scale_max: int = Field(default=10, sa_column=Column(Integer, nullable=False, default=10))
+    # Zuschlagskriterien wie "Preis": Wert kommt automatisch aus dem Preisblatt
+    # (linear zum guenstigsten Angebot), keine manuelle 0-10-Schaetzung.
+    auto_price: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, default=False))
     sort_order: int = 0
     is_deleted: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Score(SQLModel, table=True):
+    """
+    Eine Bewertung pro (Bieter, Kriterium, Quelle) - nicht mehr pro (Bieter, Kriterium)!
+    source_key ist "ai" (KI-Vorschlag, gespeichert), "system" (automatisch berechnet,
+    z.B. Preis) oder "user:<app_user.id>" (eine Person). Mehrere Personen koennen denselben
+    Bieter/Kriterium unabhaengig bewerten - jede Zeile bleibt einzeln sichtbar (Spalten in
+    der Matrix), der offizielle Wert fuer die Rangfolge ist der Mittelwert aller "user:*"
+    Zeilen (oder der "system"-Wert bei auto_price-Kriterien).
+    """
     __tablename__ = "score"
-    __table_args__ = (UniqueConstraint("bidder_id", "criterion_id", name="uq_score_bidder_criterion"),)
+    __table_args__ = (
+        UniqueConstraint("bidder_id", "criterion_id", "source_key", name="uq_score_bidder_criterion_source"),
+    )
     id: Optional[int] = Field(default=None, primary_key=True)
     bidder_id: int = Field(foreign_key="bidder.id", index=True)
     criterion_id: int = Field(foreign_key="criterion.id", index=True)
-    evaluator_user_id: int = Field(foreign_key="app_user.id", index=True)
+    source_key: str = Field(sa_column=Column(String(32), nullable=False, index=True))
+    evaluator_user_id: Optional[int] = Field(default=None, foreign_key="app_user.id", index=True)
     value: float = Field(sa_column=Column(Float, nullable=False))
     justification: Optional[str] = None
     source_chunk_ref: Optional[str] = None
@@ -69,6 +86,28 @@ class BidderDocumentLink(SQLModel, table=True):
     bidder_id: int = Field(foreign_key="bidder.id", index=True)
     document_id: int = Field(foreign_key="document.id", index=True)
     added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class PriceItem(SQLModel, table=True):
+    """Preisblatt-Zeile eines Bieters: Anzahl x Kosten/Einheit = CHF."""
+    __tablename__ = "price_item"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    bidder_id: int = Field(foreign_key="bidder.id", index=True)
+    category: str = Field(sa_column=Column(String(16), nullable=False))  # einmalig | wiederkehrend
+    year: Optional[int] = Field(default=None)  # nur bei wiederkehrend
+    referenz: Optional[str] = Field(default=None, sa_column=Column(String(16)))  # z.B. "F-01"
+    leistungsbeschreibung: str = Field(sa_column=Column(String(300), nullable=False))
+    anzahl: float = Field(default=0.0, sa_column=Column(Float, nullable=False, default=0.0))
+    einheit: Optional[str] = Field(default=None, sa_column=Column(String(60)))
+    kosten_pro_einheit: float = Field(default=0.0, sa_column=Column(Float, nullable=False, default=0.0))
+    bemerkung: Optional[str] = Field(default=None, sa_column=Column(String(500)))
+    sort_order: int = 0
+    is_deleted: bool = False
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def chf(self) -> float:
+        return round(self.anzahl * self.kosten_pro_einheit, 2)
 
 
 def _now() -> datetime:
@@ -126,6 +165,8 @@ def create_criterion(
     weight_pct: float = 0.0,
     scale_max: int = 10,
     parent_id: Optional[int] = None,
+    auto_price: bool = False,
+    description: Optional[str] = None,
 ) -> Criterion:
     kind = (kind or "").strip().lower()
     if kind not in CRITERION_KINDS:
@@ -136,6 +177,8 @@ def create_criterion(
     scale_max = max(1, int(scale_max))
     if kind == "zuschlag" and weight_pct < 0:
         raise ValueError("Gewicht muss >= 0 sein")
+    if auto_price and kind != "zuschlag":
+        raise ValueError("auto_price nur bei Zuschlagskriterien sinnvoll")
     with get_session() as session:
         criteria = session.exec(
             select(Criterion).where(Criterion.project_key == project_key, Criterion.is_deleted == False)
@@ -144,9 +187,11 @@ def create_criterion(
             project_key=project_key,
             kind=kind,
             name=name,
+            description=(description or "").strip() or None,
             weight_pct=float(weight_pct) if kind == "zuschlag" else 0.0,
             parent_id=parent_id,
             scale_max=scale_max,
+            auto_price=bool(auto_price),
             sort_order=len(criteria) + 1,
         )
         session.add(crit)
@@ -164,11 +209,29 @@ def soft_delete_criterion(criterion_id: int) -> None:
             session.commit()
 
 
-def get_score(bidder_id: int, criterion_id: int) -> Optional[Score]:
+def _user_source_key(evaluator_user_id: int) -> str:
+    return f"user:{evaluator_user_id}"
+
+
+def get_score(bidder_id: int, criterion_id: int, source_key: str = "") -> Optional[Score]:
+    """Ohne source_key: irgendeine Zeile (Altverhalten). Für UI immer source_key angeben."""
     with get_session() as session:
-        return session.exec(
-            select(Score).where(Score.bidder_id == bidder_id, Score.criterion_id == criterion_id)
-        ).first()
+        q = select(Score).where(Score.bidder_id == bidder_id, Score.criterion_id == criterion_id)
+        if source_key:
+            q = q.where(Score.source_key == source_key)
+        return session.exec(q).first()
+
+
+def list_scores_for_cell(bidder_id: int, criterion_id: int) -> list[Score]:
+    """Alle Quellen (KI, System, jeder Bewerter) für eine Matrix-Zelle."""
+    with get_session() as session:
+        return list(
+            session.exec(
+                select(Score)
+                .where(Score.bidder_id == bidder_id, Score.criterion_id == criterion_id)
+                .order_by(Score.source_key)
+            ).all()
+        )
 
 
 def list_scores_for_project(project_key: str) -> list[Score]:
@@ -183,6 +246,26 @@ def list_scores_for_project(project_key: str) -> list[Score]:
         return list(session.exec(select(Score).where(Score.bidder_id.in_(bidder_ids))).all())
 
 
+def official_score(
+    bidder_id: int,
+    criterion: Criterion,
+    scores: Optional[list[Score]] = None,
+) -> Optional[float]:
+    """
+    Offizieller Wert für Rangfolge/Matrix-Hauptzelle:
+    - auto_price-Kriterium: der "system"-Wert (Preisblatt-Berechnung), falls vorhanden.
+    - sonst: Mittelwert aller "user:*"-Zeilen (KI/System zählen nicht mit).
+    """
+    rows = scores if scores is not None else list_scores_for_cell(bidder_id, criterion.id)
+    if criterion.auto_price:
+        sys_row = next((s for s in rows if s.source_key == "system"), None)
+        return sys_row.value if sys_row else None
+    user_values = [s.value for s in rows if s.source_key.startswith("user:")]
+    if not user_values:
+        return None
+    return round(sum(user_values) / len(user_values), 3)
+
+
 def upsert_score(
     bidder_id: int,
     criterion_id: int,
@@ -190,8 +273,18 @@ def upsert_score(
     value: float,
     justification: str | None = None,
     source_chunk_ref: str | None = None,
-    allow_override: bool = False,
+    as_source: str | None = None,
 ) -> Score:
+    """
+    Legt/aktualisiert die Zeile zu `evaluator_user_id` an (source_key "user:<id>") -
+    andere Bewerter-Zeilen bleiben unberührt, das ist der ganze Punkt der
+    Mehrspalten-Bewertung. `as_source="ai"`/`"system"` speichert stattdessen unter
+    einer eigenen, klar markierten Spalte statt unter einem User.
+
+    Rechteprüfung (darf `evaluator_user_id` vom aufrufenden User abweichen — nur
+    Super-User dürfen fremde Bewertungen korrigieren) ist Sache der Route, nicht
+    dieser Funktion.
+    """
     with get_session() as session:
         crit = session.get(Criterion, criterion_id)
         if not crit or crit.is_deleted:
@@ -201,19 +294,21 @@ def upsert_score(
         if value < 0 or value > scale_max:
             raise ValueError(f"Wert muss zwischen 0 und {scale_max} liegen")
 
-        existing = session.exec(
-            select(Score).where(Score.bidder_id == bidder_id, Score.criterion_id == criterion_id)
-        ).first()
+        source_key = as_source if as_source in ("ai", "system") else _user_source_key(evaluator_user_id)
 
-        if existing and not allow_override and existing.evaluator_user_id != evaluator_user_id:
-            raise PermissionError("Bewertung gehört einem anderen Bewerter — nur Super-User kann ändern")
+        existing = session.exec(
+            select(Score).where(
+                Score.bidder_id == bidder_id,
+                Score.criterion_id == criterion_id,
+                Score.source_key == source_key,
+            )
+        ).first()
 
         now = _now()
         if existing:
             existing.value = value
             existing.justification = justification
             existing.source_chunk_ref = source_chunk_ref
-            existing.evaluator_user_id = evaluator_user_id
             existing.updated_at = now
             session.add(existing)
             session.commit()
@@ -223,7 +318,8 @@ def upsert_score(
         score = Score(
             bidder_id=bidder_id,
             criterion_id=criterion_id,
-            evaluator_user_id=evaluator_user_id,
+            source_key=source_key,
+            evaluator_user_id=evaluator_user_id if source_key.startswith("user:") else None,
             value=value,
             justification=justification,
             source_chunk_ref=source_chunk_ref,
@@ -275,37 +371,184 @@ def get_bidder_document_ids(bidder_id: int) -> list[int]:
         ]
 
 
+# ── Preisblatt (TCO) ────────────────────────────────────────────────────────
+
+PRICE_CATEGORIES = ("einmalig", "wiederkehrend")
+_MWST_RATE = 0.081
+
+
+def list_price_items(bidder_id: int, include_deleted: bool = False) -> list[PriceItem]:
+    with get_session() as session:
+        q = select(PriceItem).where(PriceItem.bidder_id == bidder_id)
+        if not include_deleted:
+            q = q.where(PriceItem.is_deleted == False)
+        return list(session.exec(q.order_by(PriceItem.category, PriceItem.year, PriceItem.sort_order)).all())
+
+
+def upsert_price_item(
+    item_id: Optional[int],
+    bidder_id: int,
+    category: str,
+    leistungsbeschreibung: str,
+    anzahl: float,
+    kosten_pro_einheit: float,
+    year: Optional[int] = None,
+    einheit: Optional[str] = None,
+    referenz: Optional[str] = None,
+    bemerkung: Optional[str] = None,
+) -> PriceItem:
+    category = (category or "").strip().lower()
+    if category not in PRICE_CATEGORIES:
+        raise ValueError(f"category muss {' oder '.join(PRICE_CATEGORIES)} sein")
+    if category == "wiederkehrend" and not year:
+        raise ValueError("Jahr erforderlich bei wiederkehrenden Kosten")
+    desc = (leistungsbeschreibung or "").strip()
+    if not desc:
+        raise ValueError("Leistungsbeschreibung erforderlich")
+    with get_session() as session:
+        if item_id:
+            item = session.get(PriceItem, item_id)
+            if not item or item.bidder_id != bidder_id:
+                raise ValueError("Preisposition nicht gefunden")
+        else:
+            existing = session.exec(select(PriceItem).where(PriceItem.bidder_id == bidder_id)).all()
+            item = PriceItem(bidder_id=bidder_id, category=category, sort_order=len(existing) + 1)
+        item.category = category
+        item.year = int(year) if year else None
+        item.referenz = (referenz or "").strip() or None
+        item.leistungsbeschreibung = desc
+        item.anzahl = float(anzahl)
+        item.einheit = (einheit or "").strip() or None
+        item.kosten_pro_einheit = float(kosten_pro_einheit)
+        item.bemerkung = (bemerkung or "").strip() or None
+        session.add(item)
+        session.commit()
+        session.refresh(item)
+        return item
+
+
+def delete_price_item(item_id: int) -> None:
+    with get_session() as session:
+        item = session.get(PriceItem, item_id)
+        if item:
+            item.is_deleted = True
+            session.add(item)
+            session.commit()
+
+
+def compute_bidder_tco(bidder_id: int) -> dict[str, Any]:
+    """4-Jahres-TCO: einmalig + wiederkehrend (alle Jahre), je exkl./inkl. MwSt."""
+    items = list_price_items(bidder_id)
+    einmalig = [i for i in items if i.category == "einmalig"]
+    wiederkehrend = [i for i in items if i.category == "wiederkehrend"]
+
+    einmalig_total = round(sum(i.chf for i in einmalig), 2)
+    by_year: dict[int, float] = {}
+    for i in wiederkehrend:
+        by_year[i.year] = round(by_year.get(i.year, 0.0) + i.chf, 2)
+
+    total_exkl = round(einmalig_total + sum(by_year.values()), 2)
+    mwst = round(total_exkl * _MWST_RATE, 2)
+    return {
+        "bidder_id": bidder_id,
+        "einmalig_total": einmalig_total,
+        "by_year": by_year,
+        "total_exkl_mwst": total_exkl,
+        "mwst": mwst,
+        "total_inkl_mwst": round(total_exkl + mwst, 2),
+    }
+
+
+def sync_price_criterion_scores(project_key: str) -> None:
+    """
+    Schreibt für jedes auto_price-Kriterium den "system"-Score neu: linear zum
+    günstigsten Angebot (günstigstes TCO = volle Punktzahl). Aufrufen, wann immer
+    sich ein Preisblatt geändert hat.
+    """
+    criteria = [c for c in list_criteria(project_key) if c.auto_price]
+    if not criteria:
+        return
+    bidders = list_bidders(project_key)
+    if not bidders:
+        return
+    totals = {b.id: compute_bidder_tco(b.id)["total_inkl_mwst"] for b in bidders}
+    priced = {bid: t for bid, t in totals.items() if t and t > 0}
+    if not priced:
+        return
+    cheapest = min(priced.values())
+    for crit in criteria:
+        scale_max = max(1, crit.scale_max)
+        for bidder in bidders:
+            total = totals.get(bidder.id) or 0.0
+            if total <= 0:
+                continue
+            value = round(scale_max * (cheapest / total), 3)
+            value = max(0.0, min(float(scale_max), value))
+            upsert_score(
+                bidder.id,
+                crit.id,
+                evaluator_user_id=0,
+                value=value,
+                justification=f"Automatisch: günstigstes TCO CHF {cheapest:,.2f} / dieses TCO CHF {total:,.2f}",
+                as_source="system",
+            )
+
+
+# ── Rangfolge ───────────────────────────────────────────────────────────────
+
+
 def _eignung_pass(value: float, scale_max: int) -> bool:
-    """Unterhalb der Hälfte der Skala = nicht geeignet (K.O.)."""
+    """Unterhalb der Hälfte der Skala = nicht geeignet (K.O.). Für Ja/Nein-Fragen (scale_max=1): 1=Ja."""
     return value >= (scale_max / 2.0)
 
 
 def compute_rankings(project_key: str) -> list[dict[str, Any]]:
     """
     Rangfolge: erst Eignung (K.O.), dann gewichtete Zuschlagskriterien.
-    Returns list of dicts sorted by rank (1 = best).
+    Nur TOP-LEVEL-Kriterien (parent_id is None) fliessen in die Gewichtung ein -
+    Unterfragen (z.B. F01-001 unter F-01) sind Beleg-/KI-Hilfsebene, kein eigenes
+    Gewicht. Eignungs-Unterfragen lösen K.O. aus, sobald irgendeine mit "Nein" (0)
+    beantwortet ist.
     """
     bidders = list_bidders(project_key)
     criteria = list_criteria(project_key)
     scores = list_scores_for_project(project_key)
 
-    score_map: dict[tuple[int, int], Score] = {
-        (s.bidder_id, s.criterion_id): s for s in scores
-    }
-    eignung = [c for c in criteria if c.kind == "eignung"]
-    zuschlag = [c for c in criteria if c.kind == "zuschlag"]
-    total_weight = sum(c.weight_pct for c in zuschlag if c.weight_pct > 0)
+    scores_by_cell: dict[tuple[int, int], list[Score]] = {}
+    for s in scores:
+        scores_by_cell.setdefault((s.bidder_id, s.criterion_id), []).append(s)
+
+    by_id = {c.id: c for c in criteria}
+    eignung_top = [c for c in criteria if c.kind == "eignung" and c.parent_id is None]
+    eignung_children: dict[int, list] = {}
+    for c in criteria:
+        if c.kind == "eignung" and c.parent_id is not None:
+            eignung_children.setdefault(c.parent_id, []).append(c)
+    zuschlag_top = [c for c in criteria if c.kind == "zuschlag" and c.parent_id is None]
+    total_weight = sum(c.weight_pct for c in zuschlag_top if c.weight_pct > 0)
+
+    def _official(bidder_id: int, crit) -> Optional[float]:
+        return official_score(bidder_id, crit, scores_by_cell.get((bidder_id, crit.id), []))
 
     rows: list[dict[str, Any]] = []
     for bidder in bidders:
         ko = False
         eignung_details: list[dict[str, Any]] = []
-        for crit in eignung:
-            sc = score_map.get((bidder.id, crit.id))
-            val = sc.value if sc else None
-            passed = _eignung_pass(val, crit.scale_max) if val is not None else False
-            if val is not None and not passed:
-                ko = True
+        for crit in eignung_top:
+            children = eignung_children.get(crit.id, [])
+            if children:
+                child_vals = [(_official(bidder.id, ch), ch) for ch in children]
+                answered = [(v, ch) for v, ch in child_vals if v is not None]
+                failed = [ch.name for v, ch in answered if not _eignung_pass(v, ch.scale_max)]
+                passed = bool(answered) and not failed
+                if failed:
+                    ko = True
+                val = None if not answered else (0.0 if failed else 1.0)
+            else:
+                val = _official(bidder.id, crit)
+                passed = _eignung_pass(val, crit.scale_max) if val is not None else False
+                if val is not None and not passed:
+                    ko = True
             eignung_details.append(
                 {"criterion_id": crit.id, "name": crit.name, "value": val, "passed": passed}
             )
@@ -313,20 +556,20 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
         weighted_sum = 0.0
         zuschlag_details: list[dict[str, Any]] = []
         if not ko and total_weight > 0:
-            for crit in zuschlag:
+            for crit in zuschlag_top:
                 if crit.weight_pct <= 0:
                     continue
-                sc = score_map.get((bidder.id, crit.id))
-                if sc is None:
+                val = _official(bidder.id, crit)
+                if val is None:
                     continue
-                normalized = sc.value / max(1, crit.scale_max)
+                normalized = val / max(1, crit.scale_max)
                 contrib = normalized * crit.weight_pct
                 weighted_sum += contrib
                 zuschlag_details.append(
                     {
                         "criterion_id": crit.id,
                         "name": crit.name,
-                        "value": sc.value,
+                        "value": val,
                         "weight_pct": crit.weight_pct,
                         "normalized": round(normalized, 4),
                         "contrib": round(contrib, 4),
@@ -367,7 +610,7 @@ def suggest_score_with_rag(
     model: str = "gpt-4o-mini",
 ) -> dict[str, Any]:
     """RAG + LLM-Vorschlag für eine Bewertung (Mensch bestätigt)."""
-    query = f"{criterion.name} — Nachweis im Angebot"
+    query = f"{criterion.description or criterion.name} — Nachweis im Angebot"
     rag = retrieve_relevant_chunks_hybrid(
         query,
         project_key=project_key,
@@ -403,7 +646,8 @@ def suggest_score_with_rag(
     )
     user = (
         f"Kriterium ({criterion.kind}): {criterion.name}\n"
-        f"Skala: 0 bis {scale_max}\n\n"
+        + (f"Anforderungstext: {criterion.description}\n" if criterion.description else "")
+        + f"Skala: 0 bis {scale_max}\n\n"
         f"Angebotsstellen:\n{context}\n\n"
         "JSON:"
     )
@@ -458,4 +702,51 @@ def migrate_evaluation_db() -> None:
         tables = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()}
         if "bidder" not in tables:
             return
+
+        crit_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(criterion)")).fetchall()}
+        if "auto_price" not in crit_cols:
+            conn.execute(text("ALTER TABLE criterion ADD COLUMN auto_price BOOLEAN NOT NULL DEFAULT 0"))
+        if "description" not in crit_cols:
+            conn.execute(text("ALTER TABLE criterion ADD COLUMN description VARCHAR"))
+
+        if "price_item" in tables:
+            price_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(price_item)")).fetchall()}
+            if "bemerkung" not in price_cols:
+                conn.execute(text("ALTER TABLE price_item ADD COLUMN bemerkung VARCHAR(500)"))
+
+        score_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(score)")).fetchall()}
+        if "source_key" not in score_cols:
+            # Alte Score-Tabelle: 1 Zeile pro (bidder, criterion). Neue: 1 Zeile pro
+            # (bidder, criterion, source_key) - Rebuild, SQLite kann Unique-Constraints
+            # nicht per ALTER TABLE aendern. Bestehende Bewertungen werden zu "user:<id>".
+            conn.execute(text("""
+                CREATE TABLE score_new (
+                    id INTEGER PRIMARY KEY,
+                    bidder_id INTEGER NOT NULL,
+                    criterion_id INTEGER NOT NULL,
+                    source_key VARCHAR(32) NOT NULL,
+                    evaluator_user_id INTEGER,
+                    value FLOAT NOT NULL,
+                    justification VARCHAR,
+                    source_chunk_ref VARCHAR,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    UNIQUE (bidder_id, criterion_id, source_key)
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO score_new
+                    (id, bidder_id, criterion_id, source_key, evaluator_user_id,
+                     value, justification, source_chunk_ref, created_at, updated_at)
+                SELECT
+                    id, bidder_id, criterion_id, 'user:' || evaluator_user_id, evaluator_user_id,
+                    value, justification, source_chunk_ref, created_at, updated_at
+                FROM score
+            """))
+            conn.execute(text("DROP TABLE score"))
+            conn.execute(text("ALTER TABLE score_new RENAME TO score"))
+            conn.execute(text("CREATE INDEX ix_score_bidder_id ON score (bidder_id)"))
+            conn.execute(text("CREATE INDEX ix_score_criterion_id ON score (criterion_id)"))
+            conn.execute(text("CREATE INDEX ix_score_source_key ON score (source_key)"))
+            conn.execute(text("CREATE INDEX ix_score_evaluator_user_id ON score (evaluator_user_id)"))
         # zukünftige Spalten hier ergänzen
