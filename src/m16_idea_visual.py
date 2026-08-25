@@ -40,12 +40,12 @@ DEFAULT_OPENAI_IMAGE_MODEL = "dall-e-3"
 # Provider für Visualisierung (Prompt/Folienstruktur) — optional getrennt von KI-Einstellungen
 VISUAL_TEXT_PROVIDERS: tuple[str, ...] = ("anthropic", "ollama", "openai")
 VISUAL_TEXT_MODELS: dict[str, list[str]] = {
-    "openai": ["gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5.4-mini"],
-    "anthropic": ["sonnet-4.6", "haiku-4.5", "opus-4.6"],
+    "openai": ["gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"],
+    "anthropic": ["sonnet-4.6", "opus-4.6", "haiku-4.5"],
     "ollama": ["qwen3:32b", "llama3.3:70b", "qwen3:8b", "llama3.2"],
 }
 VISUAL_TEXT_DEFAULT_MODELS: dict[str, str] = {
-    "openai": "gpt-4o-mini",
+    "openai": "gpt-5.4",
     "anthropic": "sonnet-4.6",
     "ollama": "qwen3:32b",
 }
@@ -64,6 +64,10 @@ _PERSON_LINE_RE = re.compile(
     r"(?:Herr|Frau|Dr\.|Prof\.)\s+[A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)?",
     re.IGNORECASE,
 )
+# Heuristik: zwei aufeinanderfolgende Wörter mit Grossbuchstaben (kein Ersatz für fachliche Prüfung)
+_NAME_PAIR_RE = re.compile(
+    r"\b[A-ZÄÖÜ][a-zäöüß]{2,}\s+[A-ZÄÖÜ][a-zäöüß]{2,}\b"
+)
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 
 
@@ -75,6 +79,7 @@ class DeckContent:
     resource_lines: list[str] = field(default_factory=list)
     challenge_lines: list[str] = field(default_factory=list)
     phase_lines: list[str] = field(default_factory=list)
+    phase_details: list[dict[str, Any]] = field(default_factory=list)
     recommendation_lines: list[str] = field(default_factory=list)
 
 
@@ -128,6 +133,7 @@ def sanitize_for_cloud_text(text: str) -> str:
     t = _EMAIL_RE.sub("", text)
     t = _PHONE_RE.sub("", t)
     t = _PERSON_LINE_RE.sub("", t)
+    t = _NAME_PAIR_RE.sub("[Name entfernt]", t)
     return re.sub(r"\s+", " ", t).strip()
 
 
@@ -292,6 +298,14 @@ def deck_content_from_idea(
             f"{p.get('name', '')} ({p.get('duration_estimate', '')}): {p.get('description', '')}"
             for p in idea.phases[:6]
         ],
+        phase_details=[
+            {
+                "title": (p.get("name") or f"Phase {i+1}")[:60],
+                "bullets": [str(p.get("description") or "")[:200]] if p.get("description") else [],
+                "parallel_note": str(p.get("duration_estimate") or ""),
+            }
+            for i, p in enumerate(idea.phases[:6])
+        ],
         recommendation_lines=[idea.ai_recommendation] if idea.ai_recommendation else [],
     )
     ref = (refinement_notes or "").strip()
@@ -327,6 +341,7 @@ def deck_content_from_idea(
         resource_lines=_as_str_list(parsed.get("resource_lines")) or base.resource_lines,
         challenge_lines=_as_str_list(parsed.get("challenge_lines")) or base.challenge_lines,
         phase_lines=_as_str_list(parsed.get("phase_lines")) or base.phase_lines,
+        phase_details=_deck_content_from_parsed(parsed).phase_details or base.phase_details,
         recommendation_lines=_as_str_list(parsed.get("recommendation_lines")) or base.recommendation_lines,
     )
 
@@ -351,16 +366,65 @@ def _resource_lines_from_idea(idea: ProjectIdea) -> list[str]:
 
 
 _LAB_DECK_SYSTEM = (
-    "Erstelle Portfolio-Folieninhalt für eine öffentliche Verwaltung (Schweiz) aus der Beschreibung.\n"
+    "Erstelle reichhaltigen Portfolio-/Schulungs-Folieninhalt (öffentliche Verwaltung Schweiz).\n"
     "Antwort NUR als JSON:\n"
-    '{"title":"kurzer Titel","subtitle":"optional","summary_lines":["..."],'
-    '"resource_lines":[],"challenge_lines":[],"phase_lines":[],"recommendation_lines":[]}\n'
+    '{"title":"kurzer Titel","subtitle":"optional","summary_lines":["max 2 Sätze"],'
+    '"resource_lines":[],"challenge_lines":[],"phase_lines":["1. Name: Kurz"],'
+    '"phase_details":[{"title":"Initiierung","bullets":["Ziel klären","Stakeholder","Go/No-Go"],'
+    '"parallel_note":""}],"recommendation_lines":[]}\n'
     "Regeln:\n"
-    "- Sachlich, keine Personennamen.\n"
-    "- Prozess/Phasen: in phase_lines als nummerierte Kurzlabels (z.B. '1. Initiierung: Ziele').\n"
-    "- summary_lines max. 2 kurze Sätze — Phasen NICHT in summary_lines wiederholen.\n"
-    "- Bei Visualisierungs-Prompts: phase_lines vollständig und in logischer Reihenfolge."
+    "- phase_details: je Phase 2–4 konkrete Stichpunkte (wie Schulungsfolie).\n"
+    "- phase_lines: nummerierte Kurzzeile pro Phase (für Diagramm).\n"
+    "- Keine Personennamen. Sachlich, visuell strukturierbar.\n"
+    "- summary_lines NICHT Phasen wiederholen."
 )
+
+
+def _phase_details_from_lines(phase_lines: list[str]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for line in phase_lines:
+        raw = line.strip()
+        if raw.startswith("•"):
+            raw = raw[1:].strip()
+        if raw and raw[0].isdigit() and "." in raw[:4]:
+            raw = raw.split(".", 1)[1].strip()
+        title = raw
+        bullets: list[str] = []
+        if ":" in raw:
+            title, rest = raw.split(":", 1)
+            title = title.strip()
+            parts = [p.strip() for p in re.split(r"[·;]", rest) if p.strip()]
+            bullets = parts if parts else [rest.strip()]
+        out.append({"title": title[:60], "bullets": bullets[:5], "parallel_note": ""})
+    return out
+
+
+def _deck_content_from_parsed(parsed: dict[str, Any], fallback_title: str = "Visual") -> DeckContent:
+    phase_lines = _as_str_list(parsed.get("phase_lines"))
+    raw_details = parsed.get("phase_details")
+    phase_details: list[dict[str, Any]] = []
+    if isinstance(raw_details, list):
+        for item in raw_details[:8]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            bullets = _as_str_list(item.get("bullets"))
+            parallel = str(item.get("parallel_note") or item.get("parallel") or "").strip()
+            phase_details.append({"title": title[:60], "bullets": bullets[:5], "parallel_note": parallel[:120]})
+    if not phase_details and phase_lines:
+        phase_details = _phase_details_from_lines(phase_lines)
+    return DeckContent(
+        title=(parsed.get("title") or fallback_title)[:120],
+        subtitle=(parsed.get("subtitle") or "")[:200],
+        summary_lines=_as_str_list(parsed.get("summary_lines")),
+        resource_lines=_as_str_list(parsed.get("resource_lines")),
+        challenge_lines=_as_str_list(parsed.get("challenge_lines")),
+        phase_lines=phase_lines,
+        phase_details=phase_details,
+        recommendation_lines=_as_str_list(parsed.get("recommendation_lines")),
+    )
 
 
 def _fallback_deck_from_prompt(prompt: str) -> DeckContent:
@@ -368,7 +432,12 @@ def _fallback_deck_from_prompt(prompt: str) -> DeckContent:
     title = lines[0][:80] if lines else "Visual"
     body = lines[1:] if len(lines) > 1 else [prompt[:400]]
     phase_lines = [f"{i + 1}. {ln[:100]}" for i, ln in enumerate(body[:8])]
-    return DeckContent(title=title, subtitle="SlitProjektHub Visual-Lab", phase_lines=phase_lines)
+    return DeckContent(
+        title=title,
+        subtitle="SlitProjektHub Visual-Lab",
+        phase_lines=phase_lines,
+        phase_details=_phase_details_from_lines(phase_lines),
+    )
 
 
 def _phase_labels_from_lines(phase_lines: list[str]) -> list[str]:
@@ -431,6 +500,140 @@ def build_process_diagram_png(labels: list[str], title: str = "") -> bytes:
     return buf.getvalue()
 
 
+_PHASE_COLORS = [
+    (232, 222, 248),
+    (214, 245, 228),
+    (214, 232, 248),
+    (252, 228, 210),
+    (248, 214, 226),
+    (230, 240, 250),
+]
+_PHASE_BORDER = [
+    (109, 76, 180),
+    (46, 125, 80),
+    (37, 99, 168),
+    (196, 120, 58),
+    (180, 72, 110),
+    (90, 120, 150),
+]
+
+
+def build_vertical_process_diagram_png(
+    phase_details: list[dict[str, Any]],
+    title: str = "",
+) -> bytes:
+    w = 900
+    try:
+        font_t = ImageFont.truetype("arial.ttf", 32)
+        font_h = ImageFont.truetype("arial.ttf", 22)
+        font_b = ImageFont.truetype("arial.ttf", 16)
+        font_s = ImageFont.truetype("arial.ttf", 13)
+    except OSError:
+        font_t = font_h = font_b = font_s = ImageFont.load_default()
+    details = phase_details[:8]
+    box_h = 80
+    for d in details:
+        box_h += 56 + len(d.get("bullets") or []) * 22
+    h = box_h + 100
+    img = Image.new("RGB", (w, h), color=(252, 252, 254))
+    draw = ImageDraw.Draw(img)
+    if title:
+        draw.text((40, 24), title[:70], fill=(30, 58, 95), font=font_t)
+    y = 80
+    cx = w // 2
+    for i, pd in enumerate(details):
+        bullets = pd.get("bullets") or []
+        ph = 56 + len(bullets) * 22
+        col = _PHASE_COLORS[i % len(_PHASE_COLORS)]
+        border = _PHASE_BORDER[i % len(_PHASE_BORDER)]
+        bx = 80
+        draw.rounded_rectangle([bx, y, w - 80, y + ph], radius=14, fill=col, outline=border, width=2)
+        label = f"Phase {i + 1}: {pd.get('title', '')}"
+        draw.text((bx + 16, y + 10), label[:55], fill=border, font=font_h)
+        by = y + 38
+        for b in bullets[:4]:
+            draw.text((bx + 20, by), f"· {b[:70]}", fill=(55, 65, 80), font=font_b)
+            by += 22
+        par = (pd.get("parallel_note") or "").strip()
+        if par:
+            draw.text((bx + 20, by), f"↔ {par[:60]}", fill=(100, 110, 130), font=font_s)
+        if i < len(details) - 1:
+            ay = y + ph + 4
+            draw.polygon([(cx, ay + 18), (cx - 10, ay), (cx + 10, ay)], fill=(140, 150, 170))
+            y += ph + 28
+        else:
+            y += ph + 12
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _render_slide_panel(heading: str, lines: list[str], width: int = 1280) -> Image.Image:
+    try:
+        font_h = ImageFont.truetype("arial.ttf", 26)
+        font_b = ImageFont.truetype("arial.ttf", 15)
+    except OSError:
+        font_h = font_b = ImageFont.load_default()
+    lh = 26
+    h = 70 + min(len(lines), 12) * lh + 30
+    img = Image.new("RGB", (width, h), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, width, 4], fill=(30, 58, 95))
+    draw.text((48, 28), heading, fill=(30, 58, 95), font=font_h)
+    y = 68
+    for line in lines[:12]:
+        draw.text((56, y), f"• {line[:110]}", fill=(50, 55, 65), font=font_b)
+        y += lh
+    return img
+
+
+def _render_title_panel(content: DeckContent, width: int = 1280) -> Image.Image:
+    try:
+        font_l = ImageFont.truetype("arial.ttf", 40)
+        font_s = ImageFont.truetype("arial.ttf", 20)
+    except OSError:
+        font_l = font_s = ImageFont.load_default()
+    img = Image.new("RGB", (width, 220), color=(30, 58, 95))
+    draw = ImageDraw.Draw(img)
+    draw.text((48, 60), content.title[:80], fill=(255, 255, 255), font=font_l)
+    if content.subtitle:
+        draw.text((48, 130), content.subtitle[:120], fill=(200, 210, 225), font=font_s)
+    return img
+
+
+def build_deck_composite_preview_png(content: DeckContent) -> bytes:
+    panels: list[Image.Image] = []
+    panels.append(_render_title_panel(content))
+    if content.summary_lines:
+        panels.append(_render_slide_panel("Zusammenfassung", content.summary_lines))
+    details = content.phase_details or _phase_details_from_lines(content.phase_lines)
+    if len(details) >= 2:
+        vimg = Image.open(io.BytesIO(build_vertical_process_diagram_png(details, content.title[:60])))
+        panels.append(vimg)
+    if content.phase_lines:
+        panels.append(_render_slide_panel("Grobe Phasenplanung", content.phase_lines))
+    for pd in details[:4]:
+        bullets = pd.get("bullets") or []
+        if bullets:
+            panels.append(_render_slide_panel(f"Detail: {pd.get('title', '')}", bullets))
+    if content.recommendation_lines:
+        panels.append(_render_slide_panel("Empfehlung", content.recommendation_lines))
+    panels.append(_render_slide_panel("Hinweis", ["KI-Vorbewertung — ersetzt keine fachliche Prüfung · SlitProjektHub"]))
+    gap = 12
+    width = 1280
+    total_h = sum(p.height for p in panels) + gap * max(0, len(panels) - 1)
+    out = Image.new("RGB", (width, total_h), color=(236, 239, 244))
+    y = 0
+    for p in panels:
+        if p.width != width:
+            p = p.resize((width, int(p.height * width / p.width)), Image.Resampling.LANCZOS)
+        out.paste(p, (0, y))
+        y += p.height + gap
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def deck_content_from_lab_prompt(
     prompt: str,
     llm_provider: str = "openai",
@@ -440,8 +643,8 @@ def deck_content_from_lab_prompt(
         llm_provider,
         _LAB_DECK_SYSTEM,
         [{"role": "user", "content": prompt}],
-        max_tokens=1200,
-        temperature=0.4,
+        max_tokens=2000,
+        temperature=0.45,
         model=llm_model or None,
     )
     if not raw:
@@ -449,15 +652,7 @@ def deck_content_from_lab_prompt(
     parsed = _parse_json_dict(raw)
     if not parsed:
         return _fallback_deck_from_prompt(prompt)
-    return DeckContent(
-        title=(parsed.get("title") or "Visual Test")[:120],
-        subtitle=(parsed.get("subtitle") or "SlitProjektHub Visual-Lab")[:200],
-        summary_lines=_as_str_list(parsed.get("summary_lines")),
-        resource_lines=_as_str_list(parsed.get("resource_lines")),
-        challenge_lines=_as_str_list(parsed.get("challenge_lines")),
-        phase_lines=_as_str_list(parsed.get("phase_lines")),
-        recommendation_lines=_as_str_list(parsed.get("recommendation_lines")),
-    )
+    return _deck_content_from_parsed(parsed, fallback_title=prompt.strip().split("\n")[0][:80] or "Visual Test")
 
 
 def _add_title_slide(prs: Presentation, content: DeckContent) -> None:
@@ -507,6 +702,18 @@ def _add_bullet_slide(prs: Presentation, heading: str, lines: list[str]) -> None
         p.space_after = Pt(6)
 
 
+def _add_phase_detail_slide(prs: Presentation, phase: dict[str, Any], index: int) -> None:
+    bullets = phase.get("bullets") or []
+    if not bullets:
+        return
+    title = f"Phase {index + 1}: {phase.get('title', '')}"
+    lines = list(bullets)
+    par = (phase.get("parallel_note") or "").strip()
+    if par:
+        lines.append(f"(Parallel: {par})")
+    _add_bullet_slide(prs, title[:80], lines)
+
+
 def build_pptx_bytes(content: DeckContent) -> bytes:
     prs = Presentation()
     prs.slide_width = Inches(10)
@@ -519,13 +726,22 @@ def build_pptx_bytes(content: DeckContent) -> bytes:
     if content.challenge_lines:
         _add_bullet_slide(prs, "Herausforderungen", content.challenge_lines)
     if content.phase_lines:
+        details = content.phase_details or _phase_details_from_lines(content.phase_lines)
         labels = _phase_labels_from_lines(content.phase_lines)
-        if len(labels) >= 2:
+        if len(details) >= 2:
+            _add_diagram_slide(
+                prs,
+                build_vertical_process_diagram_png(details, content.title[:60]),
+                "Prozess / Phasen",
+            )
+        elif len(labels) >= 2:
             _add_diagram_slide(
                 prs,
                 build_process_diagram_png(labels, content.title[:60]),
                 "Prozess / Phasen",
             )
+        for i, pd in enumerate(details[:5]):
+            _add_phase_detail_slide(prs, pd, i)
         _add_bullet_slide(prs, "Grobe Phasenplanung", content.phase_lines)
     if content.recommendation_lines:
         _add_bullet_slide(prs, "Empfehlung", content.recommendation_lines)
@@ -540,31 +756,7 @@ def build_pptx_bytes(content: DeckContent) -> bytes:
 
 
 def build_deck_preview_png(content: DeckContent) -> bytes:
-    labels = _phase_labels_from_lines(content.phase_lines)
-    if len(labels) >= 2:
-        return build_process_diagram_png(labels, content.title[:60])
-    w, h = 1280, 720
-    img = Image.new("RGB", (w, h), color=(30, 58, 95))
-    draw = ImageDraw.Draw(img)
-    title = content.title[:80]
-    try:
-        font_l = ImageFont.truetype("arial.ttf", 42)
-        font_s = ImageFont.truetype("arial.ttf", 22)
-    except OSError:
-        font_l = ImageFont.load_default()
-        font_s = font_l
-    draw.text((60, 80), title, fill=(255, 255, 255), font=font_l)
-    y = 180
-    if content.summary_lines:
-        summary = content.summary_lines[0][:280]
-        draw.text((60, y), summary, fill=(200, 210, 220), font=font_s)
-        y += 80
-    for line in content.resource_lines[:2]:
-        draw.text((60, y), line[:100], fill=(180, 200, 230), font=font_s)
-        y += 36
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    return build_deck_composite_preview_png(content)
 
 
 def generate_portfolio_deck(

@@ -59,6 +59,13 @@ def _may_edit_idea(idea, user_id: int | None, who: str) -> bool:
     return user_id is not None and idea.submitted_by == user_id
 
 
+def _require_may_edit(request: Request, idea) -> None:
+    who = _username(request)
+    user_id = get_user_id(who) if who else None
+    if not _may_edit_idea(idea, user_id, who):
+        raise HTTPException(403, "Keine Berechtigung")
+
+
 def _idea_images_dir() -> Path:
     return idea_images_dir()
 
@@ -190,12 +197,17 @@ async def idea_generate_visual(
     visual_llm_provider: str = Form(""),
     visual_llm_model: str = Form(""),
     image_model: str = Form(DEFAULT_OPENAI_IMAGE_MODEL),
+    cloud_confirm: str = Form(""),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
+    _require_may_edit(request, idea)
     if idea.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?visual_error=not_assessed", status_code=303)
+    fmt = (output_format or "").strip().lower()
+    if fmt == "png_cloud" and cloud_confirm != "1":
+        return RedirectResponse(url=f"/idea/{idea_id}?visual_error=cloud_confirm", status_code=303)
     vp, vm = resolve_visual_llm(visual_llm_provider, visual_llm_model, llm_provider, llm_model)
     if image_model not in OPENAI_IMAGE_MODELS:
         image_model = DEFAULT_OPENAI_IMAGE_MODEL
@@ -225,6 +237,7 @@ async def idea_generate_deck(
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
+    _require_may_edit(request, idea)
     if idea.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?deck_error=1", status_code=303)
     vp, vm = resolve_visual_llm(visual_llm_provider, visual_llm_model, llm_provider, llm_model)
@@ -249,14 +262,18 @@ async def idea_generate_illustration(
     refinement_notes: str = Form(""),
     visual_llm_provider: str = Form(""),
     visual_llm_model: str = Form(""),
+    cloud_confirm: str = Form(""),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
+    _require_may_edit(request, idea)
     if not have_key("openai"):
         return RedirectResponse(url=f"/idea/{idea_id}?illustration_error=no_key", status_code=303)
     if idea.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?illustration_error=not_assessed", status_code=303)
+    if cloud_confirm != "1":
+        return RedirectResponse(url=f"/idea/{idea_id}?illustration_error=cloud_confirm", status_code=303)
     if image_model not in OPENAI_IMAGE_MODELS:
         image_model = DEFAULT_OPENAI_IMAGE_MODEL
     vp, vm = resolve_visual_llm(visual_llm_provider, visual_llm_model, llm_provider, llm_model)

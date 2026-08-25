@@ -18,11 +18,13 @@
     <div style="flex:1;min-height:0;overflow:auto;text-align:center;padding:.5rem">
       {% if is_image %}
       <img src="/visual-lab/{{ run.id }}/file?disposition=inline" alt="Visual-Lab"
-           style="max-width:100%;max-height:70vh;border-radius:.375rem;border:1px solid var(--color-border)">
+           style="max-width:100%;border-radius:.375rem;border:1px solid var(--color-border)">
       {% elif is_pptx and thumb_url %}
-      <p class="text-muted" style="font-size:.78rem;margin-bottom:.5rem">Titelfolie-Vorschau — vollständige Folie als PPTX:</p>
-      <img src="{{ thumb_url }}?disposition=inline" alt="PPTX Vorschau"
-           style="max-width:100%;max-height:70vh;border-radius:.375rem;border:1px solid var(--color-border)">
+      <p class="text-muted" style="font-size:.78rem;margin-bottom:.5rem;text-align:left">
+        Gesamt-Vorschau aller Folien (scrollen). Original: PPTX mit allen Slides.
+      </p>
+      <img src="{{ thumb_url }}?disposition=inline" alt="PPTX Gesamt-Vorschau"
+           style="max-width:100%;border-radius:.375rem;border:1px solid var(--color-border)">
       {% else %}
       <p class="text-muted">Download für diesen Typ.</p>
       {% endif %}
@@ -31,7 +33,7 @@
       {% endif %}
       {% if run.prompt_used %}
       <details style="font-size:.7rem;margin-top:.5rem;text-align:left">
-        <summary class="text-muted" style="cursor:pointer">Verwendeter Prompt</summary>
+        <summary class="text-muted" style="cursor:pointer">Verwendeter Prompt (nach automatischer Filterung)</summary>
         <pre style="white-space:pre-wrap;margin-top:.35rem;font-size:.68rem;background:var(--color-surface-2);padding:.5rem;border-radius:.375rem">{{ run.prompt_used }}</pre>
       </details>
       {% endif %}

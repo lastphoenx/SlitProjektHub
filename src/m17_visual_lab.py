@@ -146,10 +146,15 @@ def run_visual_lab(
             file_path = f"lab_{uuid.uuid4().hex[:12]}.pptx"
             (visual_lab_dir() / file_path).write_bytes(build_pptx_bytes(content))
             preview_path = f"lab_prev_{uuid.uuid4().hex[:10]}.png"
-            (visual_lab_dir() / preview_path).write_bytes(build_deck_preview_png(content))
+            (visual_lab_dir() / preview_path).write_bytes(build_deck_composite_preview_png(content))
         else:
             file_path = f"lab_{uuid.uuid4().hex[:12]}.png"
-            (visual_lab_dir() / file_path).write_bytes(build_deck_preview_png(content))
+            details = content.phase_details or _phase_details_from_lines(content.phase_lines)
+            if len(details) >= 2:
+                png_bytes = build_vertical_process_diagram_png(details, content.title[:60])
+            else:
+                png_bytes = build_deck_preview_png(content)
+            (visual_lab_dir() / file_path).write_bytes(png_bytes)
 
     if not file_path:
         return None, "unknown"
