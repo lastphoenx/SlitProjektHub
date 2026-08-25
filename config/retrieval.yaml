@@ -1,0 +1,154 @@
+﻿# =============================================================================
+# RAG Retrieval Configuration
+# =============================================================================
+#
+# ⚙️ HIERARCHIE: User-Settings > YAML-Defaults
+#
+#   1. **User-Settings** (config/user_settings.yaml):
+#      Runtime-Toggles die im UI gesteuert werden:
+#      - rag_enabled (RAG an/aus)
+#      - rag_query_expansion (Query-Expansion an/aus)
+#      - rag_reranking_enabled (Reranking an/aus)
+#      - rag_top_k, rag_similarity_threshold, etc.
+#
+#   2. **YAML-Defaults** (retrieval.yaml):
+#      Technische Parameter für Power-User:
+#      - BM25 Gewichte, RRF k-Parameter, Discovery-Thresholds
+#      - Reranking mode/initial_k/final_k (wenn User-Toggle = ON)
+#      - Query-Expansion model/temperature (wenn User-Toggle = ON)
+#
+# 💡 **Praxis:**
+#   - UI-Toggles in user_settings.yaml (automatisch gespeichert)
+#   - Technische Feintuning-Parameter hier (manuell editieren)
+#
+# =============================================================================
+#
+# Vierstufige Query-Intelligence-Pipeline:
+#
+#   [1] Query Distillation   — LLM bereinigt Nutzer-Input zu Suchbegriffen
+#       └─ query.enable_distillation
+#
+#   [2] Hybrid Retrieval     — BM25 (Keyword) + Semantic (Embedding) parallel
+#       └─ bm25.* + semantic.*
+#
+#   [3] Reciprocal Rank Fusion — Kombiniert beide Rankings mathematisch robust
+#       └─ hybrid.rrf_k  (Standard: 60, aus IR-Literatur)
+#
+#   [4] Multi-Hypothesis     — N Suchstrategien (KEYWORD/SEMANTIC/CONTEXT), optional
+#       └─ query.enable_multi_hypothesis  (Default: false)
+#
+# Alle Werte hier ändern — kein Code-Änderung nötig.
+# =============================================================================
+
+# ==================== BM25 / KEYWORD SEARCH ====================
+bm25:
+  # Stemming für deutsche Morphologie (z.B. "Subunternehmen" → "subunternehm")
+  use_german_stemming: true
+  
+  # Priority Terms: globale Defaults für alle Projekte.
+  # LEER lassen — projekte-spezifische Terms gehören in die Datenbank (Project.rag_priority_terms).
+  # Nur hier eintragen wenn ein Term wirklich für JEDES Projekt relevant ist (z.B. "hosting", "cloud"
+  # sind typische Cross-Domain-Begriffe die in fast keinem Zieldokument stehen).
+  priority_terms: []
+
+  
+  # Scoring-Gewichte (für BM25-interne Berechnungen)
+  scoring:
+    coverage_weight: 2.0      # Keyword-Coverage Multiplikator
+    idf_weight: 0.75          # IDF-Bonus Multiplikator
+    priority_boost: 6.0       # Boost pro Priority-Term Hit
+    min_token_length: 4       # Min. Länge für Supporting Tokens
+    min_query_idf: 0.0        # Wird nicht mehr verwendet; relativer 25%-Perzentil-Filter ersetzt dies.
+                              # 0.0 = deaktiviert. BM25Okapi IDF-Skala: 0=omnipräsent, >6=sehr selten.
+                              # 1.5 filtert Begriffe die in >40% aller Chunks vorkommen.
+
+# ==================== SEMANTIC SEARCH ====================
+semantic:
+  # Embedding Model
+  model: "text-embedding-3-small"
+  
+  # Similarity Thresholds
+  discovery_threshold_multiplier: 0.35  # Multipliziert mit user threshold für breite Suche
+  min_discovery_threshold: 0.15         # Absolute Untergrenze
+  
+  # Quality Filter
+  min_similarity: 0.5                   # Default Minimum Similarity
+
+# ==================== HYBRID SEARCH (RRF) ====================
+hybrid:
+  # Reciprocal Rank Fusion Parameter
+  rrf_k: 60                             # Standard: 60 (aus IR-Literatur)
+  
+  # Document Diversity
+  max_chunks_per_document: 2            # Default: limit // 2
+  guaranteed_doc_threshold: 0.10        # Min. Score für garantierten Doc-Slot
+  
+  # Special Classifications
+  pflichtenheft_fallback: true          # "Pflichtenheft (Projekt)" immer vertreten
+  pflichtenheft_min_score: 0.10         # Min. Score für Pflichtenheft-Fallback
+
+# ==================== QUERY INTELLIGENCE ====================
+query:
+  # Query Distillation (Phase 1)
+  enable_distillation: true
+  distillation_provider: "openai"
+  distillation_model: "gpt-4o-mini"
+  distillation_temperature: 0.0
+  distillation_max_tokens: 100
+  
+  # Multi-Hypothesis Generation (Phase 3)
+  enable_multi_hypothesis: false        # Advanced: Mehrere Query-Varianten
+  hypothesis_count: 3                   # Anzahl paralleler Query-Varianten
+  
+  # Query Expansion (Akronym-Auflösung bei niedrigem Confidence)
+  # ⚠️ Toggle wird aus user_settings.yaml gelesen (rag_query_expansion)
+  # Diese Werte hier sind nur für die technische Ausführung:
+  enable_expansion: true                # ⚠️ YAML-Fallback (wenn user_settings fehlt)
+  expansion_provider: "openai"          # Provider für Akronym-Expansion
+  expansion_model: "gpt-4o-mini"        # Modell für Expansion
+  expansion_temperature: 0.0            # Temperature (0.0 = deterministisch)
+  expansion_max_retries: 1              # Max. 1 Retry (nicht rekursiv)
+  
+  # Query Enhancement Strategies
+  strategies:
+    - "distillation"                    # LLM-basierte Query-Bereinigung
+    # - "expansion"                     # Synonym-Expansion (TODO: Phase 3)
+    # - "entity_extraction"             # NER für gezielte Suche (TODO: Phase 3)
+
+# ==================== RERANKING ====================
+# ⚠️ Toggle wird aus user_settings.yaml gelesen (rag_reranking_enabled)
+# Diese Werte hier sind nur für die technische Ausführung:
+reranking:
+  enable: true                          # ⚠️ YAML-Fallback (wenn user_settings fehlt) - EMPFOHLEN: true
+  mode: "score"                         # "score" = Score-basiert (schnell) | "llm" = LLM-Reranking (teurer aber präziser)
+  initial_k: 15                         # Hole Top-15 Kandidaten für Reranking (mehr = bessere Chance den richtigen Chunk zu finden)
+  final_k: 7                            # Nimm finale Top-7 nach Reranking (sollte = user_settings.rag_top_k sein)
+  
+  # LLM-Reranking (nur wenn mode="llm")
+  llm_provider: "openai"                # Provider für LLM-Reranking
+  llm_model: "gpt-4o-mini"              # Modell für Relevanz-Bewertung
+  llm_temperature: 0.0                  # Temperature (0.0 = deterministisch)
+  llm_batch_size: 5                     # Chunks pro LLM-Call (Cost-Optimierung)
+
+# ==================== FILENAME BOOSTING ====================
+filename_boost:
+  enable: true
+  boost_amount: 0.10                    # +10% Score bei Filename-Match
+  min_word_length: 3                    # Min. Query-Wort-Länge für Matching
+  min_prefix_match: 5                   # Min. Zeichen für Präfix-Match
+
+# ==================== CACHING ====================
+cache:
+  enable: true
+  max_size: 100                         # Max. Query-Results im Cache
+
+# ==================== A/B TESTING (Phase 3) ====================
+ab_testing:
+  enable: false                         # Experimentelles Feature
+  strategies:
+    baseline:
+      name: "RRF-Standard"
+      rrf_k: 60
+    experimental:
+      name: "RRF-Aggressive"
+      rrf_k: 40                         # Niedrigerer k = stärkere Rank-Präferenz

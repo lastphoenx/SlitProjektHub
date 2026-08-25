@@ -1,0 +1,59 @@
+﻿<!-- Linked documents list + add picker -->
+<div id="proj-docs-inner">
+
+  {% if linked_docs %}
+  <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.75rem">
+    {% for d in linked_docs %}
+    <span class="badge badge-neutral" style="display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .55rem;font-size:.76rem">
+      {% set ext = d.filename.rsplit('.', 1)[-1].lower() if '.' in d.filename else '' %}
+      {% if ext == 'pdf' %}<svg width="11" height="11" fill="none" stroke="var(--color-danger)" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      {% elif ext == 'csv' %}<svg width="11" height="11" fill="none" stroke="var(--color-success)" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
+      {% else %}<svg width="11" height="11" fill="none" stroke="var(--color-text-muted)" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>{% endif %}
+      <span style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ d.filename }}">{{ d.filename }}</span>
+      <button type="button"
+              style="background:none;border:none;cursor:pointer;color:var(--color-text-muted);padding:0;line-height:1;display:flex"
+              title="Entfernen"
+              hx-delete="/projects/{{ project_key }}/documents/{{ d.id }}"
+              hx-target="#proj-docs-inner"
+              hx-swap="outerHTML">
+        <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </span>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-muted" style="font-size:.8rem;margin-bottom:.75rem">Noch keine Dokumente zugeordnet.</p>
+  {% endif %}
+
+  <!-- Add document picker -->
+  {% if available_docs %}
+  <div style="display:flex;gap:.5rem;align-items:center">
+    <select id="doc-add-select-{{ project_key }}" class="form-select" style="flex:1;max-width:360px;font-size:.82rem">
+      <option value="">— Dokument auswählen —</option>
+      {% for d in available_docs %}
+      <option value="{{ d.id }}">{{ d.filename }} ({{ d.classification }})</option>
+      {% endfor %}
+    </select>
+    <button type="button" class="btn btn-secondary btn-sm"
+            onclick="(function(){
+              var sel = document.getElementById('doc-add-select-{{ project_key }}');
+              var id = sel.value;
+              if(!id) return;
+              htmx.ajax('POST', '/projects/{{ project_key }}/documents/' + id, {
+                target: '#proj-docs-inner',
+                swap: 'outerHTML'
+              });
+            })()">
+      <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+      Hinzufügen
+    </button>
+  </div>
+  {% else %}
+  <p class="text-muted" style="font-size:.78rem">Alle verfügbaren Dokumente sind bereits zugeordnet.</p>
+  {% endif %}
+
+</div>

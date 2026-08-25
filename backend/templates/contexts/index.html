@@ -1,0 +1,57 @@
+﻿{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Kontexte</h1>
+    <p class="page-subtitle">Hintergrundinformationen und Referenzdokumente für Projekte und Rollen</p>
+  </div>
+  <button
+    class="btn btn-primary"
+    hx-get="/contexts/new"
+    hx-target="#modal-slot"
+    hx-swap="innerHTML"
+  >
+    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    Neuer Kontext
+  </button>
+</div>
+
+<!-- Search bar -->
+<div class="toolbar" x-data="{q:''}" x-init="$watch('q', v => $store.ui.q = v)" style="margin-bottom:1rem">
+  <div style="position:relative;flex:1;max-width:360px">
+    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+         style="position:absolute;left:.75rem;top:50%;transform:translateY(-50%);color:var(--color-text-muted)">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input
+      type="search"
+      class="form-input"
+      style="padding-left:2.2rem"
+      placeholder="Kontexte suchen …"
+      x-model="q"
+    />
+  </div>
+</div>
+
+<!-- Table target -->
+<div id="contexts-table">
+  {% include "contexts/_table.html" %}
+</div>
+
+<!-- Drawer / modal slot -->
+<div id="modal-slot"></div>
+
+<script>
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      const d = document.getElementById('main-drawer');
+      if (d && d.classList.contains('drawer-open')) closeDrawer();
+      else document.getElementById('modal-slot').innerHTML = '';
+    }
+  });
+  document.getElementById('modal-slot').addEventListener('click', e => {
+    if (e.target.classList.contains('modal-backdrop')) document.getElementById('modal-slot').innerHTML = '';
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,40 @@
+# FastAPI als öffentliche UI — Platzhalter anpassen, auf nginx CT deployen.
+# Alternative: hub.santinel.li → FastAPI, Streamlit intern oder hub2.santinel.li
+
+server {
+    listen 80;
+    server_name PUBLIC_HOST;
+
+    location ^~ /.well-known/acme-challenge/ {
+        default_type "text/plain";
+        root /etc/nginx/renew-ssl/www;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name PUBLIC_HOST;
+
+    access_log /var/log/nginx/PUBLIC_HOST.access.log main;
+    error_log  /var/log/nginx/PUBLIC_HOST.error.log warn;
+
+    ssl_certificate     /etc/letsencrypt/live/PUBLIC_HOST/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/PUBLIC_HOST/privkey.pem;
+
+    include snippets/ssl-hardening-ecdsa.conf;
+    include snippets/security-headers.conf;
+
+    client_max_body_size 200m;
+
+    location / {
+        proxy_pass         http://BACKEND_HOST:8000;
+        include            snippets/proxy-headers.conf;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+}

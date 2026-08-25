@@ -1,0 +1,41 @@
+﻿<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Setup abgeschlossen – SlitProjektHub</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #0f1117; }
+    .auth-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 12px; padding: 2.5rem 2rem; width: 100%; max-width: 440px; }
+    .auth-card h1 { font-size: 1.4rem; color: #e2e8f0; margin-bottom: 0.25rem; }
+    .success-box { background: #1c4532; border: 1px solid #48bb78; border-radius: 6px; padding: 0.75rem; color: #c6f6d5; font-size: 0.875rem; margin-bottom: 1.5rem; }
+    .info-box { background: #1a365d; border: 1px solid #4299e1; border-radius: 6px; padding: 0.75rem; color: #bee3f8; font-size: 0.875rem; margin-bottom: 1rem; }
+    .btn-primary { display: block; width: 100%; padding: 0.65rem; background: #667eea; color: #fff; border: none; border-radius: 6px; font-size: 0.95rem; cursor: pointer; text-align: center; text-decoration: none; margin-top: 1.5rem; }
+    .btn-primary:hover { background: #5a67d8; }
+    code { background: #0f1117; padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.8rem; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="auth-card">
+    <h1>✅ Setup abgeschlossen</h1>
+    <div class="success-box">Admin-Account wurde erfolgreich erstellt.</div>
+
+    {% if two_factor_enabled and totp_uri %}
+    <p style="color:#e2e8f0;font-size:0.9rem;margin-bottom:0.75rem;">
+      <strong>2FA einrichten:</strong> Scanne den QR-Code mit deiner Authenticator-App (Google Authenticator, Authy, etc.):
+    </p>
+    <div style="text-align:center;margin:1rem 0;">
+      <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ totp_uri | urlencode }}" width="200" height="200" alt="TOTP QR Code" />
+    </div>
+    <div class="info-box">
+      Oder manuell eingeben:<br><code>{{ totp_uri }}</code>
+    </div>
+    {% else %}
+    <div class="info-box">2FA ist deaktiviert. Du kannst es jederzeit in <code>config/config.yaml</code> aktivieren (<code>two_factor_enabled: true</code>).</div>
+    {% endif %}
+
+    <a href="/auth/login" class="btn-primary">Zum Login</a>
+  </div>
+</body>
+</html>

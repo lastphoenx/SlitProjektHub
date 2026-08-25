@@ -1,0 +1,33 @@
+# Kopieren nach /etc/systemd/system/projekthub-backend.service
+# APP_ROOT und APP_USER anpassen, dann: systemctl daemon-reload && systemctl enable --now projekthub-backend
+
+[Unit]
+Description=SlitProjektHub FastAPI Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=APP_USER
+Group=APP_USER
+WorkingDirectory=APP_ROOT/backend
+EnvironmentFile=APP_ROOT/.env
+Environment=PATH=APP_ROOT/.venv/bin:/usr/bin
+Environment=PYTHONPATH=APP_ROOT
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+Environment=PYTHONUTF8=1
+
+ExecStart=APP_ROOT/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=APP_ROOT
+
+[Install]
+WantedBy=multi-user.target

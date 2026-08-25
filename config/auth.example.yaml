@@ -1,0 +1,9 @@
+# Vorlage — Kopieren: cp config/auth.example.yaml config/auth.yaml
+# config/auth.yaml ist gitignored (session_secret, Legacy-Users).
+
+# Generieren: python -c "import secrets; print(secrets.token_hex(32))"
+session_secret: "CHANGE_ME_GENERATE_RANDOM_HEX"
+session_epoch: 1
+
+# Optional Legacy (wird bei init_db nach app_user migriert, danach entfernen):
+# users: {}

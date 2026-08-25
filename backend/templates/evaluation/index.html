@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}Offertbeurteilung — SlitProjektHub{% endblock %}
+{% block topbar_title %}Offertbeurteilung{% endblock %}
+
+{% block content %}
+<div style="max-width:1400px">
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Offertbeurteilung (Phase C)</h1>
+    <p class="page-subtitle">Bieter, Kriterien, Matrix, gewichtete Rangfolge</p>
+  </div>
+  <form method="get" action="/evaluation" style="display:flex;gap:.5rem;align-items:flex-end">
+    <div>
+      <label class="form-label">Projekt</label>
+      <select class="form-select" name="project_key" onchange="this.form.submit()" style="min-width:280px">
+        {% for p in projects %}
+        <option value="{{ p.key }}" {% if p.key == project_key %}selected{% endif %}>{{ p.title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+</div>
+
+{% if not may_evaluate %}
+<div class="card" style="margin-bottom:1rem">
+  <p class="text-muted">Du siehst Rangfolge und Matrix. Bewertungen erfassen nur Super-User, PL intern und Product Owner.</p>
+</div>
+{% endif %}
+
+<!-- Rangfolge -->
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Rangfolge</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Rang</th><th>Bieter</th><th>Gesamt %</th><th>Eignung OK</th></tr></thead>
+    <tbody>
+      {% for r in rankings %}
+      <tr>
+        <td>{{ r.rank if r.rank else 'K.O./offen' }}</td>
+        <td>{{ r.bidder_name }}</td>
+        <td>{{ r.total_score if r.total_score is not none else '—' }}</td>
+        <td>{{ 'ja' if not r.ko else 'K.O.' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<!-- Matrix -->
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Bewertungsmatrix</h2>
+  {% if matrix_rows %}
+  <div style="overflow-x:auto">
+    <div class="table-wrap">
+  <table>
+      <thead>
+        <tr>
+          <th>Kriterium</th><th>Art</th><th>Gewicht</th>
+          {% for b in bidders %}<th>{{ b.name }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in matrix_rows %}
+        <tr>
+          <td>{{ row.name }}</td>
+          <td>{{ row.kind }}</td>
+          <td>{{ row.weight or '' }}</td>
+          {% for cell in row.cells %}<td>{{ cell.display }}</td>{% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  </div>
+  {% else %}
+  <p class="text-muted">Noch keine Kriterien oder Bieter.</p>
+  {% endif %}
+</div>
+
+{% if may_evaluate %}
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Bieter anlegen</h2>
+  <form method="post" action="/evaluation/bidder" style="display:flex;gap:.5rem;flex-wrap:wrap">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input class="form-input" name="name" placeholder="Bietername" required style="max-width:240px" />
+    <button type="submit" class="btn btn-primary">Anlegen</button>
+  </form>
+  {% for b in bidders %}
+  <div style="margin-top:.75rem;padding:.5rem 0;border-top:1px solid var(--color-border)">
+    <strong>{{ b.name }}</strong>
+  <form method="post" action="/evaluation/delete-bidder" style="display:inline;margin-left:.5rem">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input type="hidden" name="bidder_id" value="{{ b.id }}" />
+    <button type="submit" class="btn btn-danger btn-sm">Entfernen</button>
+  </form>
+    {% if offer_docs %}
+    <div style="margin-top:.35rem;font-size:.85rem">
+      {% for doc in offer_docs %}
+      <label style="display:block;margin:.2rem 0">
+        <input type="checkbox"
+          onchange="const f=document.getElementById('doc-{{ b.id }}-{{ doc.id }}'); f.querySelector('[name=linked]').value=this.checked?'true':'false'; f.submit();"
+          {% if doc.id in bidder_docs.get(b.id, []) %}checked{% endif %} />
+        {{ doc.filename }}
+      </label>
+      <form id="doc-{{ b.id }}-{{ doc.id }}" method="post" action="/evaluation/bidder-doc" style="display:none">
+        <input type="hidden" name="project_key" value="{{ project_key }}" />
+        <input type="hidden" name="bidder_id" value="{{ b.id }}" />
+        <input type="hidden" name="document_id" value="{{ doc.id }}" />
+        <input type="hidden" name="linked" value="{% if doc.id in bidder_docs.get(b.id, []) %}true{% else %}false{% endif %}" />
+      </form>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-muted" style="font-size:.8rem">Keine «{{ angebot_class }}»-Dokumente — unter Dokumente hochladen.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Kriterium anlegen</h2>
+  <form method="post" action="/evaluation/criterion" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.5rem;max-width:720px">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input class="form-input" name="name" placeholder="Name" required />
+    <select class="form-select" name="kind">
+      {% for k in criterion_kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
+    </select>
+    <input class="form-input" name="weight_pct" type="number" step="1" value="10" placeholder="Gewicht %" />
+    <input class="form-input" name="scale_max" type="number" value="10" min="1" />
+    <button type="submit" class="btn btn-primary">Anlegen</button>
+  </form>
+  <ul style="margin-top:.75rem;font-size:.85rem">
+    {% for c in criteria %}
+    <li style="margin:.35rem 0">
+      {{ c.kind }}: {{ c.name }}
+      {% if c.kind == 'zuschlag' %}({{ c.weight_pct }}%){% endif %}
+      <form method="post" action="/evaluation/delete-criterion" style="display:inline">
+        <input type="hidden" name="project_key" value="{{ project_key }}" />
+        <input type="hidden" name="criterion_id" value="{{ c.id }}" />
+        <button type="submit" class="btn btn-danger btn-sm">×</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Bewertung erfassen</h2>
+  <form method="post" action="/evaluation/score" style="display:grid;gap:.5rem;max-width:520px">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <label class="form-label">Bieter</label>
+    <select class="form-select" name="bidder_id" required>
+      {% for b in bidders %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}
+    </select>
+    <label class="form-label">Kriterium</label>
+    <select class="form-select" name="criterion_id" id="eval-criterion" required>
+      {% for c in criteria %}<option value="{{ c.id }}">{{ c.kind }}: {{ c.name }} (0–{{ c.scale_max }})</option>{% endfor %}
+    </select>
+    <label class="form-label">Wert</label>
+    <input class="form-input" name="value" type="number" step="0.5" min="0" required />
+    <label class="form-label">Begründung</label>
+    <textarea class="form-input" name="justification" rows="3"></textarea>
+    <label class="form-label">Quelle / Zitat</label>
+    <textarea class="form-input" name="source_chunk_ref" rows="2"></textarea>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+      <button type="submit" class="btn btn-primary">Speichern</button>
+      <button type="button" class="btn btn-secondary" onclick="evalSuggest()">KI-Vorschlag (RAG)</button>
+    </div>
+  </form>
+  <div id="eval-suggest-target"></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Export</h2>
+  <a class="btn btn-secondary" href="/evaluation/export.csv?project_key={{ project_key }}">CSV</a>
+  <a class="btn btn-secondary" href="/evaluation/export.xlsx?project_key={{ project_key }}" style="margin-left:.5rem">Excel</a>
+</div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function evalSuggest() {
+  const bidder = document.querySelector('[name=bidder_id]');
+  const crit = document.getElementById('eval-criterion');
+  if (!bidder || !crit) return;
+  const fd = new FormData();
+  fd.append('project_key', '{{ project_key }}');
+  fd.append('bidder_id', bidder.value);
+  fd.append('criterion_id', crit.value);
+  fd.append('provider', window.KI?.provider || '{{ llm_provider }}');
+  fd.append('model', window.KI?.model || '{{ llm_model }}');
+  const target = document.getElementById('eval-suggest-target');
+  target.innerHTML = '<p class="text-muted">RAG + LLM …</p>';
+  const r = await fetch('/evaluation/suggest', { method: 'POST', body: fd });
+  target.innerHTML = await r.text();
+}
+</script>
+{% endblock %}
