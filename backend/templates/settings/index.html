@@ -13,7 +13,7 @@
   testConnection() {
     this.testing = true;
     document.getElementById('conn-test-result').innerHTML = '';
-    fetch('/settings/test-connection?provider=' + $store.ki.provider)
+    fetch('/settings/test-connection?provider=' + encodeURIComponent($store.ki.provider) + '&model=' + encodeURIComponent($store.ki.model || ''))
       .then(r => r.text())
       .then(html => { document.getElementById('conn-test-result').innerHTML = html; this.testing = false; })
       .catch(() => { document.getElementById('conn-test-result').innerHTML = '<span style=color:var(--color-danger)>Verbindungsfehler</span>'; this.testing = false; });
