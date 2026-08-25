@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Visual-Lab — SlitProjektHub{% endblock %}
+{% block topbar_title %}Visual-Lab{% endblock %}
+
+{% block content %}
+<div style="max-width:1200px">
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Visual-Lab</h1>
+    <p class="page-subtitle">Prompt-Tests für PNG (Cloud), PPTX und Canvas-Vorschau — unabhängig von Projektideen.</p>
+  </div>
+</div>
+
+{% if error == 'no_key' %}
+<p class="text-muted" style="color:#fca5a5;margin-bottom:1rem">OpenAI API-Key fehlt für PNG-Generierung.</p>
+{% elif error %}
+<p class="text-muted" style="color:#fca5a5;margin-bottom:1rem">Generierung fehlgeschlagen — Prompt prüfen.</p>
+{% endif %}
+
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Neuer Test</h2>
+  <form method="post" action="/visual-lab/generate" style="display:grid;gap:.6rem;max-width:800px">
+    <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
+    <input type="hidden" name="llm_model" value="{{ llm_model }}" />
+    <div>
+      <label class="form-label">Ausgabe-Typ</label>
+      <select class="form-select" name="kind">
+        <option value="png">PNG — Cloud-Illustration (OpenAI, DSGVO-gefiltert)</option>
+        <option value="pptx">PPTX — Portfolio-Folie (lokal via KI-Einstellungen)</option>
+        <option value="preview">Canvas-Vorschau — PNG-Titelfolie (lokal, ohne PPTX)</option>
+      </select>
+    </div>
+    <div>
+      <label class="form-label">Prompt / Beschreibung *</label>
+      <textarea class="form-input" name="prompt" rows="4" required
+        placeholder="Beschreibe die gewünschte Visualisierung: Thema, Stil, Inhalt der Folie …"></textarea>
+      <p class="text-muted" style="font-size:.68rem;margin-top:.25rem">
+        PNG: Prompt wird vor Cloud-Übertragung gefiltert (keine Personennamen). PPTX/Preview: lokale KI.
+      </p>
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Optionale Anpassung (bei erneutem Test)</label>
+      <textarea class="form-input" name="refinement" rows="2"
+        placeholder="z.B. mehr Blau, weniger Text, Schwerpunkte auf Phase 2 …"></textarea>
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell (nur PNG)</label>
+      <select class="form-select" name="image_model">
+        {% for key in openai_image_models %}
+        <option value="{{ key }}" {% if key == default_image_model %}selected{% endif %}>{{ key }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Generieren</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Letzte Tests</h2>
+  {% if runs %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Typ</th>
+          <th>Prompt</th>
+          <th>Cloud</th>
+          <th>Erstellt</th>
+          <th style="width:140px">Aktionen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in runs %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td><span class="badge badge-neutral">{{ r.kind }}</span></td>
+          <td style="font-size:.78rem;max-width:320px;white-space:pre-wrap">{{ r.prompt_input[:120] }}{% if r.prompt_input|length > 120 %}…{% endif %}</td>
+          <td>{{ 'ja' if r.cloud_used else 'lokal' }}</td>
+          <td style="font-size:.78rem">{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>
+            {% set preview_hx_get = '/visual-lab/' ~ r.id ~ '/preview' %}
+            {% set inline_url = '/visual-lab/' ~ r.id ~ '/file?disposition=inline' if r.kind in ['png','preview'] else ('/visual-lab/' ~ r.id ~ '/thumb?disposition=inline' if r.preview_path else None) %}
+            {% set download_url = '/visual-lab/' ~ r.id ~ '/file' %}
+            {% include 'partials/_media_actions.html' %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted">Noch keine Tests — oben starten.</p>
+  {% endif %}
+</div>
+
+</div>
+
+<div id="modal-slot"></div>
+<script>
+document.getElementById('modal-slot').addEventListener('click', e => {
+  if (e.target.classList.contains('modal-backdrop')) document.getElementById('modal-slot').innerHTML = '';
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('modal-slot').innerHTML = '';
+});
+</script>
+{% endblock %}

@@ -483,12 +483,17 @@ def init_db() -> None:
         ProjectIdea,
         migrate_idea_db,
     )
+    from src.m17_visual_lab import (  # noqa: F401
+        VisualLabRun,
+        migrate_visual_lab_db,
+    )
 
     def _run() -> None:
         SQLModel.metadata.create_all(engine)
         migrate_db()
         migrate_evaluation_db()
         migrate_idea_db()
+        migrate_visual_lab_db()
         seed_app_roles()
         migrate_yaml_users_to_db()
 

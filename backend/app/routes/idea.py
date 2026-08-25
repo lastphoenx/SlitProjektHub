@@ -167,13 +167,24 @@ async def idea_assess(
 
 
 @router.post("/idea/{idea_id}/generate-deck", response_class=HTMLResponse)
-async def idea_generate_deck(request: Request, idea_id: int):
+async def idea_generate_deck(
+    request: Request,
+    idea_id: int,
+    refinement_notes: str = Form(""),
+    llm_provider: str = Form("openai"),
+    llm_model: str = Form(""),
+):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
     if idea.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?deck_error=1", status_code=303)
-    result = generate_portfolio_deck(idea_id)
+    result = generate_portfolio_deck(
+        idea_id,
+        refinement_notes=refinement_notes,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+    )
     if not result:
         return RedirectResponse(url=f"/idea/{idea_id}?deck_error=1", status_code=303)
     return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
@@ -186,6 +197,7 @@ async def idea_generate_illustration(
     image_model: str = Form(DEFAULT_OPENAI_IMAGE_MODEL),
     llm_provider: str = Form("openai"),
     llm_model: str = Form(""),
+    refinement_notes: str = Form(""),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
@@ -201,6 +213,7 @@ async def idea_generate_illustration(
         image_model=image_model,
         llm_provider=llm_provider,
         llm_model=llm_model,
+        refinement_notes=refinement_notes,
     )
     if not result:
         return RedirectResponse(url=f"/idea/{idea_id}?illustration_error=1", status_code=303)
@@ -260,8 +273,30 @@ async def idea_delete(request: Request, idea_id: int):
     return RedirectResponse(url="/idea", status_code=303)
 
 
+@router.get("/idea/{idea_id}/preview-image", response_class=HTMLResponse)
+async def idea_preview_image(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or not idea.image_path:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "idea/_preview_image.html",
+        {"request": request, "idea": idea},
+    )
+
+
+@router.get("/idea/{idea_id}/preview-deck", response_class=HTMLResponse)
+async def idea_preview_deck(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or not idea.deck_path:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        "idea/_preview_deck.html",
+        {"request": request, "idea": idea},
+    )
+
+
 @router.get("/idea/image/{idea_id}")
-async def idea_image(idea_id: int):
+async def idea_image(idea_id: int, disposition: str = "attachment"):
     idea = get_idea(idea_id)
     if not idea or not idea.image_path:
         raise HTTPException(404, "Kein Bild vorhanden")
@@ -269,20 +304,25 @@ async def idea_image(idea_id: int):
     if not path.exists():
         raise HTTPException(404, "Kein Bild vorhanden")
     ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-    resp = FileResponse(path, media_type=ctype)
+    disp = "inline" if disposition == "inline" else "attachment"
+    resp = FileResponse(path, media_type=ctype, content_disposition_type=disp)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp
 
 
 @router.get("/idea/deck-preview/{idea_id}")
-async def idea_deck_preview(idea_id: int):
+async def idea_deck_preview(idea_id: int, disposition: str = "inline"):
     idea = get_idea(idea_id)
     if not idea or not idea.deck_preview_path:
         raise HTTPException(404, "Keine Folien-Vorschau")
     path = _idea_images_dir() / Path(idea.deck_preview_path).name
     if not path.exists():
         raise HTTPException(404, "Keine Folien-Vorschau")
-    resp = FileResponse(path, media_type="image/png")
+    resp = FileResponse(
+        path,
+        media_type="image/png",
+        content_disposition_type="inline" if disposition == "inline" else "attachment",
+    )
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp
 
