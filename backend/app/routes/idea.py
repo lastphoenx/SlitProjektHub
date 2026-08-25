@@ -11,6 +11,7 @@ from backend.app.jinja_env import templates
 
 from src.m01_config import get_settings, load_user_settings
 from src.m14_auth import get_user_id, get_username_by_id, is_super_user, session_username
+from src.m08_llm import have_key
 from src.m16_idea import (
     ALLOWED_IMAGE_EXT,
     assess_project_idea_with_ai,
@@ -19,6 +20,14 @@ from src.m16_idea import (
     list_ideas,
     soft_delete_idea,
     update_idea_intake,
+)
+from src.m16_idea_visual import (
+    DEFAULT_OPENAI_IMAGE_MODEL,
+    OPENAI_IMAGE_MODELS,
+    generate_cloud_illustration,
+    generate_portfolio_deck,
+    idea_decks_dir,
+    idea_images_dir,
 )
 
 router = APIRouter()
@@ -43,9 +52,7 @@ def _may_edit_idea(idea, user_id: int | None, who: str) -> bool:
 
 
 def _idea_images_dir() -> Path:
-    d = Path(get_settings().data_dir) / "idea_images"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return idea_images_dir()
 
 
 @router.get("/idea", response_class=HTMLResponse)
@@ -120,7 +127,7 @@ async def idea_detail(request: Request, idea_id: int):
     user_id = get_user_id(who) if who else None
     settings = load_user_settings()
     may_edit = _may_edit_idea(idea, user_id, who)
-    assess_error = request.query_params.get("assess_error")
+    qp = request.query_params
     return templates.TemplateResponse(
         "idea/detail.html",
         {
@@ -131,9 +138,14 @@ async def idea_detail(request: Request, idea_id: int):
             "phases": idea.phases,
             "submitter": get_username_by_id(idea.submitted_by) if idea.submitted_by else None,
             "may_edit": may_edit,
-            "assess_error": assess_error,
+            "assess_error": qp.get("assess_error"),
+            "deck_error": qp.get("deck_error"),
+            "illustration_error": qp.get("illustration_error"),
             "llm_provider": settings.get("provider", "openai"),
             "llm_model": settings.get("model", ""),
+            "openai_image_models": OPENAI_IMAGE_MODELS,
+            "default_image_model": DEFAULT_OPENAI_IMAGE_MODEL,
+            "openai_key_ok": have_key("openai"),
         },
     )
 
@@ -151,6 +163,47 @@ async def idea_assess(
     result = assess_project_idea_with_ai(idea_id, provider=provider, model=model)
     if not result or result.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?assess_error=1", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+
+
+@router.post("/idea/{idea_id}/generate-deck", response_class=HTMLResponse)
+async def idea_generate_deck(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    if idea.status != "bewertet":
+        return RedirectResponse(url=f"/idea/{idea_id}?deck_error=1", status_code=303)
+    result = generate_portfolio_deck(idea_id)
+    if not result:
+        return RedirectResponse(url=f"/idea/{idea_id}?deck_error=1", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+
+
+@router.post("/idea/{idea_id}/generate-illustration", response_class=HTMLResponse)
+async def idea_generate_illustration(
+    request: Request,
+    idea_id: int,
+    image_model: str = Form(DEFAULT_OPENAI_IMAGE_MODEL),
+    llm_provider: str = Form("openai"),
+    llm_model: str = Form(""),
+):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    if not have_key("openai"):
+        return RedirectResponse(url=f"/idea/{idea_id}?illustration_error=no_key", status_code=303)
+    if idea.status != "bewertet":
+        return RedirectResponse(url=f"/idea/{idea_id}?illustration_error=not_assessed", status_code=303)
+    if image_model not in OPENAI_IMAGE_MODELS:
+        image_model = DEFAULT_OPENAI_IMAGE_MODEL
+    result = generate_cloud_illustration(
+        idea_id,
+        image_model=image_model,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+    )
+    if not result:
+        return RedirectResponse(url=f"/idea/{idea_id}?illustration_error=1", status_code=303)
     return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
 
 
@@ -219,3 +272,32 @@ async def idea_image(idea_id: int):
     resp = FileResponse(path, media_type=ctype)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp
+
+
+@router.get("/idea/deck-preview/{idea_id}")
+async def idea_deck_preview(idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or not idea.deck_preview_path:
+        raise HTTPException(404, "Keine Folien-Vorschau")
+    path = _idea_images_dir() / Path(idea.deck_preview_path).name
+    if not path.exists():
+        raise HTTPException(404, "Keine Folien-Vorschau")
+    resp = FileResponse(path, media_type="image/png")
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@router.get("/idea/deck/{idea_id}")
+async def idea_deck_download(idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or not idea.deck_path:
+        raise HTTPException(404, "Keine Portfolio-Folie")
+    path = idea_decks_dir() / Path(idea.deck_path).name
+    if not path.exists():
+        raise HTTPException(404, "Keine Portfolio-Folie")
+    title = (idea.ai_project_name or idea.title or f"Projektidee_{idea_id}").replace("/", "-")
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=f"{title[:60]}.pptx",
+    )
