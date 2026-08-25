@@ -66,31 +66,84 @@ DEFAULT_MODELS = {
 }
 
 
+def _ollama_env_url() -> str:
+    return (
+        (os.getenv("OLLAMA_BASE_URL") or "")
+        or (os.getenv("OLLAMA_URL") or "")
+        or (os.getenv("OLLAMA_API_URL") or "")
+    ).strip().rstrip("/")
+
+
+def _ollama_root_url() -> str:
+    raw = _ollama_env_url()
+    if not raw:
+        return ""
+    return raw.removesuffix("/v1")
+
+
 def _ollama_base_url() -> str:
-    raw = (os.getenv("OLLAMA_BASE_URL") or "").strip().rstrip("/")
+    raw = _ollama_root_url()
     if not raw:
         return ""
     return raw if raw.endswith("/v1") else f"{raw}/v1"
 
 
-def _openai_client(provider: str = "openai"):
+def _fetch_ollama_model_names(timeout: float = 4.0) -> list[str]:
+    import json
+    import urllib.error
+    import urllib.request
+
+    root = _ollama_root_url()
+    if not root:
+        return []
+    try:
+        with urllib.request.urlopen(f"{root}/api/tags", timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+        return [m["name"] for m in data.get("models", []) if m.get("name")]
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError):
+        return []
+
+
+def _resolve_ollama_model(model_name: str | None) -> str:
+    names = _fetch_ollama_model_names()
+    want = (model_name or "").strip() or DEFAULT_MODELS.get("ollama", "llama3.2")
+    if not names:
+        return want
+    if want in names:
+        return want
+    want_base = want.split(":")[0]
+    for name in names:
+        if name == want or name.startswith(f"{want}:") or name.split(":")[0] == want_base:
+            return name
+    return names[0]
+
+
+def _openai_client(provider: str = "openai", timeout: float | None = None):
     from openai import OpenAI
+    kw: dict = {}
+    if timeout is not None:
+        kw["timeout"] = timeout
     if provider == "ollama":
         base = _ollama_base_url()
         return OpenAI(
             base_url=base,
             api_key=os.getenv("OLLAMA_API_KEY", "ollama"),
+            **kw,
         )
-    return OpenAI()
+    return OpenAI(**kw)
 
 def get_available_models(provider: str) -> list[str]:
     """Returns list of available model names (keys) for a provider."""
+    if provider == "ollama" and have_key("ollama"):
+        live = _fetch_ollama_model_names()
+        if live:
+            return live
     return list(AVAILABLE_MODELS.get(provider, {}).keys())
 
 def get_model_id(provider: str, model_name: str | None) -> str:
     """Resolves model name to actual API model ID. Falls back to default if not found."""
     if provider == "ollama":
-        return (model_name or "").strip() or DEFAULT_MODELS.get("ollama", "llama3.2")
+        return _resolve_ollama_model(model_name)
     if not model_name:
         return DEFAULT_MODELS.get(provider, "")
     
@@ -355,9 +408,10 @@ def have_key(provider: str) -> bool:
         return False
     return bool(os.getenv(env, ""))
 
-def test_connection(provider: str, timeout: float = 10.0) -> tuple[bool, str]:
+def test_connection(provider: str, timeout: float = 10.0, model: str | None = None) -> tuple[bool, str]:
     """Testet echte Verbindung zur KI-API durch minimalen API-Call.
     Returns (success: bool, error_msg: str)"""
+    provider = (provider or "").strip().lower()
     if provider == "anthropic":
         try:
             import anthropic
@@ -414,9 +468,13 @@ def test_connection(provider: str, timeout: float = 10.0) -> tuple[bool, str]:
     if provider == "ollama":
         try:
             if not have_key("ollama"):
-                return (False, "OLLAMA_BASE_URL nicht in .env")
-            client = _openai_client("ollama")
-            model_id = DEFAULT_MODELS.get("ollama", "llama3.2")
+                return (False, "OLLAMA_BASE_URL / OLLAMA_URL nicht in .env")
+            root = _ollama_root_url()
+            names = _fetch_ollama_model_names(timeout=min(timeout, 5.0))
+            if not names:
+                return (False, f"Ollama nicht erreichbar oder keine Modelle ({root})")
+            model_id = _resolve_ollama_model(model)
+            client = _openai_client("ollama", timeout=timeout)
             client.chat.completions.create(
                 model=model_id,
                 messages=[{"role": "user", "content": "hi"}],
@@ -425,11 +483,13 @@ def test_connection(provider: str, timeout: float = 10.0) -> tuple[bool, str]:
             return (True, "")
         except Exception as e:
             err_str = str(e)
+            model_id = _resolve_ollama_model(model)
             if "connection" in err_str.lower() or "refused" in err_str.lower():
-                return (False, f"Ollama nicht erreichbar ({_ollama_base_url()})")
+                return (False, f"Ollama nicht erreichbar ({_ollama_root_url()})")
             if "404" in err_str or "not found" in err_str.lower():
-                return (False, f"Modell nicht gefunden — ollama pull {model_id}?")
-            return (False, err_str[:100])
+                avail = ", ".join(_fetch_ollama_model_names()[:5])
+                return (False, f"Modell '{model_id}' nicht gefunden. Verfügbar: {avail}")
+            return (False, err_str[:160])
     
     return (False, "Provider unbekannt")
 
@@ -1194,8 +1254,8 @@ def test_provider_connection(provider: str) -> tuple[bool, str]:
             return (True, f"Verbunden ({ans[:20]})")
 
         elif provider == "ollama":
+            model_id = _resolve_ollama_model(None)
             client = _openai_client("ollama")
-            model_id = DEFAULT_MODELS.get("ollama", "llama3.2")
             resp = client.chat.completions.create(
                 model=model_id,
                 messages=[{"role": "user", "content": user}],
@@ -1203,7 +1263,7 @@ def test_provider_connection(provider: str) -> tuple[bool, str]:
                 temperature=0.0,
             )
             ans = resp.choices[0].message.content.strip()
-            return (True, f"Verbunden ({ans[:20]})")
+            return (True, f"Verbunden ({model_id}: {ans[:20]})")
         
         return (False, "Unbekannter Provider")
     

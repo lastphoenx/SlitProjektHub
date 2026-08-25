@@ -1455,8 +1455,8 @@ async def settings_save(
 
 
 @app.get("/settings/test-connection", response_class=HTMLResponse)
-async def settings_test_connection(request: Request, provider: str = "openai"):
-    ok, msg = test_connection(provider)
+async def settings_test_connection(request: Request, provider: str = "openai", model: str = ""):
+    ok, msg = test_connection(provider, model=model or None)
     status = "success" if ok else "error"
     icon = '<path d="M20 6L9 17l-5-5"/>' if ok else '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
     color = "var(--color-success)" if ok else "var(--color-danger)"
@@ -2675,7 +2675,23 @@ async def generate_summary_endpoint(provider: str, title: str, content: str):
 async def health_check(request: Request):
     if request.method == "HEAD":
         return Response(status_code=200)
-    return {"status": "healthy", "message": "SlitProjektHub API is running", "version": "2.0.0"}
+    rev = "unknown"
+    try:
+        import subprocess
+        rev = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=ROOT,
+            text=True,
+            timeout=2,
+        ).strip()
+    except Exception:
+        pass
+    return {
+        "status": "healthy",
+        "message": "SlitProjektHub API is running",
+        "version": "2.0.0",
+        "git_rev": rev,
+    }
 
 
 # ── Jinja2 globals: inject KI settings + model list into every template ───
@@ -2684,7 +2700,7 @@ def _ki_global_json() -> str:
     """Returns all KI settings + providers + allModels as single JSON string for window.KI."""
     ctx = _load_settings_ctx()
     ctx["providers"] = providers_available() or ["openai"]
-    ctx["allModels"] = {p: list(m.keys()) for p, m in AVAILABLE_MODELS.items()}
+    ctx["allModels"] = {p: get_available_models(p) for p in AVAILABLE_MODELS}
     ctx["keyStatus"] = {p: have_key(p) for p in ["openai", "anthropic", "mistral", "ollama"]}
     return json.dumps(ctx)
 
