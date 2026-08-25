@@ -1,17 +1,24 @@
-{# Optional: eigene Cloud-KI nur für Visualisierung (Prompt/Folienstruktur) #}
+{# KI für Visualisierung: Standard / Anthropic / Ollama (+ OpenAI wenn Key) #}
 <div style="padding:.5rem .6rem;border:1px dashed var(--color-border);border-radius:.375rem;background:var(--color-surface-2)">
   <label class="form-label" style="font-size:.72rem;margin-bottom:.35rem">KI für Visualisierung (optional)</label>
   <p class="text-muted" style="font-size:.68rem;margin:0 0 .45rem">
-    Getrennt von der KI-Vorbewertung. Nur Cloud-Provider (OpenAI / Anthropic). Bilder (PNG) werden weiterhin über OpenAI Images erzeugt.
+    Getrennt von der Text-Bewertung. Struktur/Prompt: Standard, Anthropic oder Ollama.
+    Cloud-PNG (DALL·E) nur bei Ausgabe „Cloud-Illustration“.
   </p>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
     <div>
       <label class="form-label" style="font-size:.68rem">Provider</label>
       <select class="form-select visual-llm-provider" name="visual_llm_provider" data-form="{{ form_id or 'default' }}">
-        <option value="" {% if not form_visual_provider %}selected{% endif %}>— wie KI-Einstellungen —</option>
-        {% for p in visual_llm_providers %}
-        <option value="{{ p }}" {% if form_visual_provider == p %}selected{% endif %}>{{ p }}</option>
-        {% endfor %}
+        <option value="" {% if not form_visual_provider %}selected{% endif %}>Standard (KI-Einstellungen)</option>
+        {% if 'anthropic' in visual_llm_providers %}
+        <option value="anthropic" {% if form_visual_provider == 'anthropic' %}selected{% endif %}>Anthropic (Cloud)</option>
+        {% endif %}
+        {% if 'ollama' in visual_llm_providers %}
+        <option value="ollama" {% if form_visual_provider == 'ollama' %}selected{% endif %}>Ollama (lokal)</option>
+        {% endif %}
+        {% if 'openai' in visual_llm_providers %}
+        <option value="openai" {% if form_visual_provider == 'openai' %}selected{% endif %}>OpenAI (Cloud)</option>
+        {% endif %}
       </select>
     </div>
     <div>
@@ -20,7 +27,7 @@
         <option value="">— Standard —</option>
         {% for p, models in visual_llm_models.items() %}
         {% for m in models %}
-        <option value="{{ m }}" data-provider="{{ p }}" {% if form_visual_provider == p and form_visual_model == m %}selected{% endif %}>{{ p }}: {{ m }}</option>
+        <option value="{{ m }}" data-provider="{{ p }}" {% if form_visual_provider == p and form_visual_model == m %}selected{% endif %}>{{ m }}</option>
         {% endfor %}
         {% endfor %}
       </select>
@@ -29,7 +36,6 @@
 </div>
 <script>
 (function() {
-  const modelsJson = {{ visual_llm_models | tojson }};
   document.querySelectorAll('.visual-llm-provider').forEach(sel => {
     const formId = sel.dataset.form || 'default';
     const modelSel = document.getElementById('visual-llm-model-' + formId);

@@ -24,7 +24,7 @@ from pptx.dml.color import RGBColor
 
 from .m01_config import get_settings
 from .m03_db import get_session
-from .m08_llm import have_key, try_models_with_messages
+from .m08_llm import get_available_models, have_key, try_models_with_messages
 from .m16_idea import ProjectIdea, get_idea
 
 log = logging.getLogger(__name__)
@@ -37,15 +37,25 @@ OPENAI_IMAGE_MODELS: dict[str, str] = {
 }
 DEFAULT_OPENAI_IMAGE_MODEL = "dall-e-3"
 
-# Cloud-Provider für Visualisierung (Prompt/Folienstruktur) — optional getrennt von KI-Einstellungen
-VISUAL_TEXT_PROVIDERS: tuple[str, ...] = ("openai", "anthropic")
+# Provider für Visualisierung (Prompt/Folienstruktur) — optional getrennt von KI-Einstellungen
+VISUAL_TEXT_PROVIDERS: tuple[str, ...] = ("anthropic", "ollama", "openai")
 VISUAL_TEXT_MODELS: dict[str, list[str]] = {
     "openai": ["gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5.4-mini"],
     "anthropic": ["sonnet-4.6", "haiku-4.5", "opus-4.6"],
+    "ollama": ["qwen3:32b", "llama3.3:70b", "qwen3:8b", "llama3.2"],
 }
 VISUAL_TEXT_DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
     "anthropic": "sonnet-4.6",
+    "ollama": "qwen3:32b",
+}
+
+IDEA_VISUAL_OUTPUT_FORMATS: dict[str, str] = {
+    "pptx": "PowerPoint — Text + Prozessdiagramm (lokal)",
+    "png_local": "PNG — Prozessdiagramm / Canvas (lokal)",
+    "png_cloud": "PNG — Cloud-Illustration (OpenAI Images)",
+    "docx": "Word — Bericht nur Text",
+    "docx_png": "Word — Bericht + Diagramm",
 }
 
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
@@ -73,7 +83,23 @@ def visual_text_providers_available() -> list[str]:
 
 
 def visual_text_models_map() -> dict[str, list[str]]:
-    return {p: list(VISUAL_TEXT_MODELS.get(p, [])) for p in visual_text_providers_available()}
+    result: dict[str, list[str]] = {}
+    for p in visual_text_providers_available():
+        curated = list(VISUAL_TEXT_MODELS.get(p, []))
+        if p == "ollama":
+            live = get_available_models("ollama")
+            models = [m for m in curated if m in live]
+            if not models and live:
+                models = live[:12]
+            elif models:
+                for m in live:
+                    if m not in models and len(models) < 12:
+                        models.append(m)
+        else:
+            models = curated
+        if models:
+            result[p] = models
+    return result
 
 
 def resolve_visual_llm(
@@ -603,3 +629,136 @@ def generate_cloud_illustration(
         ses.commit()
         ses.refresh(obj)
         return obj
+
+
+def idea_docx_dir() -> Path:
+    d = Path(get_settings().data_dir) / "idea_docx"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def build_docx_bytes(content: DeckContent, include_diagram: bool = False) -> bytes:
+    from docx import Document
+    from docx.shared import Inches
+
+    doc = Document()
+    doc.add_heading(content.title, 0)
+    if content.subtitle:
+        doc.add_paragraph(content.subtitle)
+
+    def _bullets(heading: str, lines: list[str]) -> None:
+        if not lines:
+            return
+        doc.add_heading(heading, level=1)
+        for line in lines:
+            doc.add_paragraph(line, style="List Bullet")
+
+    _bullets("Zusammenfassung", content.summary_lines)
+    _bullets("Ressourcen & Kosten", content.resource_lines)
+    _bullets("Herausforderungen", content.challenge_lines)
+    _bullets("Grobe Phasenplanung", content.phase_lines)
+    _bullets("Empfehlung", content.recommendation_lines)
+
+    if include_diagram and content.phase_lines:
+        labels = _phase_labels_from_lines(content.phase_lines)
+        if len(labels) >= 2:
+            doc.add_heading("Prozessdarstellung", level=1)
+            png = build_process_diagram_png(labels, content.title[:60])
+            tmp = idea_images_dir() / f"_tmp_{uuid.uuid4().hex[:8]}.png"
+            tmp.write_bytes(png)
+            try:
+                doc.add_picture(str(tmp), width=Inches(6.0))
+            finally:
+                tmp.unlink(missing_ok=True)
+
+    doc.add_paragraph("KI-Vorbewertung — ersetzt keine fachliche Prüfung · SlitProjektHub")
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def generate_local_diagram_png(
+    idea_id: int,
+    refinement_notes: str = "",
+    llm_provider: str = "openai",
+    llm_model: str = "",
+) -> Optional[ProjectIdea]:
+    idea = get_idea(idea_id)
+    if not idea or idea.status != "bewertet":
+        return None
+    content = deck_content_from_idea(idea, refinement_notes, llm_provider, llm_model)
+    fname = f"diag_{idea_id}_{uuid.uuid4().hex[:10]}.png"
+    (idea_images_dir() / fname).write_bytes(build_deck_preview_png(content))
+    with get_session() as ses:
+        obj = ses.get(ProjectIdea, idea_id)
+        if not obj:
+            return None
+        obj.image_path = fname
+        obj.image_source = "diagram"
+        obj.illustration_model = None
+        obj.illustration_prompt_safe = None
+        obj.illustration_generated_at = _now()
+        obj.updated_at = _now()
+        ses.add(obj)
+        ses.commit()
+        ses.refresh(obj)
+        return obj
+
+
+def generate_idea_docx(
+    idea_id: int,
+    include_diagram: bool = False,
+    refinement_notes: str = "",
+    llm_provider: str = "openai",
+    llm_model: str = "",
+) -> Optional[ProjectIdea]:
+    idea = get_idea(idea_id)
+    if not idea or idea.status != "bewertet":
+        return None
+    content = deck_content_from_idea(idea, refinement_notes, llm_provider, llm_model)
+    docx_name = f"report_{idea_id}_{uuid.uuid4().hex[:10]}.docx"
+    (idea_docx_dir() / docx_name).write_bytes(build_docx_bytes(content, include_diagram=include_diagram))
+    with get_session() as ses:
+        obj = ses.get(ProjectIdea, idea_id)
+        if not obj:
+            return None
+        obj.docx_path = docx_name
+        obj.docx_generated_at = _now()
+        obj.updated_at = _now()
+        ses.add(obj)
+        ses.commit()
+        ses.refresh(obj)
+        return obj
+
+
+def generate_idea_visual(
+    idea_id: int,
+    output_format: str,
+    refinement_notes: str = "",
+    llm_provider: str = "openai",
+    llm_model: str = "",
+    image_model: str = DEFAULT_OPENAI_IMAGE_MODEL,
+) -> tuple[Optional[ProjectIdea], Optional[str]]:
+    fmt = (output_format or "").strip().lower()
+    if fmt not in IDEA_VISUAL_OUTPUT_FORMATS:
+        return None, "invalid_format"
+    if fmt == "pptx":
+        obj = generate_portfolio_deck(idea_id, refinement_notes, llm_provider, llm_model)
+        return obj, None if obj else "generation_failed"
+    if fmt == "png_local":
+        obj = generate_local_diagram_png(idea_id, refinement_notes, llm_provider, llm_model)
+        return obj, None if obj else "generation_failed"
+    if fmt == "png_cloud":
+        if not have_key("openai"):
+            return None, "no_key"
+        obj = generate_cloud_illustration(
+            idea_id, image_model, llm_provider, llm_model, refinement_notes
+        )
+        return obj, None if obj else "png_failed"
+    if fmt == "docx":
+        obj = generate_idea_docx(idea_id, False, refinement_notes, llm_provider, llm_model)
+        return obj, None if obj else "generation_failed"
+    if fmt == "docx_png":
+        obj = generate_idea_docx(idea_id, True, refinement_notes, llm_provider, llm_model)
+        return obj, None if obj else "generation_failed"
+    return None, "invalid_format"
