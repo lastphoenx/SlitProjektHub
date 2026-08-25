@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -69,6 +70,63 @@ _NAME_PAIR_RE = re.compile(
     r"\b[A-ZÄÖÜ][a-zäöüß]{2,}\s+[A-ZÄÖÜ][a-zäöüß]{2,}\b"
 )
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
+
+_DIAGRAM_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+]
+_diagram_font_path_cache: Optional[str] = None
+_diagram_font_warned = False
+
+
+def _nfc_text(text: str) -> str:
+    return unicodedata.normalize("NFC", text) if text else ""
+
+
+def _resolve_diagram_font_path() -> Optional[str]:
+    global _diagram_font_path_cache
+    if _diagram_font_path_cache is not None:
+        return _diagram_font_path_cache or None
+    env_path = os.environ.get("SLIT_DIAGRAM_FONT", "").strip()
+    candidates: list[str] = []
+    if env_path:
+        candidates.append(env_path)
+    candidates.extend(_DIAGRAM_FONT_CANDIDATES)
+    candidates.append("arial.ttf")
+    for path in candidates:
+        if path and Path(path).is_file():
+            _diagram_font_path_cache = path
+            return path
+    _diagram_font_path_cache = ""
+    return None
+
+
+def _load_diagram_font(size: int) -> ImageFont.ImageFont:
+    global _diagram_font_warned
+    path = _resolve_diagram_font_path()
+    if path:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError as exc:
+            log.warning("Diagram font %s failed: %s", path, exc)
+    if not _diagram_font_warned:
+        log.warning("No TrueType diagram font found; umlauts may render incorrectly")
+        _diagram_font_warned = True
+    return ImageFont.load_default()
+
+
+def _draw_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    font: ImageFont.ImageFont,
+    **kwargs: Any,
+) -> None:
+    draw.text(xy, _nfc_text(text), font=font, **kwargs)
 
 
 @dataclass
@@ -466,16 +524,12 @@ def build_process_diagram_png(labels: list[str], title: str = "") -> bytes:
     w, h = 1280, 720
     img = Image.new("RGB", (w, h), color=(245, 247, 252))
     draw = ImageDraw.Draw(img)
-    try:
-        font_t = ImageFont.truetype("arial.ttf", 36)
-        font_b = ImageFont.truetype("arial.ttf", 18)
-        font_s = ImageFont.truetype("arial.ttf", 14)
-    except OSError:
-        font_t = ImageFont.load_default()
-        font_b = font_t
-        font_s = font_t
+    font_t = _load_diagram_font(36)
+    font_b = _load_diagram_font(18)
+    font_s = _load_diagram_font(14)
+    title = _nfc_text(title)
     if title:
-        draw.text((48, 36), title[:70], fill=(30, 58, 95), font=font_t)
+        _draw_text(draw, (48, 36), title[:70], font_t, fill=(30, 58, 95))
     n = max(len(labels), 1)
     box_w, box_h, gap = 200, 88, 36
     total = n * box_w + (n - 1) * gap
@@ -483,23 +537,24 @@ def build_process_diagram_png(labels: list[str], title: str = "") -> bytes:
     y = 200
     colors = [(30, 58, 95), (45, 85, 130), (60, 110, 165), (75, 130, 190)]
     for i, label in enumerate(labels[:8]):
+        label = _nfc_text(label)
         x = start_x + i * (box_w + gap)
         col = colors[i % len(colors)]
         draw.rounded_rectangle([x, y, x + box_w, y + box_h], radius=12, fill=col)
         num = str(i + 1)
-        draw.text((x + 14, y + 10), num, fill=(255, 255, 255), font=font_b)
+        _draw_text(draw, (x + 14, y + 10), num, font_b, fill=(255, 255, 255))
         words = label.split()
         line, ly = "", y + 38
         for word in words:
             test = f"{line} {word}".strip()
             if len(test) > 22 and line:
-                draw.text((x + 12, ly), line, fill=(230, 235, 245), font=font_s)
+                _draw_text(draw, (x + 12, ly), line, font_s, fill=(230, 235, 245))
                 ly += 18
                 line = word
             else:
                 line = test
         if line:
-            draw.text((x + 12, ly), line[:26], fill=(230, 235, 245), font=font_s)
+            _draw_text(draw, (x + 12, ly), line[:26], font_s, fill=(230, 235, 245))
         if i < len(labels) - 1:
             ax = x + box_w + 6
             draw.polygon([(ax, y + box_h // 2 - 8), (ax + gap - 12, y + box_h // 2), (ax, y + box_h // 2 + 8)], fill=(120, 140, 170))
@@ -553,19 +608,17 @@ def build_vertical_process_diagram_png(
     title: str = "",
 ) -> bytes:
     w = 900
-    try:
-        font_t = ImageFont.truetype("arial.ttf", 32)
-        font_h = ImageFont.truetype("arial.ttf", 22)
-        font_b = ImageFont.truetype("arial.ttf", 16)
-        font_s = ImageFont.truetype("arial.ttf", 13)
-    except OSError:
-        font_t = font_h = font_b = font_s = ImageFont.load_default()
+    font_t = _load_diagram_font(32)
+    font_h = _load_diagram_font(22)
+    font_b = _load_diagram_font(16)
+    font_s = _load_diagram_font(13)
     details = phase_details[:8]
+    title = _nfc_text(title)
     h = _vertical_diagram_canvas_height(details, title)
     img = Image.new("RGB", (w, h), color=(252, 252, 254))
     draw = ImageDraw.Draw(img)
     if title:
-        draw.text((40, 24), title[:70], fill=(30, 58, 95), font=font_t)
+        _draw_text(draw, (40, 24), title[:70], font_t, fill=(30, 58, 95))
     y = 80 if title else 40
     cx = w // 2
     for i, pd in enumerate(details):
@@ -576,14 +629,14 @@ def build_vertical_process_diagram_png(
         bx = 80
         draw.rounded_rectangle([bx, y, w - 80, y + ph], radius=14, fill=col, outline=border, width=2)
         label = f"Phase {i + 1}: {pd.get('title', '')}"
-        draw.text((bx + 16, y + 10), label[:55], fill=border, font=font_h)
+        _draw_text(draw, (bx + 16, y + 10), label[:55], font_h, fill=border)
         by = y + 38
         for b in bullets[:4]:
-            draw.text((bx + 20, by), f"· {b[:70]}", fill=(55, 65, 80), font=font_b)
+            _draw_text(draw, (bx + 20, by), f"· {b[:70]}", font_b, fill=(55, 65, 80))
             by += 22
         par = (pd.get("parallel_note") or "").strip()
         if par:
-            draw.text((bx + 20, by), f"parallel: {par[:60]}", fill=(100, 110, 130), font=font_s)
+            _draw_text(draw, (bx + 20, by), f"parallel: {par[:60]}", font_s, fill=(100, 110, 130))
         if i < len(details) - 1:
             ay = y + ph + 4
             draw.polygon([(cx, ay + 18), (cx - 10, ay), (cx + 10, ay)], fill=(140, 150, 170))
@@ -596,35 +649,29 @@ def build_vertical_process_diagram_png(
 
 
 def _render_slide_panel(heading: str, lines: list[str], width: int = 1280) -> Image.Image:
-    try:
-        font_h = ImageFont.truetype("arial.ttf", 26)
-        font_b = ImageFont.truetype("arial.ttf", 15)
-    except OSError:
-        font_h = font_b = ImageFont.load_default()
+    font_h = _load_diagram_font(26)
+    font_b = _load_diagram_font(15)
     lh = 26
     h = 70 + min(len(lines), 12) * lh + 30
     img = Image.new("RGB", (width, h), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, width, 4], fill=(30, 58, 95))
-    draw.text((48, 28), heading, fill=(30, 58, 95), font=font_h)
+    _draw_text(draw, (48, 28), heading, font_h, fill=(30, 58, 95))
     y = 68
     for line in lines[:12]:
-        draw.text((56, y), f"• {line[:110]}", fill=(50, 55, 65), font=font_b)
+        _draw_text(draw, (56, y), f"• {line[:110]}", font_b, fill=(50, 55, 65))
         y += lh
     return img
 
 
 def _render_title_panel(content: DeckContent, width: int = 1280) -> Image.Image:
-    try:
-        font_l = ImageFont.truetype("arial.ttf", 40)
-        font_s = ImageFont.truetype("arial.ttf", 20)
-    except OSError:
-        font_l = font_s = ImageFont.load_default()
+    font_l = _load_diagram_font(40)
+    font_s = _load_diagram_font(20)
     img = Image.new("RGB", (width, 220), color=(30, 58, 95))
     draw = ImageDraw.Draw(img)
-    draw.text((48, 60), content.title[:80], fill=(255, 255, 255), font=font_l)
+    _draw_text(draw, (48, 60), content.title[:80], font_l, fill=(255, 255, 255))
     if content.subtitle:
-        draw.text((48, 130), content.subtitle[:120], fill=(200, 210, 225), font=font_s)
+        _draw_text(draw, (48, 130), content.subtitle[:120], font_s, fill=(200, 210, 225))
     return img
 
 
