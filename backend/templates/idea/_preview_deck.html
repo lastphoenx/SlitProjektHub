@@ -1,0 +1,27 @@
+<div class="modal-backdrop">
+  <div class="modal" style="max-width:min(96vw,1100px);width:min(96vw,1100px);max-height:92vh;display:flex;flex-direction:column" role="dialog">
+    <div class="modal-header" style="flex-shrink:0">
+      <div>
+        <h2 class="modal-title" style="font-size:.95rem">Portfolio-Folie — {{ idea.ai_project_name or idea.title or 'Idee' }}</h2>
+        <p class="text-muted" style="font-size:.72rem">Vorschau Titelfolie · PPTX editierbar</p>
+      </div>
+      <div style="display:flex;gap:.35rem">
+        {% if idea.deck_preview_path %}
+        <a class="btn btn-secondary btn-sm" href="/idea/deck-preview/{{ idea.id }}?disposition=inline" target="_blank" rel="noopener">Vollansicht</a>
+        {% endif %}
+        <a class="btn btn-secondary btn-sm" href="/idea/deck/{{ idea.id }}">PPTX Download</a>
+        <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+    <div style="flex:1;min-height:0;overflow:auto;text-align:center;padding:.5rem">
+      {% if idea.deck_preview_path %}
+      <img src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="Folien-Vorschau"
+           style="max-width:100%;max-height:70vh;border-radius:.375rem;border:1px solid var(--color-border)">
+      {% else %}
+      <p class="text-muted">Keine Vorschau — PPTX direkt herunterladen.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>

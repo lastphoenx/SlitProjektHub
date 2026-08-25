@@ -49,11 +49,17 @@
 
   {% if idea.image_path %}
   <div style="margin-top:.75rem">
-    <label class="form-label" style="font-size:.72rem">
-      Visualisierung
-      {% if idea.image_source == 'dalle' %}<span class="text-muted">(Cloud-Illustration)</span>{% elif idea.image_source == 'upload' %}<span class="text-muted">(Upload)</span>{% endif %}
-    </label>
-    <img src="/idea/image/{{ idea.id }}" alt="Visualisierung der Projektidee" style="max-width:100%;max-height:400px;border-radius:8px;border:1px solid var(--color-border)" />
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.35rem">
+      <label class="form-label" style="font-size:.72rem;margin:0">
+        Visualisierung
+        {% if idea.image_source == 'dalle' %}<span class="text-muted">(Cloud-Illustration)</span>{% elif idea.image_source == 'upload' %}<span class="text-muted">(Upload)</span>{% endif %}
+      </label>
+      {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-image' %}
+      {% set inline_url = '/idea/image/' ~ idea.id ~ '?disposition=inline' %}
+      {% set download_url = '/idea/image/' ~ idea.id %}
+      {% include 'partials/_media_actions.html' %}
+    </div>
+    <img src="/idea/image/{{ idea.id }}?disposition=inline" alt="Visualisierung der Projektidee" style="max-width:100%;max-height:220px;border-radius:8px;border:1px solid var(--color-border)" />
     {% if idea.image_source == 'dalle' and idea.illustration_model %}
     <p class="text-muted" style="font-size:.7rem;margin-top:.35rem">
       Modell: {{ idea.illustration_model }}
@@ -97,20 +103,33 @@
   <div style="display:grid;gap:1rem">
 
     <div style="padding:.75rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)">
-      <strong style="font-size:.8rem">Variante 1 — Portfolio-Folie (lokal, PPTX)</strong>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.35rem">
+        <strong style="font-size:.8rem">Variante 1 — Portfolio-Folie (lokal, PPTX)</strong>
+        {% if idea.deck_path %}
+        {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-deck' %}
+        {% set inline_url = '/idea/deck-preview/' ~ idea.id ~ '?disposition=inline' if idea.deck_preview_path else None %}
+        {% set download_url = '/idea/deck/' ~ idea.id %}
+        {% include 'partials/_media_actions.html' %}
+        {% endif %}
+      </div>
       <p class="text-muted" style="font-size:.78rem;margin:.35rem 0 .6rem">
         Erzeugt eine editierbare PowerPoint aus der KI-Bewertung (Zusammenfassung, PT/CHF, Phasen, Empfehlung). Keine Cloud, kein Rohtext-Export.
       </p>
-      <form method="post" action="/idea/{{ idea.id }}/generate-deck" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
-        <button type="submit" class="btn btn-primary btn-sm">Portfolio-Folie erstellen</button>
-        {% if idea.deck_path %}
-        <a class="btn btn-secondary btn-sm" href="/idea/deck/{{ idea.id }}">PPTX herunterladen</a>
-        {% endif %}
+      <form method="post" action="/idea/{{ idea.id }}/generate-deck" style="display:grid;gap:.5rem;max-width:520px">
+        <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
+        <input type="hidden" name="llm_model" value="{{ llm_model }}" />
+        <div>
+          <label class="form-label" style="font-size:.72rem">Optionale Anpassung {% if idea.deck_path %}(bei Neu-Generierung){% endif %}</label>
+          <textarea class="form-input" name="refinement_notes" rows="2"
+            placeholder="z.B. weniger Text auf Titelfolie, Schwerpunkte Phase 2 hervorheben, Farben neutral …"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">
+          {% if idea.deck_path %}Portfolio-Folie neu generieren{% else %}Portfolio-Folie erstellen{% endif %}
+        </button>
       </form>
       {% if idea.deck_preview_path %}
       <div style="margin-top:.75rem">
-        <label class="form-label" style="font-size:.72rem">Vorschau (Titelfolie)</label>
-        <img src="/idea/deck-preview/{{ idea.id }}" alt="Folien-Vorschau" style="max-width:100%;max-height:280px;border-radius:8px;border:1px solid var(--color-border)" />
+        <img src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="Folien-Vorschau" style="max-width:100%;max-height:200px;border-radius:8px;border:1px solid var(--color-border)" />
         {% if idea.deck_generated_at %}
         <p class="text-muted" style="font-size:.7rem;margin-top:.25rem">Erstellt: {{ idea.deck_generated_at.strftime('%d.%m.%Y %H:%M') }}</p>
         {% endif %}
@@ -128,7 +147,7 @@
       {% if not openai_key_ok %}
       <p class="text-muted" style="font-size:.72rem;color:#fca5a5">OPENAI_API_KEY in .env erforderlich.</p>
       {% else %}
-      <form method="post" action="/idea/{{ idea.id }}/generate-illustration" style="display:grid;gap:.5rem;max-width:420px">
+      <form method="post" action="/idea/{{ idea.id }}/generate-illustration" style="display:grid;gap:.5rem;max-width:520px">
         <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
         <input type="hidden" name="llm_model" value="{{ llm_model }}" />
         <div>
@@ -140,7 +159,15 @@
           </select>
           <p class="text-muted" style="font-size:.68rem;margin-top:.2rem">Empfohlen: dall-e-3 für Illustrationen. Nur für Bilder — Text-Bewertung bleibt in KI-Einstellungen.</p>
         </div>
-        <button type="submit" class="btn btn-secondary btn-sm">Cloud-Illustration erzeugen</button>
+        <div>
+          <label class="form-label" style="font-size:.72rem">Optionale Anpassung {% if idea.image_source == 'dalle' %}(bei Neu-Generierung){% endif %}</label>
+          <textarea class="form-input" name="refinement_notes" rows="2"
+            placeholder="z.B. im Grossen passt es, aber mehr Blau, weniger Icons, Fokus auf Digitalisierung …"></textarea>
+          <p class="text-muted" style="font-size:.68rem;margin-top:.2rem">Wird DSGVO-gefiltert vor Cloud-Übertragung.</p>
+        </div>
+        <button type="submit" class="btn btn-secondary btn-sm">
+          {% if idea.image_source == 'dalle' %}Cloud-Illustration neu generieren{% else %}Cloud-Illustration erzeugen{% endif %}
+        </button>
       </form>
       {% endif %}
     </div>
@@ -253,4 +280,14 @@
 </div>
 
 </div>
+
+<div id="modal-slot"></div>
+<script>
+document.getElementById('modal-slot').addEventListener('click', e => {
+  if (e.target.classList.contains('modal-backdrop')) document.getElementById('modal-slot').innerHTML = '';
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('modal-slot').innerHTML = '';
+});
+</script>
 {% endblock %}

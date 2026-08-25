@@ -5,13 +5,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.m16_idea_visual import _sanitize_for_cloud_text, build_dsgvo_illustration_prompt
+from src.m16_idea_visual import sanitize_for_cloud_text, build_dsgvo_illustration_prompt
 from src.m16_idea import ProjectIdea
 
 
 def test_sanitize_removes_email():
     raw = "Kontakt herr.schmidt@beispiel.ch wegen Budget."
-    out = _sanitize_for_cloud_text(raw)
+    out = sanitize_for_cloud_text(raw)
     assert "@" not in out
 
 
