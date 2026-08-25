@@ -914,6 +914,12 @@ async def documents_delete(doc_id: int):
     return response
 
 
+# Nur diese Typen dürfen inline (im Browser-Tab) gerendert werden. Alles andere
+# (insbesondere .html/.svg) würde als aktiver Content in der App-Origin laufen
+# koennen (gespeichertes XSS ueber Dokument-Upload) - erzwingt Download.
+_INLINE_SAFE_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+
 @app.get("/documents/{doc_id}/file")
 async def documents_file(doc_id: int, disposition: str = "attachment"):
     doc = get_document_by_id(doc_id)
@@ -923,13 +929,16 @@ async def documents_file(doc_id: int, disposition: str = "attachment"):
     if not path:
         raise HTTPException(status_code=404, detail="Datei nicht auf dem Server")
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    disp = "inline" if disposition == "inline" else "attachment"
-    return FileResponse(
+    wants_inline = disposition == "inline" and path.suffix.lower() in _INLINE_SAFE_EXTENSIONS
+    disp = "inline" if wants_inline else "attachment"
+    resp = FileResponse(
         path,
         media_type=media_type,
         filename=doc.filename,
         content_disposition_type=disp,
     )
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
 
 
 @app.get("/documents/{doc_id}/preview", response_class=HTMLResponse)
