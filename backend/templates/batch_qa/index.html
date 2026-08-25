@@ -8,6 +8,9 @@ window.__bqaProjects = {{ projects | tojson | safe }};
 </script>
 <div x-data="batchQA()" x-init="init()" style="max-width:1600px">
 
+{% set hint_context = 'batch-qa' %}
+{% include 'partials/_ki_model_hint.html' %}
+
 <!-- ══════════════════════════════════════════════════════════════════
      STEP 1 — Projekt
 ═══════════════════════════════════════════════════════════════════ -->

@@ -33,6 +33,9 @@
   }
 }">
 
+  {% set hint_context = 'taskgen' %}
+  {% include 'partials/_ki_model_hint.html' %}
+
   <!-- RAG info banner -->
   <div style="background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);border-radius:.5rem;padding:.6rem .9rem;margin-bottom:1.25rem;font-size:.8rem;color:var(--color-text-muted);display:flex;align-items:flex-start;gap:.5rem">
     <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color:#3b82f6;flex-shrink:0;margin-top:.1rem"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
