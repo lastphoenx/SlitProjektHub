@@ -16,7 +16,11 @@
     <div style="flex:1;min-height:0;overflow:auto">
       <div class="card" style="margin-bottom:.75rem;background:var(--color-surface-2)">
         <strong>Offiziell{% if criterion.auto_price %} (aus Preisblatt){% else %} (Ø Bewerter){% endif %}:</strong>
-        {{ "%.2f"|format(official) if official is not none else "—" }}
+        {% if criterion.scale_max == 1 %}
+          {{ "Ja" if official == 1 else ("Nein" if official == 0 else "—") }}
+        {% else %}
+          {{ "%.2f"|format(official) if official is not none else "—" }}
+        {% endif %}
       </div>
 
       <div class="table-wrap" style="margin-bottom:.75rem">
@@ -26,7 +30,7 @@
             {% if ai_row %}
             <tr style="background:var(--color-surface-2)">
               <td>🤖 KI-Vorschlag</td>
-              <td>{{ ai_row.value }}</td>
+              <td>{{ ("Ja" if ai_row.value == 1 else "Nein") if criterion.scale_max == 1 else ai_row.value }}</td>
               <td style="font-size:.8rem">{{ ai_row.justification or "" }}{% if ai_row.source_chunk_ref %}<br><span class="text-muted">{{ ai_row.source_chunk_ref[:200] }}</span>{% endif %}</td>
             </tr>
             {% endif %}
@@ -36,7 +40,7 @@
                 {% if may_see_evaluators %}Bewerter #{{ sc.evaluator_user_id }}{% else %}Bewerter{% endif %}
                 {% if sc.evaluator_user_id == my_user_id %}<span class="text-muted">(du)</span>{% endif %}
               </td>
-              <td>{{ sc.value }}</td>
+              <td>{{ ("Ja" if sc.value == 1 else "Nein") if criterion.scale_max == 1 else sc.value }}</td>
               <td style="font-size:.8rem">{{ sc.justification or "" }}</td>
             </tr>
             {% else %}
@@ -52,7 +56,15 @@
         <input type="hidden" name="bidder_id" value="{{ bidder.id }}" />
         <input type="hidden" name="criterion_id" value="{{ criterion.id }}" />
         <label class="form-label">{{ "Deine Bewertung ändern" if my_user_id in user_rows|map(attribute='evaluator_user_id')|list else "Deine Bewertung" }}</label>
+        {% if criterion.scale_max == 1 %}
+        <select class="form-select" name="value" required>
+          <option value="">— wählen —</option>
+          <option value="1">Ja / erfüllt</option>
+          <option value="0">Nein / nicht erfüllt</option>
+        </select>
+        {% else %}
         <input class="form-input" name="value" type="number" step="0.5" min="0" max="{{ criterion.scale_max }}" required />
+        {% endif %}
         <textarea class="form-input" name="justification" rows="2" placeholder="Begründung"></textarea>
         <textarea class="form-input" name="source_chunk_ref" rows="2" placeholder="Zitat/Quelle aus dem Angebot"></textarea>
         <div style="display:flex;gap:.5rem">

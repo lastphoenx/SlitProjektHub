@@ -34,6 +34,7 @@ from src.m15_evaluation import (
     list_scores_for_cell,
     list_scores_for_project,
     official_score,
+    rolled_up_score,
     soft_delete_bidder,
     soft_delete_criterion,
     suggest_score_with_rag,
@@ -89,6 +90,7 @@ async def evaluation_page(request: Request, project_key: str = ""):
     # Nur Top-Level-Kriterien in der Matrix - Unterfragen (parent_id gesetzt) sind
     # Beleg-/KI-Hilfsebene und werden über die Zell-Details der Elternzeile erreicht.
     top_criteria = [c for c in criteria if c.parent_id is None]
+    has_children = {c.parent_id for c in criteria if c.parent_id}
     matrix_rows = []
     for crit in top_criteria:
         row = {
@@ -96,22 +98,40 @@ async def evaluation_page(request: Request, project_key: str = ""):
             "name": crit.name,
             "kind": crit.kind,
             "auto_price": crit.auto_price,
+            "has_children": crit.id in has_children,
             "weight": crit.weight_pct if crit.kind == "zuschlag" else None,
         }
+        crit_children = [c for c in criteria if c.parent_id == crit.id]
         cells = []
         for bidder in bidders:
             cell_scores = scores_by_cell.get((bidder.id, crit.id), [])
             ai_row = next((s for s in cell_scores if s.source_key == "ai"), None)
             user_rows = [s for s in cell_scores if s.source_key.startswith("user:")]
-            official = official_score(bidder.id, crit, cell_scores)
+            if crit.kind == "zuschlag":
+                official, answered, total = rolled_up_score(bidder.id, crit, criteria, scores_by_cell)
+                display = f"{official:.2f}" if official is not None else "—"
+            elif crit_children:
+                child_vals = [official_score(bidder.id, ch, scores_by_cell.get((bidder.id, ch.id), [])) for ch in crit_children]
+                answered = sum(1 for v in child_vals if v is not None)
+                total = len(crit_children)
+                official = None
+                if answered == total and total:
+                    official = 0.0 if any(v == 0 for v in child_vals) else 1.0
+                display = "K.O." if official == 0.0 else ("erfüllt" if official == 1.0 else f"{answered}/{total}")
+            else:
+                official = official_score(bidder.id, crit, cell_scores)
+                answered, total = (1, 1) if official is not None else (0, 1)
+                display = ("Ja" if official == 1 else "Nein") if official is not None else "—"
             cells.append(
                 {
                     "bidder_id": bidder.id,
                     "criterion_id": crit.id,
                     "official": official,
-                    "display": f"{official:.2f}" if official is not None else "—",
+                    "display": display,
                     "ai_value": ai_row.value if ai_row else None,
                     "evaluator_count": len(user_rows),
+                    "answered": answered,
+                    "total": total,
                 }
             )
         row["cells"] = cells
@@ -273,6 +293,45 @@ async def evaluation_cell(request: Request, bidder_id: int, criterion_id: int, p
         bidder = session.get(Bidder, bidder_id)
     if not crit or not bidder:
         raise HTTPException(404, "Nicht gefunden")
+
+    all_criteria = list_criteria(project_key) if project_key else []
+    children = [c for c in all_criteria if c.parent_id == crit.id]
+
+    if children:
+        # Elternkriterium mit Einzelanforderungen: gemaess Ausschreibungsvorgabe
+        # ("Punkte = erreichte Punktzahl / Anzahl der Einzelanforderungen") wird
+        # NICHT das Elternkriterium direkt bewertet, sondern jede Anforderung
+        # einzeln - der Mittelwert ergibt automatisch den Elternwert.
+        scores_by_cell: dict[tuple[int, int], list] = {}
+        for s in list_scores_for_project(project_key):
+            scores_by_cell.setdefault((s.bidder_id, s.criterion_id), []).append(s)
+        child_rows = []
+        for ch in children:
+            cell = scores_by_cell.get((bidder_id, ch.id), [])
+            ai_row = next((s for s in cell if s.source_key == "ai"), None)
+            child_rows.append(
+                {
+                    "criterion": ch,
+                    "official": official_score(bidder_id, ch, cell),
+                    "ai_value": ai_row.value if ai_row else None,
+                    "evaluator_count": len([s for s in cell if s.source_key.startswith("user:")]),
+                }
+            )
+        rollup_val, answered, total = rolled_up_score(bidder_id, crit, all_criteria, scores_by_cell)
+        return templates.TemplateResponse(
+            "evaluation/_cell_parent.html",
+            {
+                "request": request,
+                "project_key": project_key,
+                "bidder": bidder,
+                "criterion": crit,
+                "child_rows": child_rows,
+                "official": rollup_val,
+                "answered": answered,
+                "total": total,
+                "may_evaluate": can_evaluate(who),
+            },
+        )
 
     cell_scores = list_scores_for_cell(bidder_id, criterion_id)
     ai_row = next((s for s in cell_scores if s.source_key == "ai"), None)
