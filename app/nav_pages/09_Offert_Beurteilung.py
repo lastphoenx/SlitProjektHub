@@ -68,7 +68,7 @@ if projects_df.empty:
     st.stop()
 
 project_options = {
-    row["title"]: row["key"] for _, row in projects_df.iterrows()
+    row["Titel"]: row["Key"] for _, row in projects_df.iterrows()
 }
 project_titles = list(project_options.keys())
 default_idx = 0
