@@ -254,6 +254,12 @@ def assess_project_idea_with_ai(
         except (TypeError, ValueError):
             return None
 
+    if not parsed:
+        # KI-Antwort nicht auswertbar (Timeout, Rate-Limit, kaputtes JSON) — bestehende
+        # ai_*-Werte NICHT anfassen. Aufrufer erkennt den Fehlschlag an None-Rueckgabe.
+        log.warning("Idea-Assessment fuer idea_id=%s ohne verwertbares JSON.", idea_id)
+        return None
+
     challenges = parsed.get("challenges")
     if not isinstance(challenges, list):
         challenges = []
@@ -278,7 +284,7 @@ def assess_project_idea_with_ai(
         obj.ai_model = model
         obj.ai_raw_json = raw or None
         obj.ai_assessed_at = datetime.now(timezone.utc)
-        obj.status = "bewertet" if parsed else obj.status
+        obj.status = "bewertet"
         obj.updated_at = datetime.now(timezone.utc)
         ses.add(obj)
         ses.commit()
