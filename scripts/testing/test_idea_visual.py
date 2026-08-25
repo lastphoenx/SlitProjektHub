@@ -9,6 +9,9 @@ from src.m16_idea_visual import (
     sanitize_for_cloud_text,
     sanitize_structured_field,
     build_dsgvo_illustration_prompt,
+    _nfc_text,
+    _resolve_diagram_font_path,
+    build_vertical_process_diagram_png,
 )
 from src.m16_idea import ProjectIdea
 
@@ -17,6 +20,28 @@ def test_sanitize_removes_email():
     raw = "Kontakt herr.schmidt@beispiel.ch wegen Budget."
     out = sanitize_for_cloud_text(raw)
     assert "@" not in out
+
+
+def test_nfc_normalizes_decomposed_umlaut():
+    assert _nfc_text("A\u0308nderungen") == "Änderungen"
+
+
+def test_diagram_font_resolves_on_system():
+    # DejaVu on Linux, Arial on Windows — either is fine; None only if no TTF at all
+    path = _resolve_diagram_font_path()
+    assert path is None or path.endswith(".ttf")
+
+
+def test_vertical_diagram_png_with_umlauts():
+    details = [
+        {
+            "title": "Überwachung",
+            "bullets": ["Änderungen steuern", "Qualität prüfen"],
+            "parallel_note": "",
+        }
+    ]
+    png = build_vertical_process_diagram_png(details, "Prüfung")
+    assert len(png) > 500
 
 
 def test_structured_field_keeps_german_product_name():
@@ -48,6 +73,9 @@ def test_fallback_prompt_excludes_raw_idea_text():
 
 if __name__ == "__main__":
     test_sanitize_removes_email()
+    test_nfc_normalizes_decomposed_umlaut()
+    test_diagram_font_resolves_on_system()
+    test_vertical_diagram_png_with_umlauts()
     test_structured_field_keeps_german_product_name()
     test_cloud_sanitize_strips_name_pairs_in_free_text()
     test_fallback_prompt_excludes_raw_idea_text()
