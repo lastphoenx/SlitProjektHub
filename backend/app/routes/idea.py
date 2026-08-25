@@ -12,8 +12,10 @@ from backend.app.jinja_env import templates
 from src.m01_config import get_settings, load_user_settings
 from src.m14_auth import get_user_id, get_username_by_id, is_super_user, session_username
 from src.m08_llm import have_key
+from src.m03_db import get_session
 from src.m16_idea import (
     ALLOWED_IMAGE_EXT,
+    ProjectIdea,
     assess_project_idea_with_ai,
     create_idea,
     get_idea,
@@ -28,6 +30,9 @@ from src.m16_idea_visual import (
     generate_portfolio_deck,
     idea_decks_dir,
     idea_images_dir,
+    resolve_visual_llm,
+    visual_text_models_map,
+    visual_text_providers_available,
 )
 
 router = APIRouter()
@@ -146,6 +151,8 @@ async def idea_detail(request: Request, idea_id: int):
             "openai_image_models": OPENAI_IMAGE_MODELS,
             "default_image_model": DEFAULT_OPENAI_IMAGE_MODEL,
             "openai_key_ok": have_key("openai"),
+            "visual_llm_providers": visual_text_providers_available(),
+            "visual_llm_models": visual_text_models_map(),
         },
     )
 
@@ -173,17 +180,20 @@ async def idea_generate_deck(
     refinement_notes: str = Form(""),
     llm_provider: str = Form("openai"),
     llm_model: str = Form(""),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
     if idea.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?deck_error=1", status_code=303)
+    vp, vm = resolve_visual_llm(visual_llm_provider, visual_llm_model, llm_provider, llm_model)
     result = generate_portfolio_deck(
         idea_id,
         refinement_notes=refinement_notes,
-        llm_provider=llm_provider,
-        llm_model=llm_model,
+        llm_provider=vp,
+        llm_model=vm,
     )
     if not result:
         return RedirectResponse(url=f"/idea/{idea_id}?deck_error=1", status_code=303)
@@ -198,6 +208,8 @@ async def idea_generate_illustration(
     llm_provider: str = Form("openai"),
     llm_model: str = Form(""),
     refinement_notes: str = Form(""),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
@@ -208,15 +220,72 @@ async def idea_generate_illustration(
         return RedirectResponse(url=f"/idea/{idea_id}?illustration_error=not_assessed", status_code=303)
     if image_model not in OPENAI_IMAGE_MODELS:
         image_model = DEFAULT_OPENAI_IMAGE_MODEL
+    vp, vm = resolve_visual_llm(visual_llm_provider, visual_llm_model, llm_provider, llm_model)
     result = generate_cloud_illustration(
         idea_id,
         image_model=image_model,
-        llm_provider=llm_provider,
-        llm_model=llm_model,
+        llm_provider=vp,
+        llm_model=vm,
         refinement_notes=refinement_notes,
     )
     if not result:
         return RedirectResponse(url=f"/idea/{idea_id}?illustration_error=1", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+
+
+@router.post("/idea/{idea_id}/clear-deck", response_class=HTMLResponse)
+async def idea_clear_deck(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404)
+    who = _username(request)
+    user_id = get_user_id(who) if who else None
+    if not _may_edit_idea(idea, user_id, who):
+        raise HTTPException(403)
+    if idea.deck_path:
+        p = idea_decks_dir() / Path(idea.deck_path).name
+        if p.exists():
+            p.unlink()
+    if idea.deck_preview_path:
+        p = _idea_images_dir() / Path(idea.deck_preview_path).name
+        if p.exists():
+            p.unlink()
+    with get_session() as ses:
+        obj = ses.get(ProjectIdea, idea_id)
+        if obj:
+            obj.deck_path = None
+            obj.deck_preview_path = None
+            obj.deck_generated_at = None
+            ses.add(obj)
+            ses.commit()
+    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+
+
+@router.post("/idea/{idea_id}/clear-illustration", response_class=HTMLResponse)
+async def idea_clear_illustration(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404)
+    who = _username(request)
+    user_id = get_user_id(who) if who else None
+    if not _may_edit_idea(idea, user_id, who):
+        raise HTTPException(403)
+    if idea.image_source != "dalle":
+        return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+    if idea.image_path:
+        p = _idea_images_dir() / Path(idea.image_path).name
+        if p.exists():
+            p.unlink()
+    with get_session() as ses:
+        obj = ses.get(ProjectIdea, idea_id)
+        if obj:
+            obj.image_path = None
+            obj.image_source = None
+            obj.illustration_model = None
+            obj.illustration_prompt_safe = None
+            obj.illustration_generated_at = None
+            ses.add(obj)
+            ses.commit()
     return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
 
 

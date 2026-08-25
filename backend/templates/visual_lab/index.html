@@ -12,39 +12,50 @@
   </div>
 </div>
 
-{% if error == 'no_key' %}
-<p class="text-muted" style="color:#fca5a5;margin-bottom:1rem">OpenAI API-Key fehlt für PNG-Generierung.</p>
-{% elif error %}
-<p class="text-muted" style="color:#fca5a5;margin-bottom:1rem">Generierung fehlgeschlagen — Prompt prüfen.</p>
+{% if ok %}
+<p class="text-muted" style="color:#86efac;margin-bottom:1rem;font-size:.85rem">✓ Generierung erfolgreich — Prompt bleibt im Formular für Anpassungen.</p>
+{% endif %}
+{% if error %}
+<p class="text-muted" style="color:#fca5a5;margin-bottom:1rem;font-size:.85rem">
+  {% if error == 'no_key' %}OpenAI API-Key fehlt für PNG-Generierung.
+  {% elif error == 'prompt_short' %}Prompt zu kurz nach Filterung.
+  {% elif error == 'png_failed' %}OpenAI Bildgenerierung fehlgeschlagen.
+  {% elif error == 'llm_failed' %}KI-Aufruf fehlgeschlagen — Provider/Modell prüfen.
+  {% elif error == 'empty_prompt' %}Bitte Prompt eingeben.
+  {% else %}Generierung fehlgeschlagen — Prompt prüfen.{% endif %}
+  <span style="display:block;font-size:.72rem;margin-top:.25rem">Dein Prompt wurde nicht gelöscht.</span>
+</p>
 {% endif %}
 
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Neuer Test</h2>
-  <form method="post" action="/visual-lab/generate" style="display:grid;gap:.6rem;max-width:800px">
+  <form id="vl-generate-form" method="post" action="/visual-lab/generate" style="display:grid;gap:.6rem;max-width:800px">
     <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
     <input type="hidden" name="llm_model" value="{{ llm_model }}" />
     <div>
       <label class="form-label">Ausgabe-Typ</label>
-      <select class="form-select" name="kind">
-        <option value="png">PNG — Cloud-Illustration (OpenAI, DSGVO-gefiltert)</option>
-        <option value="pptx">PPTX — Portfolio-Folie (lokal via KI-Einstellungen)</option>
-        <option value="preview">Canvas-Vorschau — PNG-Titelfolie (lokal, ohne PPTX)</option>
+      <select class="form-select" name="kind" id="vl-kind">
+        <option value="png" {% if form_kind == 'png' %}selected{% endif %}>PNG — Cloud-Illustration (OpenAI, DSGVO-gefiltert)</option>
+        <option value="pptx" {% if form_kind == 'pptx' %}selected{% endif %}>PPTX — Portfolio-Folie mit Prozessdiagramm</option>
+        <option value="preview" {% if form_kind == 'preview' %}selected{% endif %}>Canvas-Vorschau — PNG (Prozessdiagramm / Titelfolie)</option>
       </select>
     </div>
+    {% set form_id = 'lab' %}
+    {% include 'partials/_visual_llm_fields.html' %}
     <div>
       <label class="form-label">Prompt / Beschreibung *</label>
-      <textarea class="form-input" name="prompt" rows="4" required
-        placeholder="Beschreibe die gewünschte Visualisierung: Thema, Stil, Inhalt der Folie …"></textarea>
+      <textarea class="form-input" name="prompt" id="vl-prompt" rows="4" required
+        placeholder="Beschreibe die gewünschte Visualisierung: Thema, Stil, Phasen in Reihenfolge …">{{ form_prompt }}</textarea>
       <p class="text-muted" style="font-size:.68rem;margin-top:.25rem">
-        PNG: Prompt wird vor Cloud-Übertragung gefiltert (keine Personennamen). PPTX/Preview: lokale KI.
+        PNG: gefiltert vor Cloud. PPTX/Preview: Phasen → Prozessdiagramm-Folie + Kurztext.
       </p>
     </div>
     <div>
-      <label class="form-label" style="font-size:.72rem">Optionale Anpassung (bei erneutem Test)</label>
-      <textarea class="form-input" name="refinement" rows="2"
-        placeholder="z.B. mehr Blau, weniger Text, Schwerpunkte auf Phase 2 …"></textarea>
+      <label class="form-label" style="font-size:.72rem">Optionale Anpassung (Original-Prompt bleibt erhalten)</label>
+      <textarea class="form-input" name="refinement" id="vl-refinement" rows="2"
+        placeholder="z.B. mehr Blau, weniger Text, Schwerpunkte auf Phase 2 …">{{ form_refinement }}</textarea>
     </div>
-    <div>
+    <div id="vl-image-model-wrap">
       <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell (nur PNG)</label>
       <select class="form-select" name="image_model">
         {% for key in openai_image_models %}
@@ -52,7 +63,11 @@
         {% endfor %}
       </select>
     </div>
-    <button type="submit" class="btn btn-primary">Generieren</button>
+    <button type="submit" class="btn btn-primary" id="vl-submit-btn">Generieren</button>
+    <p id="vl-loading" class="text-muted" style="font-size:.78rem;display:none;margin:0">
+      <span style="display:inline-block;width:14px;height:14px;border:2px solid var(--color-border);border-top-color:var(--color-primary);border-radius:50%;animation:vlspin .8s linear infinite;vertical-align:middle;margin-right:.35rem"></span>
+      Generiere … kann 30s–2min dauern (KI + Dateierstellung). Bitte warten.
+    </p>
   </form>
 </div>
 
@@ -68,7 +83,7 @@
           <th>Prompt</th>
           <th>Cloud</th>
           <th>Erstellt</th>
-          <th style="width:140px">Aktionen</th>
+          <th style="width:180px">Aktionen</th>
         </tr>
       </thead>
       <tbody>
@@ -76,14 +91,21 @@
         <tr>
           <td>{{ r.id }}</td>
           <td><span class="badge badge-neutral">{{ r.kind }}</span></td>
-          <td style="font-size:.78rem;max-width:320px;white-space:pre-wrap">{{ r.prompt_input[:120] }}{% if r.prompt_input|length > 120 %}…{% endif %}</td>
+          <td style="font-size:.78rem;max-width:280px;white-space:pre-wrap">{{ r.prompt_input[:120] }}{% if r.prompt_input|length > 120 %}…{% endif %}</td>
           <td>{{ 'ja' if r.cloud_used else 'lokal' }}</td>
           <td style="font-size:.78rem">{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
           <td>
-            {% set preview_hx_get = '/visual-lab/' ~ r.id ~ '/preview' %}
-            {% set inline_url = '/visual-lab/' ~ r.id ~ '/file?disposition=inline' if r.kind in ['png','preview'] else ('/visual-lab/' ~ r.id ~ '/thumb?disposition=inline' if r.preview_path else None) %}
-            {% set download_url = '/visual-lab/' ~ r.id ~ '/file' %}
-            {% include 'partials/_media_actions.html' %}
+            <div class="flex items-center gap-1">
+              {% set preview_hx_get = '/visual-lab/' ~ r.id ~ '/preview' %}
+              {% set inline_url = '/visual-lab/' ~ r.id ~ '/file?disposition=inline' if r.kind in ['png','preview'] else ('/visual-lab/' ~ r.id ~ '/thumb?disposition=inline' if r.preview_path else None) %}
+              {% set download_url = '/visual-lab/' ~ r.id ~ '/file' %}
+              {% include 'partials/_media_actions.html' %}
+              <form method="post" action="/visual-lab/{{ r.id }}/delete" style="display:inline" onsubmit="return confirm('Test #{{ r.id }} löschen?')">
+                <button type="submit" class="btn btn-ghost btn-sm btn-icon" title="Löschen" style="color:var(--color-danger)">
+                  <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+                </button>
+              </form>
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -97,6 +119,7 @@
 
 </div>
 
+<style>@keyframes vlspin { to { transform: rotate(360deg); } }</style>
 <div id="modal-slot"></div>
 <script>
 document.getElementById('modal-slot').addEventListener('click', e => {
@@ -105,5 +128,22 @@ document.getElementById('modal-slot').addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') document.getElementById('modal-slot').innerHTML = '';
 });
+(function() {
+  const form = document.getElementById('vl-generate-form');
+  const btn = document.getElementById('vl-submit-btn');
+  const loading = document.getElementById('vl-loading');
+  const kindSel = document.getElementById('vl-kind');
+  const imgWrap = document.getElementById('vl-image-model-wrap');
+  function syncKind() {
+    imgWrap.style.display = kindSel.value === 'png' ? '' : 'none';
+  }
+  kindSel.addEventListener('change', syncKind);
+  syncKind();
+  form.addEventListener('submit', () => {
+    btn.disabled = true;
+    btn.textContent = 'Generiere …';
+    loading.style.display = 'block';
+  });
+})();
 </script>
 {% endblock %}

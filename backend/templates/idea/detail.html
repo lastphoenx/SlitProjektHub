@@ -113,20 +113,30 @@
         {% endif %}
       </div>
       <p class="text-muted" style="font-size:.78rem;margin:.35rem 0 .6rem">
-        Erzeugt eine editierbare PowerPoint aus der KI-Bewertung (Zusammenfassung, PT/CHF, Phasen, Empfehlung). Keine Cloud, kein Rohtext-Export.
+        Erzeugt eine editierbare PowerPoint aus der KI-Bewertung (Zusammenfassung, PT/CHF, Phasen mit Prozessdiagramm). Keine Cloud, kein Rohtext-Export.
       </p>
-      <form method="post" action="/idea/{{ idea.id }}/generate-deck" style="display:grid;gap:.5rem;max-width:520px">
+      <form method="post" action="/idea/{{ idea.id }}/generate-deck" class="idea-gen-form" style="display:grid;gap:.5rem;max-width:520px">
         <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
         <input type="hidden" name="llm_model" value="{{ llm_model }}" />
+        {% set form_id = 'deck' %}
+        {% set form_visual_provider = '' %}
+        {% set form_visual_model = '' %}
+        {% include 'partials/_visual_llm_fields.html' %}
         <div>
           <label class="form-label" style="font-size:.72rem">Optionale Anpassung {% if idea.deck_path %}(bei Neu-Generierung){% endif %}</label>
           <textarea class="form-input" name="refinement_notes" rows="2"
             placeholder="z.B. weniger Text auf Titelfolie, Schwerpunkte Phase 2 hervorheben, Farben neutral …"></textarea>
         </div>
-        <button type="submit" class="btn btn-primary btn-sm">
+        <button type="submit" class="btn btn-primary btn-sm idea-gen-btn">
           {% if idea.deck_path %}Portfolio-Folie neu generieren{% else %}Portfolio-Folie erstellen{% endif %}
         </button>
+        <p class="idea-gen-status text-muted" style="font-size:.72rem;display:none;margin:0">Generiere … bitte warten (30s–2min).</p>
       </form>
+      {% if idea.deck_path and may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="margin-top:.35rem" onsubmit="return confirm('PPTX und Vorschau löschen?')">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.72rem">Folie löschen</button>
+      </form>
+      {% endif %}
       {% if idea.deck_preview_path %}
       <div style="margin-top:.75rem">
         <img src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="Folien-Vorschau" style="max-width:100%;max-height:200px;border-radius:8px;border:1px solid var(--color-border)" />
@@ -147,9 +157,13 @@
       {% if not openai_key_ok %}
       <p class="text-muted" style="font-size:.72rem;color:#fca5a5">OPENAI_API_KEY in .env erforderlich.</p>
       {% else %}
-      <form method="post" action="/idea/{{ idea.id }}/generate-illustration" style="display:grid;gap:.5rem;max-width:520px">
+      <form method="post" action="/idea/{{ idea.id }}/generate-illustration" class="idea-gen-form" style="display:grid;gap:.5rem;max-width:520px">
         <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
         <input type="hidden" name="llm_model" value="{{ llm_model }}" />
+        {% set form_id = 'cloud' %}
+        {% set form_visual_provider = '' %}
+        {% set form_visual_model = '' %}
+        {% include 'partials/_visual_llm_fields.html' %}
         <div>
           <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell</label>
           <select class="form-select" name="image_model">
@@ -165,10 +179,16 @@
             placeholder="z.B. im Grossen passt es, aber mehr Blau, weniger Icons, Fokus auf Digitalisierung …"></textarea>
           <p class="text-muted" style="font-size:.68rem;margin-top:.2rem">Wird DSGVO-gefiltert vor Cloud-Übertragung.</p>
         </div>
-        <button type="submit" class="btn btn-secondary btn-sm">
+        <button type="submit" class="btn btn-secondary btn-sm idea-gen-btn">
           {% if idea.image_source == 'dalle' %}Cloud-Illustration neu generieren{% else %}Cloud-Illustration erzeugen{% endif %}
         </button>
+        <p class="idea-gen-status text-muted" style="font-size:.72rem;display:none;margin:0">Generiere … bitte warten.</p>
       </form>
+      {% if idea.image_source == 'dalle' and may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Cloud-Illustration löschen?')">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.72rem">Illustration löschen</button>
+      </form>
+      {% endif %}
       {% endif %}
     </div>
 
@@ -288,6 +308,14 @@ document.getElementById('modal-slot').addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') document.getElementById('modal-slot').innerHTML = '';
+});
+document.querySelectorAll('.idea-gen-form').forEach(form => {
+  form.addEventListener('submit', () => {
+    const btn = form.querySelector('.idea-gen-btn');
+    const st = form.querySelector('.idea-gen-status');
+    if (btn) { btn.disabled = true; btn.textContent = 'Generiere …'; }
+    if (st) st.style.display = 'block';
+  });
 });
 </script>
 {% endblock %}
