@@ -126,13 +126,21 @@ def resolve_visual_llm(
     return fallback_provider, fallback_model or ""
 
 
-def sanitize_for_cloud_text(text: str) -> str:
-    """Entfernt offensichtliche PII vor Cloud-Prompt."""
+def sanitize_structured_field(text: str) -> str:
+    """Kontakt und Herr/Frau — ohne Paar-Heuristik (deutsche Produktnamen bleiben erhalten)."""
     if not text:
         return ""
     t = _EMAIL_RE.sub("", text)
     t = _PHONE_RE.sub("", t)
     t = _PERSON_LINE_RE.sub("", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def sanitize_for_cloud_text(text: str) -> str:
+    """Entfernt offensichtliche PII vor Cloud-Prompt (inkl. Namen-Paar-Heuristik für Fliesstext)."""
+    if not text:
+        return ""
+    t = sanitize_structured_field(text)
     t = _NAME_PAIR_RE.sub("[Name entfernt]", t)
     return re.sub(r"\s+", " ", t).strip()
 
@@ -186,9 +194,9 @@ _ILLUSTRATION_SYSTEM = (
 def _build_illustration_user_prompt(idea: ProjectIdea, refinement_notes: str = "") -> str:
     parts: list[str] = []
     if idea.ai_project_name:
-        parts.append(f"Projektname (generisch): {sanitize_for_cloud_text(idea.ai_project_name)}")
+        parts.append(f"Projektname (generisch): {sanitize_structured_field(idea.ai_project_name)}")
     if idea.fachabteilung:
-        parts.append(f"Fachbereich/Organisation: {sanitize_for_cloud_text(idea.fachabteilung)}")
+        parts.append(f"Fachbereich/Organisation: {sanitize_structured_field(idea.fachabteilung)}")
     if idea.ai_summary:
         parts.append(f"Sachliche Kurzfassung: {sanitize_for_cloud_text(idea.ai_summary)}")
     if idea.ai_recommendation:
@@ -218,8 +226,8 @@ def build_dsgvo_illustration_prompt(
     )
     prompt = sanitize_for_cloud_text((raw or "").strip().strip('"').strip("'"))
     if len(prompt) < 20:
-        title = sanitize_for_cloud_text(idea.ai_project_name or idea.title or "Public sector project")
-        dept = sanitize_for_cloud_text(idea.fachabteilung or "")
+        title = sanitize_structured_field(idea.ai_project_name or idea.title or "Public sector project")
+        dept = sanitize_structured_field(idea.fachabteilung or "")
         ref = sanitize_for_cloud_text(refinement_notes)
         prompt = (
             f"Abstract minimalist illustration for a Swiss public administration portfolio concept: "
@@ -518,6 +526,28 @@ _PHASE_BORDER = [
 ]
 
 
+_PHASE_BOX_GAP = 28
+
+
+def _vertical_phase_box_height(pd: dict[str, Any]) -> int:
+    bullets = pd.get("bullets") or []
+    par = (pd.get("parallel_note") or "").strip()
+    h = 56 + min(len(bullets), 4) * 22
+    if par:
+        h += 22
+    return h
+
+
+def _vertical_diagram_canvas_height(phase_details: list[dict[str, Any]], title: str) -> int:
+    details = phase_details[:8]
+    if not details:
+        return 400
+    top = 80 if title else 40
+    body = sum(_vertical_phase_box_height(pd) for pd in details)
+    gaps = _PHASE_BOX_GAP * max(0, len(details) - 1)
+    return max(400, top + body + gaps + 48)
+
+
 def build_vertical_process_diagram_png(
     phase_details: list[dict[str, Any]],
     title: str = "",
@@ -531,19 +561,16 @@ def build_vertical_process_diagram_png(
     except OSError:
         font_t = font_h = font_b = font_s = ImageFont.load_default()
     details = phase_details[:8]
-    box_h = 80
-    for d in details:
-        box_h += 56 + len(d.get("bullets") or []) * 22
-    h = box_h + 100
+    h = _vertical_diagram_canvas_height(details, title)
     img = Image.new("RGB", (w, h), color=(252, 252, 254))
     draw = ImageDraw.Draw(img)
     if title:
         draw.text((40, 24), title[:70], fill=(30, 58, 95), font=font_t)
-    y = 80
+    y = 80 if title else 40
     cx = w // 2
     for i, pd in enumerate(details):
         bullets = pd.get("bullets") or []
-        ph = 56 + len(bullets) * 22
+        ph = _vertical_phase_box_height(pd)
         col = _PHASE_COLORS[i % len(_PHASE_COLORS)]
         border = _PHASE_BORDER[i % len(_PHASE_BORDER)]
         bx = 80
@@ -556,13 +583,13 @@ def build_vertical_process_diagram_png(
             by += 22
         par = (pd.get("parallel_note") or "").strip()
         if par:
-            draw.text((bx + 20, by), f"↔ {par[:60]}", fill=(100, 110, 130), font=font_s)
+            draw.text((bx + 20, by), f"parallel: {par[:60]}", fill=(100, 110, 130), font=font_s)
         if i < len(details) - 1:
             ay = y + ph + 4
             draw.polygon([(cx, ay + 18), (cx - 10, ay), (cx + 10, ay)], fill=(140, 150, 170))
-            y += ph + 28
+            y += ph + _PHASE_BOX_GAP
         else:
-            y += ph + 12
+            y += ph
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -626,7 +653,8 @@ def build_deck_composite_preview_png(content: DeckContent) -> bytes:
     y = 0
     for p in panels:
         if p.width != width:
-            p = p.resize((width, int(p.height * width / p.width)), Image.Resampling.LANCZOS)
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            p = p.resize((width, int(p.height * width / p.width)), resample)
         out.paste(p, (0, y))
         y += p.height + gap
     buf = io.BytesIO()
