@@ -55,7 +55,7 @@ def _projects_list() -> list[dict]:
     df = list_projects_df()
     if df is None or df.empty:
         return []
-    return [{"key": row["key"], "title": row["title"]} for _, row in df.iterrows()]
+    return [{"key": row["Key"], "title": row["Titel"]} for _, row in df.iterrows()]
 
 
 def _project_title(project_key: str) -> str:
