@@ -21,7 +21,12 @@
   {% elif error == 'prompt_short' %}Prompt zu kurz nach Filterung.
   {% elif error == 'png_failed' %}OpenAI Bildgenerierung fehlgeschlagen.
   {% elif error == 'cloud_confirm' %}Bestätigung für Cloud-Übertragung an OpenAI erforderlich.
-  {% elif error == 'llm_failed' %}KI-Aufruf fehlgeschlagen — Provider/Modell prüfen.
+  {% elif error == 'vision_cloud_confirm' %}Bestätigung für Cloud-Vision (Referenzbilder beschreiben) erforderlich.
+  {% elif error == 'too_many_files' %}Zu viele Dateien (max. 5).
+  {% elif error == 'too_large' %}Datei zu gross (max. 10 MB pro Datei).
+  {% elif error == 'invalid_type' %}Dateityp nicht erlaubt — nur PNG, JPEG, WebP, GIF, PDF, TXT, MD.
+  {% elif error == 'empty' %}Leere Datei hochgeladen.
+  {% elif error == 'llm_failed' %}KI-Aufruf fehlgeschlagen — Provider/Modell prüfen (Vision-Modell für Bilder?).
   {% else %}Generierung fehlgeschlagen — Prompt prüfen.{% endif %}
   <span style="display:block;font-size:.72rem;margin-top:.25rem">Dein Prompt wurde nicht gelöscht.</span>
 </p>
@@ -29,7 +34,7 @@
 
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Neuer Test</h2>
-  <form id="vl-generate-form" method="post" action="/visual-lab/generate" style="display:grid;gap:.6rem;max-width:800px">
+  <form id="vl-generate-form" method="post" action="/visual-lab/generate" enctype="multipart/form-data" style="display:grid;gap:.6rem;max-width:800px">
     <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
     <input type="hidden" name="llm_model" value="{{ llm_model }}" />
     <div>
@@ -43,8 +48,17 @@
     {% set form_id = 'lab' %}
     {% include 'partials/_visual_llm_fields.html' %}
     <div>
-      <label class="form-label">Prompt / Beschreibung *</label>
-      <textarea class="form-input" name="prompt" id="vl-prompt" rows="4" required
+      <label class="form-label">Referenzdateien (optional)</label>
+      <input class="form-input" type="file" name="attachments" id="vl-attachments" multiple
+        accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,image/*,application/pdf,text/plain" />
+      <p class="text-muted" style="font-size:.68rem;margin-top:.25rem">
+        Bis 5 Dateien, max. 10 MB je Datei. PDF: Textextraktion lokal; gescannte PDFs als Bild für Vision-LLM.
+        Bilder: direkt an Vision-Modell (Ollama qwen2.5vl / gpt-4o) oder Beschreibung für Cloud-PNG.
+      </p>
+    </div>
+    <div>
+      <label class="form-label">Prompt / Beschreibung</label>
+      <textarea class="form-input" name="prompt" id="vl-prompt" rows="4"
         placeholder="Beschreibe die gewünschte Visualisierung: Thema, Stil, Phasen in Reihenfolge …">{{ form_prompt }}</textarea>
       <p class="text-muted" style="font-size:.68rem;margin-top:.25rem">
         PNG: gefiltert vor Cloud. PPTX/Preview: Phasen → Prozessdiagramm-Folie + Kurztext.
@@ -65,6 +79,14 @@
       <label id="vl-cloud-confirm-wrap" style="display:none;align-items:flex-start;gap:.4rem;margin-top:.5rem;font-size:.72rem;cursor:pointer">
         <input type="checkbox" name="cloud_confirm" value="1" id="vl-cloud-confirm" style="margin-top:.15rem" />
         <span>Prompt automatisch gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an OpenAI gehen.</span>
+      </label>
+      <label id="vl-refs-cloud-wrap" style="display:none;align-items:flex-start;gap:.4rem;margin-top:.5rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="use_refs_cloud_png" value="1" id="vl-refs-cloud" style="margin-top:.15rem" />
+        <span>Referenzbilder per Vision-KI beschreiben und in DALL·E-Prompt einbeziehen (lokal Ollama-VL oder Cloud).</span>
+      </label>
+      <label id="vl-vision-cloud-wrap" style="display:none;align-items:flex-start;gap:.4rem;margin-top:.35rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="vision_cloud_confirm" value="1" id="vl-vision-cloud" style="margin-top:.15rem" />
+        <span>Cloud-Vision: Referenzbilder an OpenAI/Anthropic zur Beschreibung senden (vor DALL·E).</span>
       </label>
     </div>
     <button type="submit" class="btn btn-primary" id="vl-submit-btn">Generieren</button>
@@ -96,7 +118,7 @@
           <td>{{ r.id }}</td>
           <td><span class="badge badge-neutral">{{ r.kind }}</span></td>
           <td style="font-size:.78rem;max-width:280px;white-space:pre-wrap">{{ r.prompt_input[:120] }}{% if r.prompt_input|length > 120 %}…{% endif %}</td>
-          <td>{{ 'ja' if r.cloud_used else 'lokal' }}</td>
+          <td>{{ 'ja' if r.cloud_used else 'lokal' }}{% if r.attachments_json %} · Ref{% endif %}</td>
           <td style="font-size:.78rem">{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
           <td>
             <div class="flex items-center gap-1">
@@ -140,15 +162,33 @@ document.addEventListener('keydown', e => {
   const imgWrap = document.getElementById('vl-image-model-wrap');
   const confirmWrap = document.getElementById('vl-cloud-confirm-wrap');
   const confirmBox = document.getElementById('vl-cloud-confirm');
+  const refsCloudWrap = document.getElementById('vl-refs-cloud-wrap');
+  const visionCloudWrap = document.getElementById('vl-vision-cloud-wrap');
+  const promptEl = document.getElementById('vl-prompt');
+  const attEl = document.getElementById('vl-attachments');
   function syncKind() {
     const isPng = kindSel.value === 'png';
     imgWrap.style.display = isPng ? '' : 'none';
     if (confirmWrap) confirmWrap.style.display = isPng ? 'flex' : 'none';
     if (confirmBox) confirmBox.required = isPng;
+    if (refsCloudWrap) refsCloudWrap.style.display = isPng ? 'flex' : 'none';
+    if (visionCloudWrap) visionCloudWrap.style.display = (isPng && document.getElementById('vl-refs-cloud')?.checked) ? 'flex' : 'none';
+  }
+  document.getElementById('vl-refs-cloud')?.addEventListener('change', syncKind);
+  function validateSubmit(e) {
+    const hasPrompt = (promptEl?.value || '').trim().length > 0;
+    const hasFiles = attEl && attEl.files && attEl.files.length > 0;
+    if (!hasPrompt && !hasFiles) {
+      e.preventDefault();
+      alert('Bitte Prompt oder Referenzdatei angeben.');
+      return false;
+    }
   }
   kindSel.addEventListener('change', syncKind);
   syncKind();
-  form.addEventListener('submit', () => {
+  form.addEventListener('submit', (e) => {
+    validateSubmit(e);
+    if (e.defaultPrevented) return;
     btn.disabled = true;
     btn.textContent = 'Generiere …';
     loading.style.display = 'block';

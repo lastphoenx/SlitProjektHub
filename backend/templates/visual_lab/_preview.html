@@ -31,6 +31,20 @@
       {% if run.cloud_used %}
       <p class="text-muted" style="font-size:.7rem;margin-top:.5rem">Cloud (OpenAI) · {{ run.image_model or '' }}</p>
       {% endif %}
+      {% if run.reference_context %}
+      <details style="font-size:.7rem;margin-top:.5rem;text-align:left">
+        <summary class="text-muted" style="cursor:pointer">Referenzmaterial (extrahiert)</summary>
+        <pre style="white-space:pre-wrap;margin-top:.35rem;font-size:.68rem;background:var(--color-surface-2);padding:.5rem;border-radius:.375rem">{{ run.reference_context[:1500] }}{% if run.reference_context|length > 1500 %}…{% endif %}</pre>
+      </details>
+      {% endif %}
+      {% if attachments %}
+      <div style="font-size:.7rem;margin-top:.5rem;text-align:left">
+        <span class="text-muted">Referenz-Uploads:</span>
+        {% for a in attachments %}
+        <a href="/visual-lab/{{ run.id }}/attachment/{{ a.path }}" target="_blank" rel="noopener" style="margin-right:.5rem">{{ a.original_name }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
       {% if run.prompt_used %}
       <details style="font-size:.7rem;margin-top:.5rem;text-align:left">
         <summary class="text-muted" style="cursor:pointer">Verwendeter Prompt (nach automatischer Filterung)</summary>
