@@ -16,8 +16,8 @@ In Proxmox: Ubuntu 24.04 LXC, empfohlene Ressourcen:
 
 | Ressource | Minimum | Empfohlen |
 |-----------|---------|-----------|
-| RAM | 2 GB | 4 GB |
-| Disk | 10 GB | 20 GB |
+| RAM | 2 GB | 4 GB (8 GB mit Cloud-PII Stufe 2) |
+| Disk | 10 GB | 25 GB (Torch/PII-Modelle) |
 | vCPU | 1 | 2 |
 
 > **RAM-Hinweis**: spaCy `de_core_news_sm` belegt beim ersten BM25-Aufruf ~200 MB RAM (Singleton, bleibt danach geladen). Minimum daher 2 GB.
@@ -36,8 +36,9 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m spacy download de_core_news_sm
-# PII Stufe 2 (Cloud-Prompts) — spaCy lg + Flair (~400 MB, Internet nötig)
-.venv/bin/python scripts/maintenance/prefetch_pii_models.py
+# Optional Cloud-PII Stufe 2 — siehe docs/SERVER_SETUP.md Abschnitt 7
+# export HF_HOME=/opt/slitprojekthub/.hf_cache
+# .venv/bin/python scripts/maintenance/prefetch_pii_models.py
 
 cp .env.example .env
 nano .env   # API Keys eintragen
@@ -143,105 +144,144 @@ location /_stcore/stream {
 
 ---
 
-## 7. Cloud-PII Stufe 2 (optional testen)
+## 7. Cloud-PII Stufe 2 (Presidio + Flair)
 
-**RAM:** `flair/ner-german-large` + `de_core_news_lg` brauchen beim ersten Laden oft **>4 GB RAM**.
-Symptom ohne genug RAM/Swap: Prozess endet mit `Getötet` (Linux OOM-Killer).
+Optional: anonymisiert Cloud-Prompts vor OpenAI/Anthropic (ergänzt Regex-Stufe 1 in
+`sanitize_for_cloud_text()`). Paket: `swiss-pii-anonymizer` (in `requirements.txt`).
+
+### Was wird geladen?
+
+| Komponente | Zweck | Größe (ca.) |
+|------------|--------|-------------|
+| spaCy `de_core_news_lg` | Presidio NLP | ~570 MB |
+| `flair/ner-german-large` | Personen-NER (Flair-Gewichte) | ~2.1 GB |
+| `FacebookAI/xlm-roberta-large` | Basis-Transformer für `ner-german-large` (Tokenizer/Config) | ~15 MB + Blobs im Cache |
+| PyTorch (via Flair) | Laufzeit | bereits in venv |
+
+**Wichtig:** Nur der Flair-NER-Checkpoint reicht nicht — `ner-german-large` (FLERT) braucht
+`xlm-roberta-large` aus dem HuggingFace-Hub-Cache. Ohne dieses Basis-Modell schlägt Offline-Laden fehl.
+
+Alternative **`flair/ner-german`**: kleiner, kein `xlm-roberta`, weniger RAM — etwas schwächer bei Namen.
+
+### RAM & Disk
+
+| Modell | RAM-Spitze (laden) | HF-Cache (ca.) |
+|--------|-------------------|----------------|
+| `ner-german-large` | oft **>6 GB** | ~2.2 GB unter `HF_HOME/hub/` |
+| `ner-german` | oft **>4 GB** | deutlich kleiner |
+
+Symptom OOM: Prozess endet mit `Getötet`. Abhilfe: CT-RAM 8 GB, Swap 2–4 GB, oder `FLAIR_NER_MODEL=flair/ner-german`.
+
+Disk: zusätzlich ~3 GB für venv (Torch/CUDA-Pakete) — CT-Disk **≥20 GB** empfohlen.
+
+### systemd & Cache-Pfade
+
+Der Backend-Service (`ProtectHome=true`, `User=projekthub`) kann **nicht** lesen:
+
+- `/root/.flair`
+- `/root/.cache/huggingface`
+
+Caches müssen unter **`APP_ROOT`** liegen, mit Rechten für den Service-User:
+
+```text
+/opt/slitprojekthub/.hf_cache/hub/models--flair--ner-german-large/
+/opt/slitprojekthub/.hf_cache/hub/models--FacebookAI--xlm-roberta-large/
+```
+
+### Installation (einmalig, mit Internet)
 
 ```bash
-# Prüfen
+cd /opt/slitprojekthub
 free -h
 
-# Option A — Swap (einmalig, empfohlen auf 4 GB CT)
+pip install -r requirements.txt   # falls noch nicht
+
+export HF_HOME=/opt/slitprojekthub/.hf_cache
+# Optional kleines Modell:
+# export FLAIR_NER_MODEL=flair/ner-german
+
+.venv/bin/python scripts/maintenance/prefetch_pii_models.py
+
+chown -R projekthub:projekthub /opt/slitprojekthub/.hf_cache
+du -sh /opt/slitprojekthub/.hf_cache/hub/
+```
+
+Das Prefetch-Skript lädt spaCy lg, bei `ner-german-large` auch `xlm-roberta-large`, dann Flair + Smoke-Test.
+
+### `.env` (Produktion, nach Prefetch)
+
+```bash
+SWISS_PII_ANONYMIZER=1
+HF_HUB_OFFLINE=1
+HF_HOME=/opt/slitprojekthub/.hf_cache
+# Optional kleines Flair-Modell:
+# FLAIR_NER_MODEL=flair/ner-german
+# Optional Circuit-Breaker nach Fehler (Sekunden, Default 300):
+# PII_CIRCUIT_BREAKER_SECONDS=300
+```
+
+`SWISS_PII_ANONYMIZER=0` schaltet Stufe 2 ab (nur Regex-Stufe 1).
+
+### systemd (`/etc/systemd/system/projekthub-backend.service`)
+
+Zusätzlich zu `EnvironmentFile=APP_ROOT/.env` (empfohlen, explizit):
+
+```ini
+Environment=APP_ROOT=/opt/slitprojekthub
+Environment=HF_HOME=/opt/slitprojekthub/.hf_cache
+Environment=HF_HUB_OFFLINE=1
+```
+
+Vorlage: `deployment/systemd/projekthub-backend.service.example`
+
+```bash
+systemctl daemon-reload
+systemctl restart projekthub-backend
+sleep 30
+journalctl -u projekthub-backend -n 30 --no-pager | grep -i pii
+```
+
+Erwartung: `PII-Stufe 2 (Presidio+Flair) bereit`
+
+Das Backend lädt Modelle beim Start im Hintergrund (`warmup_pii_analyzer`).
+
+### Verifizieren
+
+```bash
+# Als Service-User (offline)
+sudo -u projekthub env \
+  HF_HOME=/opt/slitprojekthub/.hf_cache \
+  HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  PYTHONPATH=/opt/slitprojekthub \
+  /opt/slitprojekthub/.venv/bin/python -c "
+from src.m16_idea_visual import sanitize_for_cloud_text
+print(sanitize_for_cloud_text('Kontakt Maria Muster, AHV 756.1234.5678.97'))
+"
+
+.venv/bin/python scripts/testing/test_cloud_pii.py
+```
+
+Erwartung: `[PERSON]`, `[CH_AHV_NR]` (nicht nur Regex-Stufe 1).
+
+### Troubleshooting
+
+| Symptom | Ursache | Fix |
+|---------|---------|-----|
+| `No such file ... .flair/models/ner-german-large` | Cache nicht unter APP_ROOT | Prefetch mit `HF_HOME` oder kopieren + `chown projekthub` |
+| HF-Fehler offline, nur `pytorch_model.bin` im Cache | `xlm-roberta-large` fehlt | Prefetch erneut mit Internet oder `AutoTokenizer.from_pretrained('FacebookAI/xlm-roberta-large')` |
+| `Getötet` beim Prefetch | OOM | RAM 8 GB / Swap / `FLAIR_NER_MODEL=flair/ner-german` |
+| 48s pro Request, HF-Retries | `HF_HUB_OFFLINE` fehlt | In `.env` + systemd; Circuit-Breaker in `m18_cloud_pii` |
+| Log: nur Stufe 1 | Warmup fehlgeschlagen | `journalctl -u projekthub-backend`, Rechte auf `.hf_cache` prüfen |
+
+### Swap (optional, 4 GB CT)
+
+```bash
 sudo fallocate -l 4G /swapfile
 sudo chmod 600 /swapfile
 sudo mkswap /swapfile
 sudo swapon /swapfile
 # dauerhaft: /etc/fstab → /swapfile none swap sw 0 0
-
-# Option B — kleineres Flair-Modell (weniger RAM, etwas schwächer bei Namen)
-export FLAIR_NER_MODEL=flair/ner-german
-
-cd /opt/slitprojekthub
-.venv/bin/pip install -r requirements.txt   # falls noch nicht
-.venv/bin/python scripts/maintenance/prefetch_pii_models.py
 ```
-
-In `.env` dauerhaft kleines Modell:
-
-```bash
-FLAIR_NER_MODEL=flair/ner-german
-```
-
-In `.env` nach erfolgreichem Prefetch (Produktion):
-
-```bash
-HF_HUB_OFFLINE=1
-HF_HOME=/opt/slitprojekthub/.hf_cache
-```
-
-Flair 0.15 lädt `flair/ner-german-large` über **HuggingFace Hub** — der Cache liegt unter
-`HF_HOME/hub/models--flair--ner-german-large`, nicht nur unter `.flair`.
-Mit `ProtectHome=true` ist `/root/.cache/huggingface` für den Service nicht lesbar.
-
-Falls Prefetch früher als root lief, HF-Cache kopieren:
-
-```bash
-mkdir -p /opt/slitprojekthub/.hf_cache/hub
-cp -a /root/.cache/huggingface/hub/models--flair--ner-german-large \
-  /opt/slitprojekthub/.hf_cache/hub/
-chown -R APP_USER:APP_USER /opt/slitprojekthub/.hf_cache
-```
-
-Falls nur unter `.flair` (verschachtelt):
-
-```bash
-mkdir -p /opt/slitprojekthub/.hf_cache/hub
-cp -a /opt/slitprojekthub/.flair/models/ner-german-large/models--flair--ner-german-large \
-  /opt/slitprojekthub/.hf_cache/hub/
-chown -R APP_USER:APP_USER /opt/slitprojekthub/.hf_cache
-```
-
-In `/etc/systemd/system/projekthub-backend.service` ebenfalls:
-
-```ini
-Environment=HF_HOME=/opt/slitprojekthub/.hf_cache
-Environment=HF_HUB_OFFLINE=1
-```
-
-Verhindert Hugging-Face-Retries bei Firewall/Netzausfall — Modelle sind lokal nach Prefetch.
-Optional: `PII_CIRCUIT_BREAKER_SECONDS=300` (Fallback-Dauer nach Fehler, Standard 5 Min).
-
-Das Backend lädt PII-Modelle beim Start im Hintergrund (`warmup_pii_analyzer`) — der erste
-Nutzer-Request nach Neustart sollte nicht die volle Ladezeit tragen.
-
-Nach erfolgreichem Prefetch und Backend-Neustart:
-
-```bash
-cd /opt/slitprojekthub
-source .venv/bin/activate
-
-# Nur Stufe 1+2 Pipeline (ohne LLM)
-.venv/bin/python -c "
-from src.m16_idea_visual import sanitize_for_cloud_text
-t = 'Kontakt Maria Muster, herr.schmidt@beispiel.ch, AHV 756.1234.5678.97'
-print(sanitize_for_cloud_text(t))
-"
-
-# Direkt swiss-pii-anonymizer
-.venv/bin/python -c "
-from swiss_pii_anonymizer import anonymize
-r = anonymize('Maria Muster plant den Digitalen Sportpass.')
-print(r.text)
-for f in r.findings:
-    print(f.entity_type, f.text, f.score)
-"
-
-# Unit-Tests (mock, kein Flair nötig)
-.venv/bin/python scripts/testing/test_cloud_pii.py
-```
-
-`SWISS_PII_ANONYMIZER=0` in `.env` schaltet Stufe 2 ab (nur Regex-Stufe 1).
 
 ---
 
