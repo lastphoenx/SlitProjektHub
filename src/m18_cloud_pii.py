@@ -11,6 +11,7 @@ import os
 log = logging.getLogger(__name__)
 
 _pii_warned = False
+_DEFAULT_FLAIR = "flair/ner-german-large"
 
 
 def pii_sanitize_enabled() -> bool:
@@ -22,6 +23,17 @@ def pii_sanitize_enabled() -> bool:
     )
 
 
+def flair_ner_model() -> str:
+    """Flair-Modell für Personen-NER (env FLAIR_NER_MODEL)."""
+    return (os.getenv("FLAIR_NER_MODEL", _DEFAULT_FLAIR).strip() or _DEFAULT_FLAIR)
+
+
+def _ensure_pii_analyzer() -> None:
+    from swiss_pii_anonymizer.engine import get_analyzer
+
+    get_analyzer(flair_model=flair_ner_model())
+
+
 def apply_swiss_pii_sanitize(text: str) -> str:
     """Presidio + Flair-NER — ersetzt erkannte PII mit [ENTITY_TYPE]."""
     if not text or not pii_sanitize_enabled():
@@ -30,6 +42,7 @@ def apply_swiss_pii_sanitize(text: str) -> str:
     try:
         from swiss_pii_anonymizer import anonymize
 
+        _ensure_pii_analyzer()
         result = anonymize(text)
         out = (result.text or "").strip()
         return out if out else text
@@ -57,6 +70,7 @@ def pii_findings_for_preview(text: str) -> list[dict[str, str | float]]:
     try:
         from swiss_pii_anonymizer import analyze
 
+        _ensure_pii_analyzer()
         return [
             {
                 "entity_type": f.entity_type,
