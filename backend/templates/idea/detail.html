@@ -148,7 +148,9 @@
   {% elif visual_error == 'not_assessed' %}
   <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Zuerst KI bewerten.</p>
   {% elif visual_error == 'cloud_confirm' %}
-  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud-PNG: Bestätigung für Datenübertragung an OpenAI erforderlich.</p>
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud mit Unterlagen oder Cloud-PNG: Bestätigung für Datenübertragung erforderlich.</p>
+  {% elif visual_error == 'vision_cloud_confirm' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud-Vision (Referenzbilder): Bestätigung erforderlich — oder Ollama-Vision wählen.</p>
   {% elif visual_error %}
   <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Visualisierung fehlgeschlagen (Provider/Modell prüfen).</p>
   {% endif %}
@@ -185,6 +187,21 @@
     {% set form_visual_provider = '' %}
     {% set form_visual_model = '' %}
     {% include 'partials/_llm_picker.html' %}
+    {% if source_attachments or idea.source_reference_text %}
+    <div class="idea-visual-cloud-wrap" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+      <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
+        Bei Cloud-Provider (OpenAI/Anthropic) mit Unterlagen — Text wird vor Übertragung gefiltert.
+      </p>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer;margin-bottom:.35rem">
+        <input type="checkbox" name="cloud_confirm" value="1" id="idea-visual-cloud-confirm" style="margin-top:.15rem" />
+        <span>Unterlagen/Text wurden gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an die Cloud gehen.</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="vision_cloud_confirm" value="1" id="idea-visual-vision-cloud" style="margin-top:.15rem" />
+        <span>Referenzbilder an Cloud-Vision — ich habe geprüft, dass keine sensiblen Inhalte sichtbar sind.</span>
+      </label>
+    </div>
+    {% endif %}
     <div id="idea-cloud-image-wrap" style="display:none">
       <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell (nur Cloud-PNG)</label>
       <select class="form-select" name="image_model">

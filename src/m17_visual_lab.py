@@ -214,6 +214,11 @@ def run_visual_lab(
         (visual_lab_dir() / file_path).write_bytes(img)
         cloud = True
     elif kind in ("pptx", "preview"):
+        out_cloud = is_cloud_llm_provider(llm_provider)
+        if out_cloud:
+            merged_input = sanitize_for_cloud_text(merged_input)
+            if ref_text:
+                ref_text = sanitize_for_cloud_text(ref_text)
         model_probe = get_model_id(llm_provider, llm_model) or llm_model
         imgs_for_llm = ref_images if ref_images and model_supports_vision(llm_provider, model_probe) else None
         content = deck_content_from_lab_prompt(

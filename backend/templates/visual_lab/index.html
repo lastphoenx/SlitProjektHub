@@ -82,17 +82,19 @@
         <option value="{{ key }}" {% if key == default_image_model %}selected{% endif %}>{{ key }}</option>
         {% endfor %}
       </select>
-      <label id="vl-cloud-confirm-wrap" style="display:none;align-items:flex-start;gap:.4rem;margin-top:.5rem;font-size:.72rem;cursor:pointer">
+    </div>
+    <div id="vl-cloud-gates" style="display:grid;gap:.35rem;margin-top:.35rem">
+      <label id="vl-cloud-confirm-wrap" style="display:none;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
         <input type="checkbox" name="cloud_confirm" value="1" id="vl-cloud-confirm" style="margin-top:.15rem" />
-        <span>Prompt automatisch gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an OpenAI gehen.</span>
+        <span>Cloud-LLM / DALL·E: Text automatisch gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an OpenAI/Anthropic gehen.</span>
       </label>
-      <label id="vl-refs-cloud-wrap" style="display:none;align-items:flex-start;gap:.4rem;margin-top:.5rem;font-size:.72rem;cursor:pointer">
+      <label id="vl-refs-cloud-wrap" style="display:none;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
         <input type="checkbox" name="use_refs_cloud_png" value="1" id="vl-refs-cloud" style="margin-top:.15rem" />
         <span>Referenzbilder per Vision-KI beschreiben und in DALL·E-Prompt einbeziehen (lokal Ollama-VL oder Cloud).</span>
       </label>
-      <label id="vl-vision-cloud-wrap" style="display:none;align-items:flex-start;gap:.4rem;margin-top:.35rem;font-size:.72rem;cursor:pointer">
+      <label id="vl-vision-cloud-wrap" style="display:none;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
         <input type="checkbox" name="vision_cloud_confirm" value="1" id="vl-vision-cloud" style="margin-top:.15rem" />
-        <span>Cloud-Vision: Referenzbilder an OpenAI/Anthropic zur Beschreibung senden (vor DALL·E).</span>
+        <span>Cloud-Vision: Referenzbilder an OpenAI/Anthropic senden (Bewertung/PPTX oder DALL·E-Beschreibung).</span>
       </label>
     </div>
     <button type="submit" class="btn btn-primary" id="vl-submit-btn">Generieren</button>
@@ -173,14 +175,21 @@ document.addEventListener('keydown', e => {
   const promptEl = document.getElementById('vl-prompt');
   const attEl = document.getElementById('file-input-vl-ref');
   function syncKind() {
-    const isPng = kindSel.value === 'png';
+    const kind = kindSel.value;
+    const isPng = kind === 'png';
     imgWrap.style.display = isPng ? '' : 'none';
-    if (confirmWrap) confirmWrap.style.display = isPng ? 'flex' : 'none';
+    const hasFiles = attEl && attEl.files && attEl.files.length > 0;
+    const showCloudGates = isPng || hasFiles || kind === 'pptx' || kind === 'preview';
+    if (confirmWrap) confirmWrap.style.display = showCloudGates ? 'flex' : 'none';
     if (confirmBox) confirmBox.required = isPng;
     if (refsCloudWrap) refsCloudWrap.style.display = isPng ? 'flex' : 'none';
-    if (visionCloudWrap) visionCloudWrap.style.display = (isPng && document.getElementById('vl-refs-cloud')?.checked) ? 'flex' : 'none';
+    if (visionCloudWrap) {
+      const refsChecked = document.getElementById('vl-refs-cloud')?.checked;
+      visionCloudWrap.style.display = (isPng && refsChecked) || (hasFiles && (kind === 'pptx' || kind === 'preview')) ? 'flex' : 'none';
+    }
   }
   document.getElementById('vl-refs-cloud')?.addEventListener('change', syncKind);
+  attEl?.addEventListener('change', syncKind);
   function validateSubmit(e) {
     const hasPrompt = (promptEl?.value || '').trim().length > 0;
     const hasFiles = attEl && attEl.files && attEl.files.length > 0;
