@@ -16,10 +16,12 @@ from src.m16_idea_visual import (
     DEFAULT_OPENAI_IMAGE_MODEL,
     OPENAI_IMAGE_MODELS,
     resolve_visual_llm,
+    validate_cloud_gates_for_references,
     visual_text_models_map,
     visual_vision_models_map,
     visual_text_providers_available,
 )
+from src.m17_visual_lab_refs import DEFAULT_SOURCE_TASKS
 from src.m17_visual_lab import (
     VISUAL_LAB_KINDS,
     delete_visual_lab_run,
@@ -144,6 +146,21 @@ async def visual_lab_generate(
         ref_err, ref_bundle = process_reference_uploads(uploads)
         if ref_err:
             ctx = _lab_context(request, error=ref_err, **form_ctx)
+            return templates.TemplateResponse("visual_lab/index.html", ctx)
+
+    src_tasks = set(DEFAULT_SOURCE_TASKS)
+    if ref_bundle:
+        gate_err = validate_cloud_gates_for_references(
+            vp,
+            vm,
+            ip,
+            src_tasks,
+            cloud_confirm == "1",
+            vision_cloud_confirm == "1",
+            ref_bundle=ref_bundle,
+        )
+        if gate_err:
+            ctx = _lab_context(request, error=gate_err, **form_ctx)
             return templates.TemplateResponse("visual_lab/index.html", ctx)
 
     use_cloud_refs = use_refs_cloud_png == "1"

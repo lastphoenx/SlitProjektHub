@@ -22,6 +22,12 @@ def test_model_supports_vision_ollama_vl():
     assert not model_supports_vision("ollama", "qwen3:32b")
 
 
+def test_model_supports_vision_not_false_positive():
+    assert not model_supports_vision("mistral", "mistral-large-latest")
+    assert not model_supports_vision("anthropic", "haiku-4.5")
+    assert model_supports_vision("anthropic", "claude-sonnet-4")
+
+
 def test_text_file_in_bundle(tmp_path=None):
     store = Path(__file__).resolve().parents[2] / "data" / "visual_lab_test_att"
     store.mkdir(parents=True, exist_ok=True)
@@ -62,6 +68,7 @@ def test_parse_task_selection_defaults():
 
 if __name__ == "__main__":
     test_model_supports_vision_ollama_vl()
+    test_model_supports_vision_not_false_positive()
     test_text_file_in_bundle()
     test_build_prompt_with_reference_text()
     test_filter_bundle_source_tasks()

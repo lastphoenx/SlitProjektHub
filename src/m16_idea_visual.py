@@ -241,15 +241,55 @@ def validate_assess_cloud_gates(
     cloud_confirm: bool,
     vision_cloud_confirm: bool,
 ) -> Optional[str]:
-    """Prüft cloud_confirm / vision_cloud_confirm vor KI-Bewertung mit Unterlagen."""
-    from .m08_llm import get_model_id
-    from .m16_idea import _idea_source_bundle, _load_stored_attachments
-
-    has_att = bool(_load_stored_attachments(idea)) or bool(
-        (idea.source_reference_text or "").strip()
+    return validate_cloud_gates_for_references(
+        assess_provider,
+        assess_model,
+        input_provider,
+        source_tasks,
+        cloud_confirm,
+        vision_cloud_confirm,
+        idea=idea,
     )
-    bundle = _idea_source_bundle(idea)
-    has_images = bool(bundle and bundle.image_payload())
+
+
+def _cloud_gate_attachment_state(
+    idea: ProjectIdea | None = None,
+    ref_bundle: Any | None = None,
+) -> tuple[bool, bool]:
+    from .m17_visual_lab_refs import LabReferenceBundle
+
+    has_att = False
+    has_images = False
+    bundle: LabReferenceBundle | None = None
+    if idea is not None:
+        from .m16_idea import _idea_source_bundle, _load_stored_attachments
+
+        has_att = bool(_load_stored_attachments(idea)) or bool(
+            (idea.source_reference_text or "").strip()
+        )
+        bundle = _idea_source_bundle(idea)
+    if ref_bundle is not None:
+        has_att = has_att or bool(ref_bundle.stored or ref_bundle.text_blocks)
+        if bundle is None or ref_bundle.images:
+            bundle = ref_bundle
+    if bundle is not None:
+        has_images = bool(bundle.image_payload())
+    return has_att, has_images
+
+
+def validate_cloud_gates_for_references(
+    assess_provider: str,
+    assess_model: str,
+    input_provider: str,
+    source_tasks: set[str],
+    cloud_confirm: bool,
+    vision_cloud_confirm: bool,
+    idea: ProjectIdea | None = None,
+    ref_bundle: Any | None = None,
+) -> Optional[str]:
+    from .m08_llm import get_model_id
+
+    has_att, has_images = _cloud_gate_attachment_state(idea, ref_bundle)
 
     assess_cloud = is_cloud_llm_provider(assess_provider)
     input_cloud = is_cloud_llm_provider(input_provider)
@@ -277,15 +317,22 @@ def validate_assess_cloud_gates(
     return None
 
 
-def _merge_refinement_with_reference(refinement_notes: str, reference_text: str) -> str:
+def _merge_refinement_with_reference(
+    refinement_notes: str,
+    reference_text: str,
+    for_cloud: bool = False,
+) -> str:
     parts: list[str] = []
     if (reference_text or "").strip():
-        parts.append(
-            "Berücksichtige folgende Referenzunterlagen:\n"
-            + reference_text.strip()[:8000]
-        )
+        ref = reference_text.strip()[:8000]
+        if for_cloud:
+            ref = sanitize_for_cloud_text(ref)
+        parts.append("Berücksichtige folgende Referenzunterlagen:\n" + ref)
     if (refinement_notes or "").strip():
-        parts.append(refinement_notes.strip())
+        note = refinement_notes.strip()
+        if for_cloud:
+            note = sanitize_for_cloud_text(note)
+        parts.append(note)
     return "\n\n".join(parts)
 
 
@@ -294,6 +341,7 @@ def resolve_idea_reference_context(
     source_tasks: set[str],
     input_provider: str,
     input_model: str,
+    for_cloud: bool = False,
 ) -> tuple[str, list[tuple[bytes, str]]]:
     from .m16_idea import _idea_source_bundle
     from .m17_visual_lab_refs import (
@@ -313,11 +361,12 @@ def resolve_idea_reference_context(
         if not t and idea.source_reference_text:
             t = (idea.source_reference_text or "").strip()
         if t:
-            text_parts.append(t)
+            text_parts.append(sanitize_for_cloud_text(t) if for_cloud else t)
     if "vision_describe" in tasks and filtered.images:
         desc = describe_reference_images(filtered, input_provider, input_model)
         if desc:
-            text_parts.append("Referenz-Bildbeschreibung:\n" + desc)
+            raw = sanitize_for_cloud_text(desc) if for_cloud else desc
+            text_parts.append("Referenz-Bildbeschreibung:\n" + raw)
     images = filtered.image_payload() if "vision_images" in tasks else []
     return "\n\n".join(text_parts), images
 
@@ -1175,8 +1224,11 @@ def generate_idea_visual(
 
     src = source_tasks if source_tasks is not None else set(DEFAULT_SOURCE_TASKS)
     ip, im = resolve_visual_llm(input_llm_provider, input_llm_model, llm_provider, llm_model)
-    ref_text, _ = resolve_idea_reference_context(idea, src, ip, im)
-    merged_notes = _merge_refinement_with_reference(refinement_notes, ref_text)
+    out_cloud = is_cloud_llm_provider(llm_provider)
+    ref_text, _ = resolve_idea_reference_context(idea, src, ip, im, for_cloud=out_cloud)
+    merged_notes = _merge_refinement_with_reference(
+        refinement_notes, ref_text, for_cloud=out_cloud,
+    )
 
     if fmt == "pptx":
         obj = generate_portfolio_deck(idea_id, merged_notes, llm_provider, llm_model)

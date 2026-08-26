@@ -341,6 +341,7 @@ async def idea_generate_visual(
     source_tasks: list[str] = Form(default=[]),
     image_model: str = Form(DEFAULT_OPENAI_IMAGE_MODEL),
     cloud_confirm: str = Form(""),
+    vision_cloud_confirm: str = Form(""),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
@@ -354,6 +355,17 @@ async def idea_generate_visual(
     vp, vm = resolve_visual_llm(visual_llm_provider, visual_llm_model, llm_provider, llm_model)
     ip, im = resolve_visual_llm(input_llm_provider, input_llm_model, llm_provider, llm_model)
     src = parse_task_selection(source_tasks, SOURCE_PROCESS_TASKS)
+    gate_err = validate_assess_cloud_gates(
+        idea,
+        vp,
+        vm,
+        ip,
+        src,
+        cloud_confirm == "1",
+        vision_cloud_confirm == "1",
+    )
+    if gate_err:
+        return RedirectResponse(url=f"/idea/{idea_id}?visual_error={gate_err}", status_code=303)
     if image_model not in OPENAI_IMAGE_MODELS:
         image_model = DEFAULT_OPENAI_IMAGE_MODEL
     obj, err = generate_idea_visual(

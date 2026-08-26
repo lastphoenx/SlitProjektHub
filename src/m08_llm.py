@@ -292,9 +292,9 @@ def _anthropic_try_models_with_messages(system: str, messages: list[dict], *, ma
 
 _VISION_HINTS: dict[str, tuple[str, ...]] = {
     "openai": ("gpt-4o", "gpt-5", "gpt-4-turbo", "vision"),
-    "anthropic": ("claude"),
+    "anthropic": ("claude",),
     "ollama": ("llava", "vision", "vl", "moondream", "bakllava", "minicpm-v", "gemma3"),
-    "mistral": ("pixtral"),
+    "mistral": ("pixtral",),
 }
 
 
