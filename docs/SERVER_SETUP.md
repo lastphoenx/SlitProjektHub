@@ -177,25 +177,36 @@ In `.env` nach erfolgreichem Prefetch (Produktion):
 
 ```bash
 HF_HUB_OFFLINE=1
-FLAIR_CACHE_ROOT=/opt/slitprojekthub/.flair
+HF_HOME=/opt/slitprojekthub/.hf_cache
 ```
 
-`FLAIR_CACHE_ROOT` muss auf ein Verzeichnis unter `APP_ROOT` zeigen — mit `ProtectHome=true`
-im systemd-Service ist `/root/.flair` nicht lesbar. Prefetch legt Modelle standardmäßig
-nach `APP_ROOT/.flair` (das Skript setzt `FLAIR_CACHE_ROOT` automatisch).
+Flair 0.15 lädt `flair/ner-german-large` über **HuggingFace Hub** — der Cache liegt unter
+`HF_HOME/hub/models--flair--ner-german-large`, nicht nur unter `.flair`.
+Mit `ProtectHome=true` ist `/root/.cache/huggingface` für den Service nicht lesbar.
 
-Falls Prefetch früher als root lief und Modelle nur in `/root/.flair` liegen:
+Falls Prefetch früher als root lief, HF-Cache kopieren:
 
 ```bash
-mkdir -p /opt/slitprojekthub/.flair/models
-cp -a /root/.flair/models/ner-german-large /opt/slitprojekthub/.flair/models/
-chown -R APP_USER:APP_USER /opt/slitprojekthub/.flair
+mkdir -p /opt/slitprojekthub/.hf_cache/hub
+cp -a /root/.cache/huggingface/hub/models--flair--ner-german-large \
+  /opt/slitprojekthub/.hf_cache/hub/
+chown -R APP_USER:APP_USER /opt/slitprojekthub/.hf_cache
+```
+
+Falls nur unter `.flair` (verschachtelt):
+
+```bash
+mkdir -p /opt/slitprojekthub/.hf_cache/hub
+cp -a /opt/slitprojekthub/.flair/models/ner-german-large/models--flair--ner-german-large \
+  /opt/slitprojekthub/.hf_cache/hub/
+chown -R APP_USER:APP_USER /opt/slitprojekthub/.hf_cache
 ```
 
 In `/etc/systemd/system/projekthub-backend.service` ebenfalls:
 
 ```ini
-Environment=FLAIR_CACHE_ROOT=/opt/slitprojekthub/.flair
+Environment=HF_HOME=/opt/slitprojekthub/.hf_cache
+Environment=HF_HUB_OFFLINE=1
 ```
 
 Verhindert Hugging-Face-Retries bei Firewall/Netzausfall — Modelle sind lokal nach Prefetch.
