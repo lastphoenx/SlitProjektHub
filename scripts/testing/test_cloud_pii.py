@@ -26,13 +26,15 @@ def test_pii_enabled_default():
 
 
 def test_sanitize_stage2_called():
+    _reset_pii_state()
     fake_result = MagicMock()
     fake_result.text = "Kontakt [PERSON] wegen Budget."
-    with patch("swiss_pii_anonymizer.anonymize", return_value=fake_result) as mock_anon:
-        out = sanitize_for_cloud_text("Kontakt herr.schmidt@beispiel.ch Maria Muster.")
-        mock_anon.assert_called_once()
-        assert "[PERSON]" in out
-        assert "@" not in out
+    with patch("swiss_pii_anonymizer.engine.get_analyzer", return_value=object()):
+        with patch("swiss_pii_anonymizer.anonymize", return_value=fake_result) as mock_anon:
+            out = sanitize_for_cloud_text("Kontakt herr.schmidt@beispiel.ch Maria Muster.")
+            mock_anon.assert_called_once()
+            assert "[PERSON]" in out
+            assert "@" not in out
 
 
 def test_apply_swiss_pii_fallback_without_package():
