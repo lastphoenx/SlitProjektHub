@@ -3,21 +3,18 @@
 
 Auf dem Server einmalig nach pip install -r requirements.txt:
 
+    export HF_HOME=/opt/slitprojekthub/.hf_cache   # APP_ROOT/.hf_cache
     .venv/bin/python scripts/maintenance/prefetch_pii_models.py
 
-RAM-Hinweis: flair/ner-german-large (~2.2 GB Gewichte) + de_core_news_lg (~570 MB)
-+ PyTorch-Overhead → beim ersten Laden oft >4 GB RAM. Auf einem 4 GB CT ohne Swap
-wird der Prozess vom Kernel getötet („Getötet“ / OOM).
+Lädt in APP_ROOT/.hf_cache/hub/ (HuggingFace Hub):
+  - flair/ner-german-large + Basis FacebookAI/xlm-roberta-large (Tokenizer/Config)
+  - oder flair/ner-german (kleiner, ohne xlm-roberta)
 
-Optionen:
-  - Swap (4 GB): siehe docs/SERVER_SETUP.md Abschnitt Cloud-PII
-  - Kleineres Modell: FLAIR_NER_MODEL=flair/ner-german .venv/bin/python ...
-  - CT-RAM auf 8 GB erhöhen
+RAM: ner-german-large oft >6 GB Spitze beim Laden (8 GB CT empfohlen).
+Disk: ~2–3 GB HF-Cache + spaCy lg + PyTorch-Abhängigkeiten.
 
-Benötigt Internetzugang. Ohne Netz: APP_ROOT/.hf_cache/hub/ und spaCy de_core_news_lg kopieren.
-
-Hinweis systemd (ProtectHome=true): Flair 0.15 lädt über HuggingFace Hub —
-Caches müssen unter APP_ROOT/.hf_cache/hub liegen, nicht in /root/.cache.
+Nach Prefetch: chown für Service-User, HF_HUB_OFFLINE=1 in .env, Backend-Neustart.
+Siehe docs/SERVER_SETUP.md Abschnitt 7.
 """
 from __future__ import annotations
 
@@ -27,6 +24,8 @@ import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
+# flair/ner-german-large (FLERT) nutzt diesen Transformer — muss im HF-Cache liegen
+_LARGE_NER_BASE = "FacebookAI/xlm-roberta-large"
 
 
 def _ensure_model_cache_paths() -> tuple[Path, Path]:
@@ -44,6 +43,14 @@ def _ensure_model_cache_paths() -> tuple[Path, Path]:
     return flair_cache, hf_hub
 
 
+def _prefetch_large_ner_base() -> None:
+    print(f"Basis-Transformer {_LARGE_NER_BASE} (für ner-german-large) …")
+    from transformers import AutoConfig, AutoTokenizer
+
+    AutoConfig.from_pretrained(_LARGE_NER_BASE)
+    AutoTokenizer.from_pretrained(_LARGE_NER_BASE)
+
+
 def main() -> None:
     flair_cache, hf_hub = _ensure_model_cache_paths()
     flair_model = os.getenv("FLAIR_NER_MODEL", "flair/ner-german-large").strip()
@@ -55,15 +62,20 @@ def main() -> None:
         [sys.executable, "-m", "spacy", "download", "de_core_news_lg"],
         check=True,
     )
+    if flair_model.endswith("ner-german-large"):
+        _prefetch_large_ner_base()
     print("Lade Analyzer (Flair + Presidio) — kann mehrere Minuten dauern …")
+    from flair.models import SequenceTagger
     from swiss_pii_anonymizer import anonymize
     from swiss_pii_anonymizer.engine import get_analyzer
 
+    SequenceTagger.load(flair_model)
     get_analyzer(flair_model=flair_model)
     print("Smoke-Test …")
     r = anonymize("Kontakt Maria Muster, AHV 756.1234.5678.97")
     print("  Ergebnis:", r.text[:120])
-    print("OK — PII-Stufe 2 bereit.")
+    print(f"OK — PII-Stufe 2 bereit. Cache: {hf_hub}")
+    print("Nächster Schritt: chown -R APP_USER:APP_USER", hf_hub.parent)
 
 
 if __name__ == "__main__":

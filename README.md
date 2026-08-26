@@ -68,6 +68,17 @@ cp .env.example .env
 
 > **Hinweis `de_core_news_sm`**: Das deutsche spaCy-Sprachmodell (~15 MB) wird für die BM25-Lemmatisierung benötigt. Es wird **nicht** über `requirements.txt` installiert, sondern mit dem separaten `spacy download`-Befehl. Ohne dieses Modell läuft das RAG-System im Fallback-Modus (einfaches Regex-Tokenizing).
 
+### Optional: Cloud-PII Stufe 2 (Server / Cloud-LLM-Nutzung)
+
+Vor dem Senden an OpenAI/Anthropic werden Prompts zusätzlich mit Presidio + Flair anonymisiert (`swiss-pii-anonymizer`). Erfordert einmaligen Modell-Download (~2–3 GB HF-Cache, 8 GB RAM empfohlen für `ner-german-large`). Auf dem Server: `docs/SERVER_SETUP.md` Abschnitt **7**.
+
+```bash
+export HF_HOME=/opt/slitprojekthub/.hf_cache
+.venv/bin/python scripts/maintenance/prefetch_pii_models.py
+```
+
+Lokal ohne Prefetch: Stufe 2 fällt still auf Regex-Stufe 1 zurück (`SWISS_PII_ANONYMIZER=0` zum Abschalten).
+
 ## Starten
 
 ```powershell

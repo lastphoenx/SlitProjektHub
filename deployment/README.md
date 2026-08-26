@@ -16,9 +16,11 @@
 
 1. App-CT: `git clone` → `/opt/slitprojekthub`, venv, `config/*.yaml` aus `.example` kopieren
 2. `.env` mit API-Keys (nicht im Git)
-3. `config/config.yaml` → `auth.trusted_proxy_ips: ["<nginx-lan-ip>"]`
-4. systemd-Units aus `.example` nach `/etc/systemd/system/`, `systemctl enable --now projekthub-backend`
-5. nginx-CT: vHost aus `fastapi-vhost.conf.example`, TLS, `proxy_pass` → App-CT `:8000`
+3. Optional Cloud-PII: `scripts/maintenance/prefetch_pii_models.py` — siehe `docs/SERVER_SETUP.md` §7
+4. `config/config.yaml` → `auth.trusted_proxy_ips: ["<nginx-lan-ip>"]`
+5. systemd-Units aus `.example` nach `/etc/systemd/system/`, `chown` auf `.hf_cache` für `APP_USER`
+6. `systemctl enable --now projekthub-backend`
+7. nginx-CT: vHost aus `fastapi-vhost.conf.example`, TLS, `proxy_pass` → App-CT `:8000`
 
 Auth: In-App (Login + 2FA) — `docs/AUTH.md`. Kein Authelia/Traefik.
 
