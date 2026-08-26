@@ -145,7 +145,35 @@ location /_stcore/stream {
 
 ## 7. Cloud-PII Stufe 2 (optional testen)
 
-Nach `prefetch_pii_models.py` und Backend-Neustart:
+**RAM:** `flair/ner-german-large` + `de_core_news_lg` brauchen beim ersten Laden oft **>4 GB RAM**.
+Symptom ohne genug RAM/Swap: Prozess endet mit `Getötet` (Linux OOM-Killer).
+
+```bash
+# Prüfen
+free -h
+
+# Option A — Swap (einmalig, empfohlen auf 4 GB CT)
+sudo fallocate -l 4G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+# dauerhaft: /etc/fstab → /swapfile none swap sw 0 0
+
+# Option B — kleineres Flair-Modell (weniger RAM, etwas schwächer bei Namen)
+export FLAIR_NER_MODEL=flair/ner-german
+
+cd /opt/slitprojekthub
+.venv/bin/pip install -r requirements.txt   # falls noch nicht
+.venv/bin/python scripts/maintenance/prefetch_pii_models.py
+```
+
+In `.env` dauerhaft kleines Modell:
+
+```bash
+FLAIR_NER_MODEL=flair/ner-german
+```
+
+Nach erfolgreichem Prefetch und Backend-Neustart:
 
 ```bash
 cd /opt/slitprojekthub
