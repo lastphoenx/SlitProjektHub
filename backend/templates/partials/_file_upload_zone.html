@@ -1,0 +1,92 @@
+{# Drag/Drop + Multi-Upload mit Vorschau-Liste (clientseitig, vor Absenden löschbar) #}
+<div class="file-upload-zone" data-zone-id="{{ zone_id or 'files' }}">
+  <input type="file" class="file-upload-input" id="file-input-{{ zone_id or 'files' }}"
+    name="{{ input_name or 'attachments' }}" multiple
+    accept="{{ accept or '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' }}"
+    style="display:none" />
+  <div class="file-upload-drop" id="file-drop-{{ zone_id or 'files' }}"
+    style="border:1px dashed var(--color-border);border-radius:.5rem;padding:.75rem;text-align:center;cursor:pointer;background:var(--color-surface-2)">
+    <span style="font-size:.78rem">Dateien hierher ziehen oder <u>klicken</u></span>
+    <p class="text-muted" style="font-size:.68rem;margin:.35rem 0 0">{{ hint or 'PNG, JPG, PDF, Word, TXT — max. 10 MB je Datei' }}</p>
+  </div>
+  <ul class="file-upload-list" id="file-list-{{ zone_id or 'files' }}" style="list-style:none;margin:.5rem 0 0;padding:0;font-size:.75rem"></ul>
+  <p class="file-upload-error text-muted" id="file-err-{{ zone_id or 'files' }}" style="color:#fca5a5;font-size:.72rem;margin:.35rem 0 0;display:none"></p>
+</div>
+<script>
+(function() {
+  const zoneId = "{{ zone_id or 'files' }}";
+  const input = document.getElementById('file-input-' + zoneId);
+  const drop = document.getElementById('file-drop-' + zoneId);
+  const list = document.getElementById('file-list-' + zoneId);
+  const err = document.getElementById('file-err-' + zoneId);
+  if (!input || !drop) return;
+  const maxBytes = {{ max_bytes or 10485760 }};
+  const maxFiles = {{ max_files or 5 }};
+  const allowed = (input.getAttribute('accept') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  let files = [];
+
+  function extOf(name) {
+    const i = name.lastIndexOf('.');
+    return i >= 0 ? name.slice(i).toLowerCase() : '';
+  }
+  function okExt(name) {
+    if (!allowed.length) return true;
+    const e = extOf(name);
+    return allowed.some(a => a === e || a === 'image/*' && e.match(/^\.(png|jpe?g|gif|webp)$/));
+  }
+  function showErr(msg) {
+    if (err) { err.textContent = msg; err.style.display = msg ? 'block' : 'none'; }
+  }
+  function syncInput() {
+    const dt = new DataTransfer();
+    files.forEach(f => dt.items.add(f));
+    input.files = dt.files;
+  }
+  function render() {
+    if (!list) return;
+    list.innerHTML = '';
+    files.forEach((f, i) => {
+      const li = document.createElement('li');
+      li.style.cssText = 'display:flex;align-items:center;gap:.5rem;padding:.25rem 0;border-bottom:1px solid var(--color-border)';
+      li.innerHTML = '<span style="flex:1">' + f.name + ' <span class="text-muted">(' + Math.round(f.size/1024) + ' KB)</span></span>';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-ghost btn-sm';
+      btn.textContent = 'Entfernen';
+      btn.style.fontSize = '.68rem';
+      btn.onclick = () => { files.splice(i, 1); syncInput(); render(); showErr(''); };
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
+  }
+  function addFiles(newFiles) {
+    showErr('');
+    for (const f of newFiles) {
+      if (files.length >= maxFiles) {
+        showErr('Maximal ' + maxFiles + ' Dateien.');
+        break;
+      }
+      if (!okExt(f.name)) {
+        showErr('Nicht erlaubt: ' + f.name + ' — nur ' + allowed.join(', '));
+        continue;
+      }
+      if (f.size > maxBytes) {
+        showErr('Zu gross: ' + f.name + ' (max. ' + Math.round(maxBytes/1024/1024) + ' MB)');
+        continue;
+      }
+      files.push(f);
+    }
+    syncInput();
+    render();
+  }
+  drop.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => addFiles(Array.from(input.files || [])));
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.style.borderColor = 'var(--color-primary)'; });
+  drop.addEventListener('dragleave', () => { drop.style.borderColor = 'var(--color-border)'; });
+  drop.addEventListener('drop', e => {
+    e.preventDefault();
+    drop.style.borderColor = 'var(--color-border)';
+    addFiles(Array.from(e.dataTransfer.files || []));
+  });
+})();
+</script>

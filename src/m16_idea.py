@@ -12,13 +12,15 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, Column, Float, String, text
+from sqlalchemy import Boolean, Column, Float, String, Text, text
 from sqlmodel import Field, Session, SQLModel, select
 
+from .m01_config import get_settings
 from .m03_db import engine, get_session
-from .m08_llm import try_models_with_messages
+from .m08_llm import try_models_with_messages, model_supports_vision, get_model_id
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +45,8 @@ class ProjectIdea(SQLModel, table=True):
     deck_generated_at: Optional[datetime] = None
     docx_path: Optional[str] = Field(default=None, sa_column=Column(String(400)))
     docx_generated_at: Optional[datetime] = None
+    source_attachments_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+    source_reference_text: Optional[str] = Field(default=None, sa_column=Column(Text))
     illustration_model: Optional[str] = Field(default=None, sa_column=Column(String(80)))
     illustration_prompt_safe: Optional[str] = Field(default=None, sa_column=Column(String(500)))
     illustration_generated_at: Optional[datetime] = None
@@ -104,11 +108,19 @@ def migrate_idea_db() -> None:
             ("illustration_generated_at", "ALTER TABLE project_idea ADD COLUMN illustration_generated_at DATETIME"),
             ("docx_path", "ALTER TABLE project_idea ADD COLUMN docx_path VARCHAR(400)"),
             ("docx_generated_at", "ALTER TABLE project_idea ADD COLUMN docx_generated_at DATETIME"),
+            ("source_attachments_json", "ALTER TABLE project_idea ADD COLUMN source_attachments_json TEXT"),
+            ("source_reference_text", "ALTER TABLE project_idea ADD COLUMN source_reference_text TEXT"),
         ]
         for col, stmt in migrations:
             if col not in cols:
                 conn.execute(text(stmt))
         # zukünftige Spalten hier ergänzen
+
+
+def idea_source_attachments_dir() -> Path:
+    d = Path(get_settings().data_dir) / "idea_source_attachments"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def create_idea(
@@ -119,6 +131,8 @@ def create_idea(
     internal_pt_human: float | None = None,
     external_cost_human: float | None = None,
     image_path: str | None = None,
+    source_attachments_json: str | None = None,
+    source_reference_text: str | None = None,
     submitted_by: int | None = None,
 ) -> ProjectIdea:
     if not idea_text or not idea_text.strip():
@@ -132,6 +146,8 @@ def create_idea(
             external_cost_human=external_cost_human,
             image_path=image_path,
             image_source="upload" if image_path else None,
+            source_attachments_json=source_attachments_json,
+            source_reference_text=source_reference_text,
             submitted_by=submitted_by,
         )
         ses.add(obj)
@@ -219,8 +235,25 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _idea_source_bundle(idea: ProjectIdea):
+    from .m17_visual_lab_refs import load_bundle_from_stored
+
+    if not idea.source_attachments_json:
+        return None
+    try:
+        stored = json.loads(idea.source_attachments_json)
+        if not isinstance(stored, list):
+            return None
+    except json.JSONDecodeError:
+        return None
+    return load_bundle_from_stored(stored, idea_source_attachments_dir())
+
+
 def _build_user_prompt(idea: ProjectIdea) -> str:
     parts = [f"Projektidee (Rohtext):\n{idea.idea_text}"]
+    ref = (idea.source_reference_text or "").strip()
+    if ref:
+        parts.append(f"Angehängte Unterlagen (extrahiert, lokal):\n{ref[:10000]}")
     if idea.title:
         parts.append(f"Arbeitstitel der Fachabteilung: {idea.title}")
     if idea.fachabteilung:
@@ -250,6 +283,10 @@ def assess_project_idea_with_ai(
         return None
 
     messages = [{"role": "user", "content": _build_user_prompt(idea)}]
+    bundle = _idea_source_bundle(idea)
+    images = bundle.image_payload() if bundle else []
+    model_id = get_model_id(provider, model) or model
+    use_images = images if images and model_supports_vision(provider, model_id) else None
     raw = try_models_with_messages(
         provider,
         _SYSTEM_PROMPT,
@@ -257,6 +294,7 @@ def assess_project_idea_with_ai(
         max_tokens=1800,
         temperature=0.3,
         model=model,
+        images=use_images,
     )
 
     parsed: dict[str, Any] = {}

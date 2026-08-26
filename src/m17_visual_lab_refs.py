@@ -19,7 +19,7 @@ from .m08_llm import (
 log = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = frozenset(
-    {".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf", ".txt", ".md"}
+    {".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf", ".txt", ".md", ".docx"}
 )
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 MIME_BY_EXT = {
@@ -119,6 +119,55 @@ def _read_text_file(path: Path) -> str:
         return ""
 
 
+def _read_docx_text(path: Path) -> str:
+    try:
+        from docx import Document
+
+        doc = Document(str(path))
+        parts = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+        return "\n".join(parts)[:MAX_REF_TEXT_CHARS]
+    except Exception as exc:
+        log.warning("DOCX extract failed %s: %s", path, exc)
+        return ""
+
+
+def load_bundle_from_stored(stored: list[dict[str, Any]], base_dir: Path) -> LabReferenceBundle:
+    """Lädt gespeicherte Anhänge wieder als Bundle (für KI-Bewertung)."""
+    bundle = LabReferenceBundle()
+    for item in stored:
+        rel = item.get("path")
+        if not rel:
+            continue
+        fp = base_dir / Path(rel).name
+        if not fp.is_file():
+            continue
+        bundle.stored.append(item)
+        kind = item.get("kind") or "other"
+        name = item.get("original_name") or fp.name
+        if kind == "image":
+            ext = fp.suffix.lower()
+            mime = MIME_BY_EXT.get(ext, "image/png")
+            bundle.images.append((fp.read_bytes(), mime, name))
+        elif kind == "pdf":
+            text = _extract_pdf_text(fp)
+            if len(text.strip()) >= 80:
+                bundle.text_blocks.append(f"[PDF {name}]\n{text[:8000]}")
+            else:
+                pages = _pdf_page_images(fp)
+                bundle.images.extend(pages)
+                if pages or text.strip():
+                    bundle.text_blocks.append(f"[PDF {name}]")
+        elif kind == "docx":
+            text = _read_docx_text(fp)
+            if text.strip():
+                bundle.text_blocks.append(f"[Word {name}]\n{text[:8000]}")
+        elif kind == "text":
+            text = _read_text_file(fp)
+            if text.strip():
+                bundle.text_blocks.append(f"[{name}]\n{text[:6000]}")
+    return bundle
+
+
 def process_upload_bytes(
     filename: str,
     data: bytes,
@@ -164,6 +213,11 @@ def process_upload_bytes(
                 )
             elif text.strip():
                 bundle.text_blocks.append(f"[PDF {filename}]\n{text}")
+    elif ext == ".docx":
+        meta["kind"] = "docx"
+        text = _read_docx_text(dest)
+        if text.strip():
+            bundle.text_blocks.append(f"[Word {filename}]\n{text[:8000]}")
     else:
         meta["kind"] = "text"
         text = _read_text_file(dest)
