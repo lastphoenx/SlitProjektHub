@@ -358,8 +358,21 @@ def _build_user_prompt(
     source_tasks: set[str],
     input_provider: str = "",
     input_model: str = "",
+    assess_cloud: bool = False,
 ) -> str:
-    parts = [f"Projektidee (Rohtext):\n{idea.idea_text}"]
+    from .m16_idea_visual import sanitize_for_cloud_text, sanitize_structured_field
+
+    def _txt(text: str, structured: bool = False) -> str:
+        if not text:
+            return ""
+        if not assess_cloud:
+            return text
+        return (
+            sanitize_structured_field(text) if structured
+            else sanitize_for_cloud_text(text)
+        )
+
+    parts = [f"Projektidee (Rohtext):\n{_txt(idea.idea_text)}"]
     bundle = _idea_source_bundle(idea)
     if bundle:
         filtered = filter_bundle_for_source_tasks(bundle, source_tasks)
@@ -368,19 +381,25 @@ def _build_user_prompt(
             if not ref and idea.source_reference_text:
                 ref = (idea.source_reference_text or "").strip()
             if ref:
-                parts.append(f"Angehängte Unterlagen (extrahiert, lokal):\n{ref[:10000]}")
+                parts.append(
+                    f"Angehängte Unterlagen (extrahiert, lokal):\n{_txt(ref[:10000])}"
+                )
         if "vision_describe" in source_tasks and filtered.images:
             desc = describe_reference_images(filtered, input_provider, input_model)
             if desc:
-                parts.append(f"Referenz-Bildbeschreibung (KI):\n{desc[:4000]}")
+                parts.append(f"Referenz-Bildbeschreibung (KI):\n{_txt(desc[:4000])}")
     elif idea.source_reference_text and "extract_text" in source_tasks:
         ref = (idea.source_reference_text or "").strip()
         if ref:
-            parts.append(f"Angehängte Unterlagen (extrahiert, lokal):\n{ref[:10000]}")
+            parts.append(
+                f"Angehängte Unterlagen (extrahiert, lokal):\n{_txt(ref[:10000])}"
+            )
     if idea.title:
-        parts.append(f"Arbeitstitel der Fachabteilung: {idea.title}")
+        parts.append(f"Arbeitstitel der Fachabteilung: {_txt(idea.title, structured=True)}")
     if idea.fachabteilung:
-        parts.append(f"Einreichende Fachabteilung: {idea.fachabteilung}")
+        parts.append(
+            f"Einreichende Fachabteilung: {_txt(idea.fachabteilung, structured=True)}"
+        )
     if idea.internal_pt_human is not None:
         parts.append(
             f"Eigene Schätzung der Fachabteilung: {idea.internal_pt_human} Personentage intern "
@@ -412,9 +431,12 @@ def assess_project_idea_with_ai(
     tasks = assess_tasks or set(DEFAULT_ASSESS_TASKS)
     src_tasks = source_tasks or set(DEFAULT_SOURCE_TASKS)
     system_prompt = _build_assess_system_prompt(tasks)
+    from .m16_idea_visual import is_cloud_llm_provider
+
+    assess_cloud = is_cloud_llm_provider(provider)
 
     messages = [{"role": "user", "content": _build_user_prompt(
-        idea, src_tasks, input_provider, input_model,
+        idea, src_tasks, input_provider, input_model, assess_cloud=assess_cloud,
     )}]
     bundle = _idea_source_bundle(idea)
     images = None

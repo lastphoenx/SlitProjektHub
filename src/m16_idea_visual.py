@@ -80,6 +80,8 @@ _NAME_PAIR_RE = re.compile(
 )
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 
+CLOUD_LLM_PROVIDERS = frozenset({"openai", "anthropic"})
+
 _DIAGRAM_FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
@@ -201,6 +203,78 @@ def resolve_visual_llm(
             return vp, default
         return vp, models[0] if models else fallback_model
     return fallback_provider, fallback_model or ""
+
+
+def is_cloud_llm_provider(provider: str) -> bool:
+    return (provider or "").strip().lower() in CLOUD_LLM_PROVIDERS
+
+
+def default_local_assess_llm() -> tuple[str, str]:
+    """Bevorzugt Ollama-Textmodell für Bewertung (kein Cloud-Risiko)."""
+    if not have_key("ollama"):
+        return "", ""
+    live = get_available_models("ollama")
+    preferred = VISUAL_TEXT_DEFAULT_MODELS.get("ollama", "")
+    if preferred and preferred in live and not model_supports_vision("ollama", preferred):
+        return "ollama", preferred
+    for cand in live:
+        if not model_supports_vision("ollama", cand):
+            return "ollama", cand
+    for cand in live:
+        return "ollama", cand
+    return "ollama", ""
+
+
+def idea_assess_provider_defaults(settings: dict[str, Any]) -> tuple[str, str]:
+    lp, lm = default_local_assess_llm()
+    if lp:
+        return lp, lm
+    return (settings.get("provider") or "openai"), (settings.get("model") or "")
+
+
+def validate_assess_cloud_gates(
+    idea: ProjectIdea,
+    assess_provider: str,
+    assess_model: str,
+    input_provider: str,
+    source_tasks: set[str],
+    cloud_confirm: bool,
+    vision_cloud_confirm: bool,
+) -> Optional[str]:
+    """Prüft cloud_confirm / vision_cloud_confirm vor KI-Bewertung mit Unterlagen."""
+    from .m08_llm import get_model_id
+    from .m16_idea import _idea_source_bundle, _load_stored_attachments
+
+    has_att = bool(_load_stored_attachments(idea)) or bool(
+        (idea.source_reference_text or "").strip()
+    )
+    bundle = _idea_source_bundle(idea)
+    has_images = bool(bundle and bundle.image_payload())
+
+    assess_cloud = is_cloud_llm_provider(assess_provider)
+    input_cloud = is_cloud_llm_provider(input_provider)
+    uses_cloud = assess_cloud or (
+        input_cloud
+        and (
+            "vision_describe" in source_tasks
+            or ("vision_images" in source_tasks and has_images)
+        )
+    )
+
+    if has_att and uses_cloud and not cloud_confirm:
+        return "cloud_confirm"
+
+    vision_cloud_needed = False
+    if has_images and "vision_images" in source_tasks and assess_cloud:
+        mid = get_model_id(assess_provider, assess_model) or assess_model
+        if model_supports_vision(assess_provider, mid):
+            vision_cloud_needed = True
+    if has_images and "vision_describe" in source_tasks and input_cloud:
+        vision_cloud_needed = True
+
+    if vision_cloud_needed and not vision_cloud_confirm:
+        return "vision_cloud_confirm"
+    return None
 
 
 def _merge_refinement_with_reference(refinement_notes: str, reference_text: str) -> str:

@@ -71,6 +71,43 @@ def test_fallback_prompt_excludes_raw_idea_text():
     assert "Sportpass" in prompt or "public administration" in prompt.lower()
 
 
+def test_is_cloud_llm_provider():
+    from src.m16_idea_visual import is_cloud_llm_provider
+
+    assert is_cloud_llm_provider("openai")
+    assert is_cloud_llm_provider("anthropic")
+    assert not is_cloud_llm_provider("ollama")
+
+
+def test_validate_assess_cloud_gate():
+    from src.m16_idea_visual import validate_assess_cloud_gates
+    from src.m17_visual_lab_refs import DEFAULT_SOURCE_TASKS
+
+    idea = ProjectIdea(
+        id=1,
+        idea_text="Test",
+        source_reference_text="Budget intern",
+        source_attachments_json='[{"path":"x.pdf","kind":"pdf"}]',
+    )
+    err = validate_assess_cloud_gates(
+        idea, "openai", "gpt-4o-mini", "openai", set(DEFAULT_SOURCE_TASKS), False, False,
+    )
+    assert err == "cloud_confirm"
+    ok = validate_assess_cloud_gates(
+        idea, "ollama", "qwen3:32b", "ollama", set(DEFAULT_SOURCE_TASKS), False, False,
+    )
+    assert ok is None
+
+
+def test_build_user_prompt_cloud_sanitizes_email():
+    from src.m16_idea import _build_user_prompt
+    from src.m17_visual_lab_refs import DEFAULT_SOURCE_TASKS
+
+    idea = ProjectIdea(id=2, idea_text="Mail herr.test@beispiel.ch")
+    out = _build_user_prompt(idea, set(DEFAULT_SOURCE_TASKS), assess_cloud=True)
+    assert "@" not in out
+
+
 if __name__ == "__main__":
     test_sanitize_removes_email()
     test_nfc_normalizes_decomposed_umlaut()
@@ -79,4 +116,7 @@ if __name__ == "__main__":
     test_structured_field_keeps_german_product_name()
     test_cloud_sanitize_strips_name_pairs_in_free_text()
     test_fallback_prompt_excludes_raw_idea_text()
+    test_is_cloud_llm_provider()
+    test_validate_assess_cloud_gate()
+    test_build_user_prompt_cloud_sanitizes_email()
     print("ok")
