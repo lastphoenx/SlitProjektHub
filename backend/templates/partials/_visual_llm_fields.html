@@ -2,9 +2,8 @@
 <div style="padding:.5rem .6rem;border:1px dashed var(--color-border);border-radius:.375rem;background:var(--color-surface-2)">
   <label class="form-label" style="font-size:.72rem;margin-bottom:.35rem">KI für Visualisierung (optional)</label>
   <p class="text-muted" style="font-size:.68rem;margin:0 0 .45rem">
-    Getrennt von der Text-Bewertung. Struktur/Prompt: Standard, Anthropic oder Ollama.
-    Cloud-PNG (DALL·E) nur bei Ausgabe „Cloud-Illustration“.
-    Struktur/Prompt: Standard, Anthropic oder Ollama. Frontier-Modelle (gpt-5.4, sonnet-4.6) empfohlen.
+    Struktur/Prompt für PPTX/Preview. Mit Referenz-Upload: <strong>Vision-Modelle</strong> (Badge) lesen Bilder/PDF-Seiten.
+    Cloud-PNG (DALL·E) nur bei Ausgabe „Cloud-Illustration“. Frontier-Modelle (gpt-5.4, sonnet-4.6, qwen2.5vl) empfohlen.
   </p>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
     <div>
@@ -28,7 +27,11 @@
         <option value="">— Standard —</option>
         {% for p, models in visual_llm_models.items() %}
         {% for m in models %}
-        <option value="{{ m }}" data-provider="{{ p }}" {% if form_visual_provider == p and form_visual_model == m %}selected{% endif %}>{{ m }}</option>
+        <option value="{{ m }}" data-provider="{{ p }}"
+          {% if visual_vision_models.get(p) and m in visual_vision_models[p] %}data-vision="1"{% endif %}
+          {% if form_visual_provider == p and form_visual_model == m %}selected{% endif %}>
+          {{ m }}{% if visual_vision_models.get(p) and m in visual_vision_models[p] %} · Vision{% endif %}
+        </option>
         {% endfor %}
         {% endfor %}
       </select>

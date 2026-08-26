@@ -288,7 +288,83 @@ def _anthropic_try_models_with_messages(system: str, messages: list[dict], *, ma
     return None
 
 
-def try_models_with_messages(provider: str, system: str, messages: list[dict], *, max_tokens: int, temperature: float, model: str | None = None, _used_model: list | None = None) -> str | None:
+# ==================== VISION / MULTIMODAL ====================
+
+_VISION_HINTS: dict[str, tuple[str, ...]] = {
+    "openai": ("gpt-4o", "gpt-5", "gpt-4-turbo", "vision"),
+    "anthropic": ("claude"),
+    "ollama": ("llava", "vision", "vl", "moondream", "bakllava", "minicpm-v", "gemma3"),
+    "mistral": ("pixtral"),
+}
+
+
+def model_supports_vision(provider: str, model_id: str) -> bool:
+    """Heuristik: Modell kann Bilder als Input verarbeiten."""
+    p = (provider or "").strip().lower()
+    m = (model_id or "").lower()
+    if not m:
+        return False
+    hints = _VISION_HINTS.get(p, ())
+    return any(h in m for h in hints)
+
+
+def _openai_vision_content_parts(text: str, images: list[tuple[bytes, str]]) -> list[dict]:
+    import base64
+
+    parts: list[dict] = [{"type": "text", "text": text}]
+    for data, mime in images[:6]:
+        b64 = base64.b64encode(data).decode("ascii")
+        parts.append(
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+        )
+    return parts
+
+
+def _apply_images_to_messages(
+    messages: list[dict],
+    images: list[tuple[bytes, str]],
+    provider: str,
+) -> list[dict]:
+    if not images:
+        return messages
+    import base64
+
+    last_user = -1
+    for i, m in enumerate(messages):
+        if m.get("role") == "user":
+            last_user = i
+    if last_user < 0:
+        return messages
+    out: list[dict] = []
+    for i, m in enumerate(messages):
+        if i != last_user:
+            out.append(m)
+            continue
+        raw = m.get("content", "")
+        text = raw if isinstance(raw, str) else str(raw)
+        if provider == "anthropic":
+            blocks: list[dict] = []
+            for data, mime in images[:6]:
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime,
+                            "data": base64.b64encode(data).decode("ascii"),
+                        },
+                    }
+                )
+            blocks.append({"type": "text", "text": text})
+            out.append({"role": "user", "content": blocks})
+        else:
+            out.append(
+                {"role": "user", "content": _openai_vision_content_parts(text, images)}
+            )
+    return out
+
+
+def try_models_with_messages(provider: str, system: str, messages: list[dict], *, max_tokens: int, temperature: float, model: str | None = None, _used_model: list | None = None, images: list[tuple[bytes, str]] | None = None) -> str | None:
     """
     Provider-agnostische Chat-Funktion mit Model & Temperature Support.
 
@@ -305,10 +381,23 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
 
     Returns: Response text or None on error
     """
+    images = images or []
+    msgs = messages
+    if images:
+        model_probe = get_model_id(provider, model) or DEFAULT_MODELS.get(provider, "")
+        if model_supports_vision(provider, model_probe):
+            msgs = _apply_images_to_messages(messages, images, provider)
+        else:
+            logger.warning(
+                "Vision-Input ignoriert — Modell %s/%s unterstützt keine Bilder",
+                provider,
+                model_probe,
+            )
+
     if provider == "ollama" and have_key("ollama"):
         client = _openai_client("ollama")
         model_id = get_model_id("ollama", model)
-        all_messages = [{"role": "system", "content": system}] + messages
+        all_messages = [{"role": "system", "content": system}] + msgs
         try:
             resp = client.chat.completions.create(
                 model=model_id,
@@ -327,7 +416,7 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
         from openai import OpenAI
         client = OpenAI()
         model_id = get_model_id("openai", model) or "gpt-4o-mini"
-        all_messages = [{"role": "system", "content": system}] + messages
+        all_messages = [{"role": "system", "content": system}] + msgs
         kwargs: dict = dict(model=model_id, messages=all_messages, temperature=temperature)
         kwargs["max_tokens"] = max_tokens
         try:
@@ -372,7 +461,7 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
     
     if provider == "anthropic" and have_key("anthropic"):
         model_id = get_model_id("anthropic", model) or DEFAULT_MODELS["anthropic"]
-        result = _anthropic_try_models_with_messages(system, messages, max_tokens=max_tokens, temperature=temperature, model=model_id)
+        result = _anthropic_try_models_with_messages(system, msgs, max_tokens=max_tokens, temperature=temperature, model=model_id)
         if result:
             return result
     
@@ -383,7 +472,7 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
             model_id = get_model_id("mistral", model) or "mistral-large-latest"
             resp = client.chat.complete(
                 model=model_id,
-                messages=messages,
+                messages=msgs,
                 temperature=temperature,
             )
             return resp.choices[0].message.content.strip()

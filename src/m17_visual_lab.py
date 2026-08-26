@@ -2,22 +2,23 @@
 Visualisierungs-Labor — Prompt-Tests für PNG / PPTX / Vorschau.
 
 Sandbox zum Testen von Darstellungen. Cloud-PNG: Prompt wird DSGVO-gefiltert.
+Referenz-Uploads: PDF/Bilder/Text fließen in Prompt oder Vision-LLM ein.
 """
 from __future__ import annotations
 
 import json
 import logging
-import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, Column, String, text
-from sqlmodel import Field, Session, SQLModel, select
+from sqlalchemy import Boolean, Column, String, Text, text
+from sqlmodel import Field, SQLModel, select
 
 from .m01_config import get_settings
 from .m03_db import engine, get_session
+from .m08_llm import get_model_id, model_supports_vision
 from .m16_idea_visual import (
     DEFAULT_OPENAI_IMAGE_MODEL,
     OPENAI_IMAGE_MODELS,
@@ -30,6 +31,14 @@ from .m16_idea_visual import (
     deck_content_from_lab_prompt,
     generate_openai_illustration,
     sanitize_for_cloud_text,
+)
+from .m17_visual_lab_refs import (
+    LabReferenceBundle,
+    MAX_ATTACHMENTS,
+    build_prompt_with_references,
+    merge_bundles,
+    process_upload_bytes,
+    visual_lab_attachments_dir,
 )
 
 log = logging.getLogger(__name__)
@@ -50,6 +59,8 @@ class VisualLabRun(SQLModel, table=True):
     llm_provider: Optional[str] = Field(default=None, sa_column=Column(String(40)))
     llm_model: Optional[str] = Field(default=None, sa_column=Column(String(80)))
     cloud_used: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, default=False))
+    attachments_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+    reference_context: Optional[str] = Field(default=None, sa_column=Column(Text))
     created_by: Optional[int] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -57,9 +68,16 @@ class VisualLabRun(SQLModel, table=True):
 def migrate_visual_lab_db() -> None:
     with engine.begin() as conn:
         tables = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()}
-        if "visual_lab_run" in tables:
+        if "visual_lab_run" not in tables:
             return
-        # create_all legt Tabelle an
+        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(visual_lab_run)")).fetchall()}
+        migrations = [
+            ("attachments_json", "ALTER TABLE visual_lab_run ADD COLUMN attachments_json TEXT"),
+            ("reference_context", "ALTER TABLE visual_lab_run ADD COLUMN reference_context TEXT"),
+        ]
+        for col, stmt in migrations:
+            if col not in cols:
+                conn.execute(text(stmt))
 
 
 def visual_lab_dir() -> Path:
@@ -88,6 +106,17 @@ def _merge_prompt(prompt: str, refinement: str | None) -> str:
     return base
 
 
+def _delete_attachment_files(stored: list[dict[str, Any]]) -> None:
+    att_dir = visual_lab_attachments_dir(visual_lab_dir())
+    for item in stored:
+        path = item.get("path")
+        if not path:
+            continue
+        fp = att_dir / Path(path).name
+        if fp.exists():
+            fp.unlink()
+
+
 def delete_visual_lab_run(run_id: int) -> bool:
     run = get_visual_lab_run(run_id)
     if not run:
@@ -98,6 +127,13 @@ def delete_visual_lab_run(run_id: int) -> bool:
             fp = d / Path(name).name
             if fp.exists():
                 fp.unlink()
+    if run.attachments_json:
+        try:
+            stored = json.loads(run.attachments_json)
+            if isinstance(stored, list):
+                _delete_attachment_files(stored)
+        except json.JSONDecodeError:
+            pass
     with get_session() as ses:
         obj = ses.get(VisualLabRun, run_id)
         if not obj:
@@ -105,6 +141,24 @@ def delete_visual_lab_run(run_id: int) -> bool:
         ses.delete(obj)
         ses.commit()
     return True
+
+
+def process_reference_uploads(
+    uploads: list[tuple[str, bytes]],
+) -> tuple[Optional[str], Optional[LabReferenceBundle]]:
+    if len(uploads) > MAX_ATTACHMENTS:
+        return "too_many_files", None
+    att_dir = visual_lab_attachments_dir(visual_lab_dir())
+    bundles: list[LabReferenceBundle] = []
+    for filename, data in uploads:
+        err, bundle = process_upload_bytes(filename, data, att_dir)
+        if err:
+            return err, None
+        if bundle:
+            bundles.append(bundle)
+    if not bundles:
+        return None, None
+    return None, merge_bundles(bundles)
 
 
 def run_visual_lab(
@@ -116,21 +170,36 @@ def run_visual_lab(
     llm_provider: str = "openai",
     llm_model: str = "",
     created_by: int | None = None,
+    reference_bundle: LabReferenceBundle | None = None,
+    use_refs_for_cloud_png: bool = False,
+    vision_cloud_ok: bool = False,
 ) -> tuple[Optional[VisualLabRun], Optional[str]]:
     kind = (kind or "").strip().lower()
     if kind not in VISUAL_LAB_KINDS:
         return None, "invalid_kind"
     merged_input = _merge_prompt(prompt, refinement)
-    if not merged_input.strip():
+    if not merged_input.strip() and not (reference_bundle and (reference_bundle.text_blocks or reference_bundle.images)):
         return None, "empty_prompt"
 
     file_path: str | None = None
     preview_path: str | None = None
     prompt_used: str | None = None
     cloud = False
+    ref_text = reference_bundle.merged_text() if reference_bundle else ""
+    ref_images = reference_bundle.image_payload() if reference_bundle else []
 
     if kind == "png":
-        safe = sanitize_for_cloud_text(merged_input)
+        describe = use_refs_for_cloud_png and reference_bundle and reference_bundle.images
+        if describe and not vision_cloud_ok:
+            return None, "vision_cloud_confirm"
+        enriched = build_prompt_with_references(
+            merged_input,
+            reference_bundle,
+            describe_images=describe,
+            vision_provider=llm_provider,
+            vision_model=llm_model,
+        )
+        safe = sanitize_for_cloud_text(enriched)
         if len(safe) < 10:
             return None, "prompt_short"
         prompt_used = safe[:500]
@@ -141,10 +210,20 @@ def run_visual_lab(
         (visual_lab_dir() / file_path).write_bytes(img)
         cloud = True
     elif kind in ("pptx", "preview"):
-        content = deck_content_from_lab_prompt(merged_input, llm_provider, llm_model)
+        model_probe = get_model_id(llm_provider, llm_model) or llm_model
+        imgs_for_llm = ref_images if ref_images and model_supports_vision(llm_provider, model_probe) else None
+        content = deck_content_from_lab_prompt(
+            merged_input,
+            llm_provider,
+            llm_model,
+            reference_text=ref_text,
+            reference_images=imgs_for_llm,
+        )
         if not content:
             return None, "llm_failed"
         prompt_used = merged_input[:500]
+        if ref_text:
+            prompt_used = (prompt_used + " [+Referenz]")[:520]
         if kind == "pptx":
             file_path = f"lab_{uuid.uuid4().hex[:12]}.pptx"
             (visual_lab_dir() / file_path).write_bytes(build_pptx_bytes(content))
@@ -162,6 +241,10 @@ def run_visual_lab(
     if not file_path:
         return None, "unknown"
 
+    attachments_json: str | None = None
+    if reference_bundle and reference_bundle.stored:
+        attachments_json = json.dumps(reference_bundle.stored, ensure_ascii=False)
+
     with get_session() as ses:
         row = VisualLabRun(
             kind=kind,
@@ -174,6 +257,8 @@ def run_visual_lab(
             llm_provider=llm_provider,
             llm_model=llm_model or None,
             cloud_used=cloud,
+            attachments_json=attachments_json,
+            reference_context=ref_text[:8000] or None,
             created_by=created_by,
         )
         ses.add(row)

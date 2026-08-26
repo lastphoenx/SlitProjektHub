@@ -35,6 +35,7 @@ from src.m16_idea_visual import (
     idea_images_dir,
     resolve_visual_llm,
     visual_text_models_map,
+    visual_vision_models_map,
     visual_text_providers_available,
 )
 
@@ -165,6 +166,7 @@ async def idea_detail(request: Request, idea_id: int):
             "openai_key_ok": have_key("openai"),
             "visual_llm_providers": visual_text_providers_available(),
             "visual_llm_models": visual_text_models_map(),
+            "visual_vision_models": visual_vision_models_map(),
             "idea_visual_formats": IDEA_VISUAL_OUTPUT_FORMATS,
         },
     )

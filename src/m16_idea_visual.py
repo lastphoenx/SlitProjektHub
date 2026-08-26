@@ -25,7 +25,7 @@ from pptx.dml.color import RGBColor
 
 from .m01_config import get_settings
 from .m03_db import get_session
-from .m08_llm import get_available_models, have_key, try_models_with_messages
+from .m08_llm import get_available_models, have_key, try_models_with_messages, model_supports_vision
 from .m16_idea import ProjectIdea, get_idea
 
 log = logging.getLogger(__name__)
@@ -43,7 +43,16 @@ VISUAL_TEXT_PROVIDERS: tuple[str, ...] = ("anthropic", "ollama", "openai")
 VISUAL_TEXT_MODELS: dict[str, list[str]] = {
     "openai": ["gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"],
     "anthropic": ["sonnet-4.6", "opus-4.6", "haiku-4.5"],
-    "ollama": ["qwen3:32b", "llama3.3:70b", "qwen3:8b", "llama3.2"],
+    "ollama": [
+        "qwen2.5vl:7b",
+        "qwen2.5vl:32b",
+        "llava:13b",
+        "llava:34b",
+        "qwen3:32b",
+        "llama3.3:70b",
+        "qwen3:8b",
+        "llama3.2",
+    ],
 }
 VISUAL_TEXT_DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-5.4",
@@ -162,6 +171,16 @@ def visual_text_models_map() -> dict[str, list[str]]:
             models = curated
         if models:
             result[p] = models
+    return result
+
+
+def visual_vision_models_map() -> dict[str, list[str]]:
+    """Modelle mit Vision-Unterstützung (für Referenz-Uploads)."""
+    result: dict[str, list[str]] = {}
+    for p, models in visual_text_models_map().items():
+        vision = [m for m in models if model_supports_vision(p, m)]
+        if vision:
+            result[p] = vision
     return result
 
 
@@ -713,21 +732,30 @@ def deck_content_from_lab_prompt(
     prompt: str,
     llm_provider: str = "openai",
     llm_model: str = "",
+    reference_text: str = "",
+    reference_images: list[tuple[bytes, str]] | None = None,
 ) -> Optional[DeckContent]:
+    user_content = prompt.strip()
+    if reference_text.strip():
+        user_content += "\n\n--- Referenzmaterial (extrahiert) ---\n" + reference_text.strip()[:10000]
+    images = reference_images or []
+    model_id = llm_model or ""
+    use_images = images and model_supports_vision(llm_provider, model_id)
     raw = try_models_with_messages(
         llm_provider,
         _LAB_DECK_SYSTEM,
-        [{"role": "user", "content": prompt}],
+        [{"role": "user", "content": user_content}],
         max_tokens=2000,
         temperature=0.45,
         model=llm_model or None,
+        images=images if use_images else None,
     )
     if not raw:
-        return _fallback_deck_from_prompt(prompt)
+        return _fallback_deck_from_prompt(user_content)
     parsed = _parse_json_dict(raw)
     if not parsed:
-        return _fallback_deck_from_prompt(prompt)
-    return _deck_content_from_parsed(parsed, fallback_title=prompt.strip().split("\n")[0][:80] or "Visual Test")
+        return _fallback_deck_from_prompt(user_content)
+    return _deck_content_from_parsed(parsed, fallback_title=user_content.strip().split("\n")[0][:80] or "Visual Test")
 
 
 def _add_title_slide(prs: Presentation, content: DeckContent) -> None:
