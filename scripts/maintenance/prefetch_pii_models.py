@@ -14,10 +14,10 @@ Optionen:
   - Kleineres Modell: FLAIR_NER_MODEL=flair/ner-german .venv/bin/python ...
   - CT-RAM auf 8 GB erhöhen
 
-Benötigt Internetzugang. Ohne Netz: APP_ROOT/.flair/ und spaCy-Paket de_core_news_lg kopieren.
+Benötigt Internetzugang. Ohne Netz: APP_ROOT/.hf_cache/hub/ und spaCy de_core_news_lg kopieren.
 
-Hinweis systemd (ProtectHome=true): Flair-Cache muss unter APP_ROOT/.flair liegen,
-nicht in /root/.flair — dieses Skript setzt FLAIR_CACHE_ROOT entsprechend.
+Hinweis systemd (ProtectHome=true): Flair 0.15 lädt über HuggingFace Hub —
+Caches müssen unter APP_ROOT/.hf_cache/hub liegen, nicht in /root/.cache.
 """
 from __future__ import annotations
 
@@ -29,17 +29,26 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 
 
-def _ensure_flair_cache_root() -> Path:
-    cache = Path(os.getenv("FLAIR_CACHE_ROOT", str(_ROOT / ".flair"))).expanduser()
-    os.environ["FLAIR_CACHE_ROOT"] = str(cache)
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+def _ensure_model_cache_paths() -> tuple[Path, Path]:
+    flair_cache = Path(os.getenv("FLAIR_CACHE_ROOT", str(_ROOT / ".flair"))).expanduser()
+    hf_home = Path(os.getenv("HF_HOME", str(_ROOT / ".hf_cache"))).expanduser()
+    hf_hub = Path(
+        os.getenv("HUGGINGFACE_HUB_CACHE", str(hf_home / "hub")).strip()
+        or str(hf_home / "hub")
+    )
+    os.environ["FLAIR_CACHE_ROOT"] = str(flair_cache)
+    os.environ["HF_HOME"] = str(hf_home)
+    os.environ["HUGGINGFACE_HUB_CACHE"] = str(hf_hub)
+    flair_cache.mkdir(parents=True, exist_ok=True)
+    hf_hub.mkdir(parents=True, exist_ok=True)
+    return flair_cache, hf_hub
 
 
 def main() -> None:
-    flair_cache = _ensure_flair_cache_root()
+    flair_cache, hf_hub = _ensure_model_cache_paths()
     flair_model = os.getenv("FLAIR_NER_MODEL", "flair/ner-german-large").strip()
     print(f"Flair-Cache: {flair_cache}")
+    print(f"HF-Hub-Cache: {hf_hub}")
     print(f"Flair-Modell: {flair_model}")
     print("spaCy de_core_news_lg (Presidio-NLP für PII) …")
     subprocess.run(

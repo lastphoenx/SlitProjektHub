@@ -42,12 +42,33 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _ensure_flair_cache_root() -> None:
-    """Flair-Cache unter APP_ROOT (systemd ProtectHome blockiert ~/.flair)."""
-    default = str(_project_root() / ".flair")
-    cache = (os.getenv("FLAIR_CACHE_ROOT", default).strip() or default)
-    os.environ.setdefault("FLAIR_CACHE_ROOT", cache)
-    Path(cache).mkdir(parents=True, exist_ok=True)
+def _ensure_model_cache_paths() -> None:
+    """Model-Caches unter APP_ROOT (systemd ProtectHome blockiert ~/.flair und ~/.cache)."""
+    root = _project_root()
+    flair_cache = (
+        os.getenv("FLAIR_CACHE_ROOT", str(root / ".flair")).strip()
+        or str(root / ".flair")
+    )
+    hf_home = (
+        os.getenv("HF_HOME", str(root / ".hf_cache")).strip()
+        or str(root / ".hf_cache")
+    )
+    hf_hub = (
+        os.getenv("HUGGINGFACE_HUB_CACHE", str(Path(hf_home) / "hub")).strip()
+        or str(Path(hf_home) / "hub")
+    )
+
+    os.environ.setdefault("FLAIR_CACHE_ROOT", flair_cache)
+    os.environ.setdefault("HF_HOME", hf_home)
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", hf_hub)
+
+    # transformers liest TRANSFORMERS_OFFLINE bei HF_HUB_OFFLINE
+    if os.getenv("HF_HUB_OFFLINE", "").strip().lower() in ("1", "true", "yes", "on"):
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+
+    Path(flair_cache).mkdir(parents=True, exist_ok=True)
+    Path(hf_hub).mkdir(parents=True, exist_ok=True)
 
 
 def circuit_breaker_seconds() -> float:
@@ -96,7 +117,7 @@ def _ensure_pii_analyzer() -> bool:
             return True
         if _is_circuit_open():
             return False
-        _ensure_flair_cache_root()
+        _ensure_model_cache_paths()
         try:
             from swiss_pii_anonymizer.engine import get_analyzer
 
@@ -115,7 +136,7 @@ def _ensure_pii_analyzer() -> bool:
 
 def warmup_pii_analyzer() -> bool:
     """Einmalig beim App-Start (Background-Thread) — Modelle vor erstem Request laden."""
-    _ensure_flair_cache_root()
+    _ensure_model_cache_paths()
     if not pii_sanitize_enabled():
         return False
     ok = _ensure_pii_analyzer()
@@ -127,7 +148,7 @@ def warmup_pii_analyzer() -> bool:
 def apply_swiss_pii_sanitize(text: str) -> str:
     """Presidio + Flair-NER — ersetzt erkannte PII mit [ENTITY_TYPE]."""
     global _analyzer_ready
-    _ensure_flair_cache_root()
+    _ensure_model_cache_paths()
     if not text or not pii_sanitize_enabled():
         return text or ""
     if not _ensure_pii_analyzer():
