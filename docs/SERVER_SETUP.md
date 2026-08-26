@@ -36,6 +36,8 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m spacy download de_core_news_sm
+# PII Stufe 2 (Cloud-Prompts) — spaCy lg + Flair (~400 MB, Internet nötig)
+.venv/bin/python scripts/maintenance/prefetch_pii_models.py
 
 cp .env.example .env
 nano .env   # API Keys eintragen
@@ -141,6 +143,38 @@ location /_stcore/stream {
 
 ---
 
+## 7. Cloud-PII Stufe 2 (optional testen)
+
+Nach `prefetch_pii_models.py` und Backend-Neustart:
+
+```bash
+cd /opt/slitprojekthub
+source .venv/bin/activate
+
+# Nur Stufe 1+2 Pipeline (ohne LLM)
+.venv/bin/python -c "
+from src.m16_idea_visual import sanitize_for_cloud_text
+t = 'Kontakt Maria Muster, herr.schmidt@beispiel.ch, AHV 756.1234.5678.97'
+print(sanitize_for_cloud_text(t))
+"
+
+# Direkt swiss-pii-anonymizer
+.venv/bin/python -c "
+from swiss_pii_anonymizer import anonymize
+r = anonymize('Maria Muster plant den Digitalen Sportpass.')
+print(r.text)
+for f in r.findings:
+    print(f.entity_type, f.text, f.score)
+"
+
+# Unit-Tests (mock, kein Flair nötig)
+.venv/bin/python scripts/testing/test_cloud_pii.py
+```
+
+`SWISS_PII_ANONYMIZER=0` in `.env` schaltet Stufe 2 ab (nur Regex-Stufe 1).
+
+---
+
 ## 6. SQLite WAL-Modus
 
 Für mehrere gleichzeitige Benutzer ist SQLite WAL-Modus aktiv (Standard in `config/config.yaml`):
@@ -156,7 +190,7 @@ Zum Deaktivieren: `wal_mode: false`.
 
 ---
 
-## 7. Updates einspielen
+## 8. Updates einspielen
 
 ```bash
 cd /opt/slitprojekthub
