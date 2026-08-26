@@ -177,6 +177,25 @@ In `.env` nach erfolgreichem Prefetch (Produktion):
 
 ```bash
 HF_HUB_OFFLINE=1
+FLAIR_CACHE_ROOT=/opt/slitprojekthub/.flair
+```
+
+`FLAIR_CACHE_ROOT` muss auf ein Verzeichnis unter `APP_ROOT` zeigen — mit `ProtectHome=true`
+im systemd-Service ist `/root/.flair` nicht lesbar. Prefetch legt Modelle standardmäßig
+nach `APP_ROOT/.flair` (das Skript setzt `FLAIR_CACHE_ROOT` automatisch).
+
+Falls Prefetch früher als root lief und Modelle nur in `/root/.flair` liegen:
+
+```bash
+mkdir -p /opt/slitprojekthub/.flair/models
+cp -a /root/.flair/models/ner-german-large /opt/slitprojekthub/.flair/models/
+chown -R APP_USER:APP_USER /opt/slitprojekthub/.flair
+```
+
+In `/etc/systemd/system/projekthub-backend.service` ebenfalls:
+
+```ini
+Environment=FLAIR_CACHE_ROOT=/opt/slitprojekthub/.flair
 ```
 
 Verhindert Hugging-Face-Retries bei Firewall/Netzausfall — Modelle sind lokal nach Prefetch.
