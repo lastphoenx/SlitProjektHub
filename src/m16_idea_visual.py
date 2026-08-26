@@ -382,12 +382,15 @@ def sanitize_structured_field(text: str) -> str:
 
 
 def sanitize_for_cloud_text(text: str) -> str:
-    """Entfernt offensichtliche PII vor Cloud-Prompt (inkl. Namen-Paar-Heuristik für Fliesstext)."""
+    """Stufe 1: Regex-Heuristiken. Stufe 2: swiss-pii-anonymizer (falls installiert)."""
     if not text:
         return ""
     t = sanitize_structured_field(text)
     t = _NAME_PAIR_RE.sub("[Name entfernt]", t)
-    return re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"\s+", " ", t).strip()
+    from .m18_cloud_pii import apply_swiss_pii_sanitize
+
+    return apply_swiss_pii_sanitize(t)
 
 
 def idea_images_dir() -> Path:
