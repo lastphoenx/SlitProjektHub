@@ -40,10 +40,12 @@ from src.m16_idea_visual import (
     generate_cloud_illustration,
     generate_idea_visual,
     generate_portfolio_deck,
+    idea_assess_provider_defaults,
     idea_decks_dir,
     idea_docx_dir,
     idea_images_dir,
     resolve_visual_llm,
+    validate_assess_cloud_gates,
     visual_text_models_map,
     visual_vision_models_map,
     visual_text_providers_available,
@@ -196,6 +198,7 @@ async def idea_detail(request: Request, idea_id: int):
                 source_attachments = raw_att
         except json.JSONDecodeError:
             pass
+    assess_defaults = idea_assess_provider_defaults(settings)
     return templates.TemplateResponse(
         "idea/detail.html",
         {
@@ -213,6 +216,9 @@ async def idea_detail(request: Request, idea_id: int):
             "visual_ok": qp.get("visual_ok"),
             "llm_provider": settings.get("provider", "openai"),
             "llm_model": settings.get("model", ""),
+            "default_assess_provider": assess_defaults[0],
+            "default_assess_model": assess_defaults[1],
+            "ollama_ok": have_key("ollama"),
             "openai_image_models": OPENAI_IMAGE_MODELS,
             "default_image_model": DEFAULT_OPENAI_IMAGE_MODEL,
             "openai_key_ok": have_key("openai"),
@@ -240,17 +246,29 @@ async def idea_assess(
     visual_llm_model: str = Form(""),
     source_tasks: list[str] = Form(default=[]),
     assess_tasks: list[str] = Form(default=[]),
+    cloud_confirm: str = Form(""),
+    vision_cloud_confirm: str = Form(""),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
     settings = load_user_settings()
-    fb_p = settings.get("provider", "openai")
-    fb_m = settings.get("model", "")
-    ip, im = resolve_visual_llm(input_llm_provider, input_llm_model, fb_p, fb_m)
-    ap, am = resolve_visual_llm(visual_llm_provider, visual_llm_model, provider or fb_p, model or fb_m)
+    dp, dm = idea_assess_provider_defaults(settings)
+    ip, im = resolve_visual_llm(input_llm_provider, input_llm_model, dp, dm)
+    ap, am = resolve_visual_llm(visual_llm_provider, visual_llm_model, provider or dp, model or dm)
     src = parse_task_selection(source_tasks, SOURCE_PROCESS_TASKS)
     at = parse_task_selection(assess_tasks, IDEA_ASSESS_TASKS)
+    gate_err = validate_assess_cloud_gates(
+        idea,
+        ap,
+        am,
+        ip,
+        src,
+        cloud_confirm == "1",
+        vision_cloud_confirm == "1",
+    )
+    if gate_err:
+        return RedirectResponse(url=f"/idea/{idea_id}?assess_error={gate_err}", status_code=303)
     result = assess_project_idea_with_ai(
         idea_id,
         provider=ap,

@@ -270,7 +270,15 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem">
-  {% if assess_error %}
+  {% if assess_error == 'cloud_confirm' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5;font-size:.78rem">
+    Cloud-Bewertung mit Unterlagen: Bestätigung für Datenübertragung an OpenAI/Anthropic erforderlich.
+  </p>
+  {% elif assess_error == 'vision_cloud_confirm' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5;font-size:.78rem">
+    Cloud-Vision (Referenzbilder): Bestätigung erforderlich — oder Ollama-Vision-Modell wählen.
+  </p>
+  {% elif assess_error %}
   <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">KI-Bewertung fehlgeschlagen (Provider/Modell prüfen oder erneut versuchen).</p>
   {% endif %}
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.75rem;flex-wrap:wrap">
@@ -279,9 +287,14 @@
 
   <form method="post" action="/idea/{{ idea.id }}/assess" class="idea-assess-form" style="display:grid;gap:.6rem;max-width:640px;margin-bottom:1rem;padding:.65rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)">
     {% set form_id = 'idea-assess' %}
+    {% if ollama_ok %}
+    <p class="text-muted" style="font-size:.68rem;margin:0 0 .45rem">
+      Standard: <strong>Ollama (lokal)</strong> — Daten bleiben im Haus. Cloud nur bei expliziter Auswahl.
+    </p>
+    {% endif %}
     {% set llm_role = 'input' %}
-    {% set form_input_provider = '' %}
-    {% set form_input_model = '' %}
+    {% set form_input_provider = default_assess_provider %}
+    {% set form_input_model = default_assess_model %}
     {% include 'partials/_llm_picker.html' %}
     {% set prefix = 'source_tasks' %}
     {% set title = 'Unterlagen-Verarbeitung' %}
@@ -290,14 +303,29 @@
     {% include 'partials/_ki_tasks_checkboxes.html' %}
     {% set llm_role = 'output' %}
     {% set picker_title = 'KI für Bewertung (JSON-Ergebnis)' %}
-    {% set form_visual_provider = llm_provider %}
-    {% set form_visual_model = llm_model %}
+    {% set form_visual_provider = default_assess_provider %}
+    {% set form_visual_model = default_assess_model %}
     {% include 'partials/_llm_picker.html' %}
     {% set prefix = 'assess_tasks' %}
     {% set title = 'Bewertungs-Inhalte' %}
     {% set hint = 'Welche Felder die KI erzeugen soll — abgewählte bleiben bei erneuter Bewertung erhalten.' %}
     {% set tasks = assess_tasks %}
     {% include 'partials/_ki_tasks_checkboxes.html' %}
+    {% if source_attachments or idea.source_reference_text %}
+    <div id="idea-assess-cloud-wrap" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+      <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
+        Nur bei Cloud-Provider (OpenAI/Anthropic) mit Unterlagen — Text wird vor Übertragung gefiltert.
+      </p>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer;margin-bottom:.35rem">
+        <input type="checkbox" name="cloud_confirm" value="1" id="idea-assess-cloud-confirm" style="margin-top:.15rem" />
+        <span>Unterlagen/Text wurden gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an die Cloud gehen.</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="vision_cloud_confirm" value="1" id="idea-assess-vision-cloud" style="margin-top:.15rem" />
+        <span>Referenzbilder an Cloud-Vision — ich habe geprüft, dass keine sensiblen Inhalte sichtbar sind.</span>
+      </label>
+    </div>
+    {% endif %}
     <button type="submit" class="btn btn-primary btn-sm idea-assess-btn">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</button>
     <p class="idea-assess-status text-muted" style="font-size:.72rem;display:none;margin:0">Bewertung läuft … bitte warten (30s–2min).</p>
   </form>
