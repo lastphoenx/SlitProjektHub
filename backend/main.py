@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import sys
 import os
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -70,6 +71,15 @@ app.include_router(idea_router)
 app.include_router(visual_lab_router)
 
 
+def _warmup_pii_analyzer() -> None:
+    try:
+        from src.m18_cloud_pii import warmup_pii_analyzer
+
+        warmup_pii_analyzer()
+    except Exception:
+        logging.exception("PII-Warmup fehlgeschlagen")
+
+
 @app.on_event("startup")
 def _startup_init_db() -> None:
     try:
@@ -77,6 +87,11 @@ def _startup_init_db() -> None:
     except Exception:
         logging.exception("init_db beim Startup fehlgeschlagen")
         raise
+    threading.Thread(
+        target=_warmup_pii_analyzer,
+        name="pii-warmup",
+        daemon=True,
+    ).start()
 
 # ── Auth Middleware: alle nicht-auth Routen absichern ─────────────────────
 _AUTH_EXEMPT = {"/auth/login", "/auth/logout", "/auth/setup", "/auth/totp", "/static", "/health"}

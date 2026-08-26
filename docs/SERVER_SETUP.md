@@ -173,6 +173,18 @@ In `.env` dauerhaft kleines Modell:
 FLAIR_NER_MODEL=flair/ner-german
 ```
 
+In `.env` nach erfolgreichem Prefetch (Produktion):
+
+```bash
+HF_HUB_OFFLINE=1
+```
+
+Verhindert Hugging-Face-Retries bei Firewall/Netzausfall — Modelle sind lokal nach Prefetch.
+Optional: `PII_CIRCUIT_BREAKER_SECONDS=300` (Fallback-Dauer nach Fehler, Standard 5 Min).
+
+Das Backend lädt PII-Modelle beim Start im Hintergrund (`warmup_pii_analyzer`) — der erste
+Nutzer-Request nach Neustart sollte nicht die volle Ladezeit tragen.
+
 Nach erfolgreichem Prefetch und Backend-Neustart:
 
 ```bash
