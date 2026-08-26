@@ -65,6 +65,8 @@ def _lab_context(request: Request, **extra):
         "form_kind": "pptx",
         "form_visual_provider": "",
         "form_visual_model": "",
+        "form_input_provider": "",
+        "form_input_model": "",
         "error": None,
         "ok": False,
     }
@@ -104,6 +106,8 @@ async def visual_lab_generate(
     llm_model: str = Form(""),
     visual_llm_provider: str = Form(""),
     visual_llm_model: str = Form(""),
+    input_llm_provider: str = Form(""),
+    input_llm_model: str = Form(""),
     cloud_confirm: str = Form(""),
     vision_cloud_confirm: str = Form(""),
     use_refs_cloud_png: str = Form(""),
@@ -115,6 +119,7 @@ async def visual_lab_generate(
     fb_p = settings.get("provider", "openai")
     fb_m = settings.get("model", "")
     vp, vm = resolve_visual_llm(visual_llm_provider, visual_llm_model, fb_p, fb_m)
+    ip, im = resolve_visual_llm(input_llm_provider, input_llm_model, fb_p, fb_m)
 
     form_ctx = {
         "form_prompt": prompt,
@@ -122,6 +127,8 @@ async def visual_lab_generate(
         "form_kind": kind,
         "form_visual_provider": visual_llm_provider,
         "form_visual_model": visual_llm_model,
+        "form_input_provider": input_llm_provider,
+        "form_input_model": input_llm_model,
     }
 
     uploads: list[tuple[str, bytes]] = []
@@ -143,8 +150,8 @@ async def visual_lab_generate(
     vision_cloud_ok = vision_cloud_confirm == "1"
 
     if use_cloud_refs and ref_bundle and ref_bundle.images:
-        mid = get_model_id(vp, vm) or vm
-        if vp in ("openai", "anthropic") and model_supports_vision(vp, mid):
+        mid = get_model_id(ip, im) or im
+        if ip in ("openai", "anthropic") and model_supports_vision(ip, mid):
             if not vision_cloud_ok:
                 ctx = _lab_context(request, error="vision_cloud_confirm", **form_ctx)
                 return templates.TemplateResponse("visual_lab/index.html", ctx)
@@ -164,6 +171,8 @@ async def visual_lab_generate(
         image_model=image_model,
         llm_provider=vp,
         llm_model=vm,
+        input_llm_provider=ip,
+        input_llm_model=im,
         created_by=user_id,
         reference_bundle=ref_bundle,
         use_refs_for_cloud_png=use_cloud_refs,

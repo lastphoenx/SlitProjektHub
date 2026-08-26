@@ -19,10 +19,12 @@ from src.m16_idea import (
     assess_project_idea_with_ai,
     create_idea,
     get_idea,
+    idea_source_attachments_dir,
     list_ideas,
     soft_delete_idea,
     update_idea_intake,
 )
+from src.m17_visual_lab_refs import merge_bundles, process_upload_bytes
 from src.m16_idea_visual import (
     DEFAULT_OPENAI_IMAGE_MODEL,
     IDEA_VISUAL_OUTPUT_FORMATS,
@@ -75,6 +77,7 @@ def _idea_images_dir() -> Path:
 async def idea_list(request: Request):
     who = _username(request)
     ideas = list_ideas()
+    qp = request.query_params
     return templates.TemplateResponse(
         "idea/index.html",
         {
@@ -83,7 +86,10 @@ async def idea_list(request: Request):
             "ideas": ideas,
             "submitters": {i.id: (get_username_by_id(i.submitted_by) if i.submitted_by else None) for i in ideas},
             "username": who,
-            "error": None,
+            "error": qp.get("error"),
+            "form_title": qp.get("title", ""),
+            "form_idea_text": qp.get("idea_text", ""),
+            "form_fachabteilung": qp.get("fachabteilung", ""),
         },
     )
 
@@ -92,11 +98,11 @@ async def idea_list(request: Request):
 async def idea_create(
     request: Request,
     title: str = Form(""),
-    idea_text: str = Form(...),
+    idea_text: str = Form(""),
     fachabteilung: str = Form(""),
     internal_pt_human: str = Form(""),
     external_cost_human: str = Form(""),
-    image: UploadFile | None = File(None),
+    attachments: list[UploadFile] = File(default=[]),
 ):
     who = _username(request)
     user_id = get_user_id(who) if who else None
@@ -110,17 +116,43 @@ async def idea_create(
         except ValueError:
             return None
 
+    def _form_redirect(error: str) -> HTMLResponse:
+        from urllib.parse import urlencode
+
+        q = urlencode({
+            "error": error,
+            "title": title,
+            "idea_text": idea_text,
+            "fachabteilung": fachabteilung,
+        })
+        return RedirectResponse(url=f"/idea?{q}", status_code=303)
+
+    if not (idea_text or "").strip():
+        return _form_redirect("empty_text")
+
+    import json
+
+    att_dir = idea_source_attachments_dir()
+    bundles = []
+    for f in attachments:
+        if not f.filename:
+            continue
+        data = await f.read()
+        err, bundle = process_upload_bytes(f.filename, data, att_dir)
+        if err:
+            return _form_redirect(err)
+        if bundle:
+            bundles.append(bundle)
+    ref_bundle = merge_bundles(bundles) if bundles else None
+
     image_path = None
-    if image is not None and image.filename:
-        ext = Path(image.filename).suffix.lower()
-        if ext not in ALLOWED_IMAGE_EXT:
-            raise HTTPException(400, f"Bildformat nicht erlaubt (erlaubt: {', '.join(ALLOWED_IMAGE_EXT)})")
-        content = await image.read()
-        if len(content) > 8 * 1024 * 1024:
-            raise HTTPException(400, "Bild zu gross (max. 8 MB)")
-        fname = f"{uuid.uuid4().hex}{ext}"
-        (_idea_images_dir() / fname).write_bytes(content)
-        image_path = fname
+    if ref_bundle and ref_bundle.images:
+        data, mime, name = ref_bundle.images[0]
+        ext = Path(name).suffix.lower() if Path(name).suffix else ".png"
+        if ext in ALLOWED_IMAGE_EXT:
+            fname = f"{uuid.uuid4().hex}{ext}"
+            (_idea_images_dir() / fname).write_bytes(data)
+            image_path = fname
 
     obj = create_idea(
         idea_text=idea_text,
@@ -129,6 +161,8 @@ async def idea_create(
         internal_pt_human=_f(internal_pt_human),
         external_cost_human=_f(external_cost_human),
         image_path=image_path,
+        source_attachments_json=json.dumps(ref_bundle.stored, ensure_ascii=False) if ref_bundle and ref_bundle.stored else None,
+        source_reference_text=ref_bundle.merged_text() if ref_bundle else None,
         submitted_by=user_id,
     )
     return RedirectResponse(url=f"/idea/{obj.id}", status_code=303)
@@ -144,6 +178,16 @@ async def idea_detail(request: Request, idea_id: int):
     settings = load_user_settings()
     may_edit = _may_edit_idea(idea, user_id, who)
     qp = request.query_params
+    import json
+
+    source_attachments: list = []
+    if idea.source_attachments_json:
+        try:
+            raw_att = json.loads(idea.source_attachments_json)
+            if isinstance(raw_att, list):
+                source_attachments = raw_att
+        except json.JSONDecodeError:
+            pass
     return templates.TemplateResponse(
         "idea/detail.html",
         {
@@ -168,6 +212,7 @@ async def idea_detail(request: Request, idea_id: int):
             "visual_llm_models": visual_text_models_map(),
             "visual_vision_models": visual_vision_models_map(),
             "idea_visual_formats": IDEA_VISUAL_OUTPUT_FORMATS,
+            "source_attachments": source_attachments,
         },
     )
 
@@ -420,6 +465,21 @@ async def idea_preview_deck(request: Request, idea_id: int):
         "idea/_preview_deck.html",
         {"request": request, "idea": idea},
     )
+
+
+@router.get("/idea/{idea_id}/source-file/{att_name}")
+async def idea_source_file(idea_id: int, att_name: str):
+    idea = get_idea(idea_id)
+    if not idea or not idea.source_attachments_json:
+        raise HTTPException(404)
+    safe = Path(att_name).name
+    path = idea_source_attachments_dir() / safe
+    if not path.exists():
+        raise HTTPException(404)
+    ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    resp = FileResponse(path, media_type=ctype, content_disposition_type="attachment")
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
 
 
 @router.get("/idea/image/{idea_id}")

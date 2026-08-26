@@ -173,6 +173,8 @@ def run_visual_lab(
     reference_bundle: LabReferenceBundle | None = None,
     use_refs_for_cloud_png: bool = False,
     vision_cloud_ok: bool = False,
+    input_llm_provider: str = "",
+    input_llm_model: str = "",
 ) -> tuple[Optional[VisualLabRun], Optional[str]]:
     kind = (kind or "").strip().lower()
     if kind not in VISUAL_LAB_KINDS:
@@ -187,6 +189,8 @@ def run_visual_lab(
     cloud = False
     ref_text = reference_bundle.merged_text() if reference_bundle else ""
     ref_images = reference_bundle.image_payload() if reference_bundle else []
+    inp_p = (input_llm_provider or llm_provider or "").strip()
+    inp_m = (input_llm_model or llm_model or "").strip()
 
     if kind == "png":
         describe = use_refs_for_cloud_png and reference_bundle and reference_bundle.images
@@ -196,8 +200,8 @@ def run_visual_lab(
             merged_input,
             reference_bundle,
             describe_images=describe,
-            vision_provider=llm_provider,
-            vision_model=llm_model,
+            vision_provider=inp_p,
+            vision_model=inp_m,
         )
         safe = sanitize_for_cloud_text(enriched)
         if len(safe) < 10:

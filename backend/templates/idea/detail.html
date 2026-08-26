@@ -47,6 +47,26 @@
     {% endif %}
   </form>
 
+  {% if source_attachments %}
+  <div style="margin-top:.75rem">
+    <label class="form-label" style="font-size:.72rem">Angehängte Unterlagen (KI-Bewertung)</label>
+    <ul style="font-size:.75rem;margin:.25rem 0;padding:0;list-style:none">
+      {% for a in source_attachments %}
+      <li style="margin-bottom:.2rem">
+        <a href="/idea/{{ idea.id }}/source-file/{{ a.path }}" target="_blank" rel="noopener">{{ a.original_name }}</a>
+        <span class="text-muted">({{ a.kind }})</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% if idea.source_reference_text %}
+    <details style="font-size:.7rem;margin-top:.35rem">
+      <summary class="text-muted" style="cursor:pointer">Extrahierter Text für KI</summary>
+      <pre style="white-space:pre-wrap;font-size:.68rem;margin-top:.35rem;background:var(--color-surface-2);padding:.5rem;border-radius:.375rem">{{ idea.source_reference_text[:2000] }}{% if idea.source_reference_text|length > 2000 %}…{% endif %}</pre>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if idea.image_path %}
   <div style="margin-top:.75rem">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.35rem">
@@ -122,9 +142,10 @@
       </select>
     </div>
     {% set form_id = 'idea-visual' %}
+    {% set llm_role = 'output' %}
     {% set form_visual_provider = '' %}
     {% set form_visual_model = '' %}
-    {% include 'partials/_visual_llm_fields.html' %}
+    {% include 'partials/_llm_picker.html' %}
     <div id="idea-cloud-image-wrap" style="display:none">
       <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell (nur Cloud-PNG)</label>
       <select class="form-select" name="image_model">

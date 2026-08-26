@@ -17,19 +17,31 @@
 
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Neue Idee erfassen</h2>
+  {% if error == 'empty_text' %}
+  <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Bitte Beschreibung oder Unterlagen angeben.</p>
+  {% elif error == 'too_many_files' %}
+  <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Zu viele Dateien (max. 5).</p>
+  {% elif error == 'too_large' %}
+  <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Datei zu gross (max. 10 MB pro Datei).</p>
+  {% elif error == 'invalid_type' %}
+  <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Dateityp nicht erlaubt — siehe Hinweis unter dem Upload-Feld.</p>
+  {% elif error %}
+  <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Upload fehlgeschlagen: {{ error }}</p>
+  {% endif %}
   <form method="post" action="/idea" enctype="multipart/form-data" style="display:grid;gap:.6rem;max-width:760px">
     <div>
       <label class="form-label">Arbeitstitel (optional)</label>
-      <input class="form-input" name="title" placeholder="Kurzer Arbeitstitel" />
+      <input class="form-input" name="title" placeholder="Kurzer Arbeitstitel" value="{{ form_title or '' }}" />
     </div>
     <div>
-      <label class="form-label">Beschreibung der Idee *</label>
-      <textarea class="form-input" name="idea_text" rows="5" required placeholder="Worum geht es? Ausgangslage, Ziel, Nutzen, bekannte Rahmenbedingungen …"></textarea>
+      <label class="form-label">Beschreibung der Idee</label>
+      <textarea class="form-input" name="idea_text" rows="5" placeholder="Worum geht es? Ausgangslage, Ziel, Nutzen … (oder nur in Unterlagen)">{{ form_idea_text or '' }}</textarea>
+      <p class="text-muted" style="font-size:.68rem;margin-top:.25rem">Kurzbeschreibung hier — oder nur Unterlagen unten (mind. eines nötig).</p>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.6rem">
       <div>
         <label class="form-label" style="font-size:.72rem">Fachabteilung</label>
-        <input class="form-input" name="fachabteilung" placeholder="z.B. Unisport" />
+        <input class="form-input" name="fachabteilung" placeholder="z.B. Unisport" value="{{ form_fachabteilung or '' }}" />
       </div>
       <div>
         <label class="form-label" style="font-size:.72rem">Eigene Schätzung intern (PT)</label>
@@ -39,10 +51,17 @@
         <label class="form-label" style="font-size:.72rem">Eigene Schätzung extern (CHF)</label>
         <input class="form-input" name="external_cost_human" type="number" step="100" min="0" />
       </div>
-      <div>
-        <label class="form-label" style="font-size:.72rem">Visualisierung / Folie (optional)</label>
-        <input class="form-input" name="image" type="file" accept=".png,.jpg,.jpeg,.gif,.webp" />
-      </div>
+    </div>
+    <div>
+      <label class="form-label">Fachliche Unterlagen &amp; Skizzen (optional)</label>
+      <p class="text-muted" style="font-size:.68rem;margin:0 0 .35rem">
+        Fließen in die <strong>KI-Bewertung</strong> ein (Text aus PDF/Word lokal; Bilder mit Vision-Modell aus KI-Einstellungen).
+        Erste Bilddatei wird zusätzlich als Vorschau angezeigt — <em>nicht</em> dasselbe wie spätere Cloud-Illustration.
+      </p>
+      {% set zone_id = 'idea-new' %}
+      {% set accept = '.png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.docx' %}
+      {% set hint = 'PNG, JPG, GIF, WebP, PDF, Word (.docx), TXT — max. 5 Dateien, 10 MB je Datei' %}
+      {% include 'partials/_file_upload_zone.html' %}
     </div>
     <div>
       <button type="submit" class="btn btn-primary">Idee anlegen</button>

@@ -1,0 +1,81 @@
+{# Provider/Modell-Auswahl — role: input | output #}
+{% set role = llm_role or 'output' %}
+{% set prefix = 'input_llm' if role == 'input' else 'visual_llm' %}
+{% set fid = form_id or 'default' %}
+{% set sel_provider = form_input_provider if role == 'input' else form_visual_provider %}
+{% set sel_model = form_input_model if role == 'input' else form_visual_model %}
+<div style="padding:.5rem .6rem;border:1px dashed var(--color-border);border-radius:.375rem;background:var(--color-surface-2)">
+  <label class="form-label" style="font-size:.72rem;margin-bottom:.35rem">
+    {% if role == 'input' %}
+    KI für Referenz-Verarbeitung
+    {% else %}
+    KI für Ausgabe-Struktur (PPTX / Preview)
+    {% endif %}
+  </label>
+  <p class="text-muted" style="font-size:.68rem;margin:0 0 .45rem">
+    {% if role == 'input' %}
+    Liest hochgeladene PDF/Bilder: Text lokal, Bilder an <span class="badge" style="font-size:.62rem;vertical-align:middle">Vision</span>-Modelle.
+    Leer = KI-Einstellungen (<strong>{{ llm_provider }}</strong> / <strong>{{ llm_model or 'Standard' }}</strong>).
+    {% else %}
+    Erzeugt Folien-JSON und Phasenplan aus Prompt + Referenz. Frontier-Modelle (gpt-5.4, sonnet-4.6) empfohlen.
+  Cloud-PNG nutzt separat OpenAI Bildmodell unten.
+    {% endif %}
+  </p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+    <div>
+      <label class="form-label" style="font-size:.68rem">Provider</label>
+      <select class="form-select llm-picker-provider" name="{{ prefix }}_provider" data-form="{{ fid }}" data-role="{{ role }}">
+        <option value="" {% if not sel_provider %}selected{% endif %}>{% if role == 'input' %}KI-Einstellungen{% else %}Standard (KI-Einstellungen){% endif %}</option>
+        {% if 'anthropic' in visual_llm_providers %}
+        <option value="anthropic" {% if sel_provider == 'anthropic' %}selected{% endif %}>Anthropic (Cloud)</option>
+        {% endif %}
+        {% if 'ollama' in visual_llm_providers %}
+        <option value="ollama" {% if sel_provider == 'ollama' %}selected{% endif %}>Ollama (lokal)</option>
+        {% endif %}
+        {% if 'openai' in visual_llm_providers %}
+        <option value="openai" {% if sel_provider == 'openai' %}selected{% endif %}>OpenAI (Cloud)</option>
+        {% endif %}
+      </select>
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.68rem">Modell</label>
+      <select class="form-select llm-picker-model" name="{{ prefix }}_model" id="llm-model-{{ role }}-{{ fid }}">
+        <option value="">— Standard —</option>
+        {% for p, models in visual_llm_models.items() %}
+        {% for m in models %}
+        <option value="{{ m }}" data-provider="{{ p }}" data-vision="{{ 1 if visual_vision_models.get(p) and m in visual_vision_models[p] else 0 }}"
+          {% if sel_provider == p and sel_model == m %}selected{% endif %}>
+          {{ m }}{% if visual_vision_models.get(p) and m in visual_vision_models[p] %} · Vision{% endif %}
+        </option>
+        {% endfor %}
+        {% endfor %}
+      </select>
+      <p class="llm-vision-badge text-muted" id="vision-badge-{{ role }}-{{ fid }}" style="font-size:.65rem;margin:.25rem 0 0;display:none">
+        <span class="badge" style="font-size:.62rem">Vision</span> — Referenzbilder werden mitgeschickt
+      </p>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  document.querySelectorAll('.llm-picker-provider').forEach(sel => {
+    const formId = sel.dataset.form || 'default';
+    const role = sel.dataset.role || 'output';
+    const modelSel = document.getElementById('llm-model-' + role + '-' + formId);
+    const badge = document.getElementById('vision-badge-' + role + '-' + formId);
+    if (!modelSel) return;
+    function sync() {
+      const p = sel.value;
+      modelSel.querySelectorAll('option[data-provider]').forEach(o => {
+        o.hidden = p && o.dataset.provider !== p;
+      });
+      const cur = modelSel.selectedOptions[0];
+      const isVision = cur && cur.dataset.vision === '1';
+      if (badge) badge.style.display = isVision ? 'block' : 'none';
+    }
+    sel.addEventListener('change', sync);
+    modelSel.addEventListener('change', sync);
+    sync();
+  });
+})();
+</script>

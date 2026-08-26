@@ -46,22 +46,28 @@
       </select>
     </div>
     {% set form_id = 'lab' %}
-    {% include 'partials/_visual_llm_fields.html' %}
     <div>
       <label class="form-label">Referenzdateien (optional)</label>
-      <input class="form-input" type="file" name="attachments" id="vl-attachments" multiple
-        accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,image/*,application/pdf,text/plain" />
-      <p class="text-muted" style="font-size:.68rem;margin-top:.25rem">
-        Bis 5 Dateien, max. 10 MB je Datei. PDF: Textextraktion lokal; gescannte PDFs als Bild für Vision-LLM.
-        Bilder: direkt an Vision-Modell (Ollama qwen2.5vl / gpt-4o) oder Beschreibung für Cloud-PNG.
+      <p class="text-muted" style="font-size:.68rem;margin:0 0 .35rem">
+        Werden von der <strong>Input-KI</strong> (unten) gelesen — nicht automatisch von der Ausgabe-KI.
       </p>
+      {% set zone_id = 'vl-ref' %}
+      {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
+      {% set hint = 'PNG, JPG, PDF, Word, TXT — max. 5 × 10 MB' %}
+      {% include 'partials/_file_upload_zone.html' %}
     </div>
+    {% set llm_role = 'input' %}
+    {% set form_input_provider = form_input_provider | default('') %}
+    {% set form_input_model = form_input_model | default('') %}
+    {% include 'partials/_llm_picker.html' %}
+    {% set llm_role = 'output' %}
+    {% include 'partials/_llm_picker.html' %}
     <div>
       <label class="form-label">Prompt / Beschreibung</label>
       <textarea class="form-input" name="prompt" id="vl-prompt" rows="4"
         placeholder="Beschreibe die gewünschte Visualisierung: Thema, Stil, Phasen in Reihenfolge …">{{ form_prompt }}</textarea>
       <p class="text-muted" style="font-size:.68rem;margin-top:.25rem">
-        PNG: gefiltert vor Cloud. PPTX/Preview: Phasen → Prozessdiagramm-Folie + Kurztext.
+        PPTX/Preview: Ausgabe-KI strukturiert Phasen. PNG: nur DALL·E (Bildmodell unten); Referenz → Input-KI → Text → DALL·E.
       </p>
     </div>
     <div>
@@ -165,7 +171,7 @@ document.addEventListener('keydown', e => {
   const refsCloudWrap = document.getElementById('vl-refs-cloud-wrap');
   const visionCloudWrap = document.getElementById('vl-vision-cloud-wrap');
   const promptEl = document.getElementById('vl-prompt');
-  const attEl = document.getElementById('vl-attachments');
+  const attEl = document.getElementById('file-input-vl-ref');
   function syncKind() {
     const isPng = kindSel.value === 'png';
     imgWrap.style.display = isPng ? '' : 'none';
