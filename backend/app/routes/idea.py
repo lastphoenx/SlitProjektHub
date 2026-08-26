@@ -15,16 +15,24 @@ from src.m08_llm import have_key
 from src.m03_db import get_session
 from src.m16_idea import (
     ALLOWED_IMAGE_EXT,
+    IDEA_ASSESS_TASKS,
     ProjectIdea,
     assess_project_idea_with_ai,
+    append_source_attachments,
     create_idea,
     get_idea,
     idea_source_attachments_dir,
     list_ideas,
+    remove_source_attachment,
     soft_delete_idea,
     update_idea_intake,
 )
-from src.m17_visual_lab_refs import merge_bundles, process_upload_bytes
+from src.m17_visual_lab_refs import (
+    merge_bundles,
+    parse_task_selection,
+    process_upload_bytes,
+    SOURCE_PROCESS_TASKS,
+)
 from src.m16_idea_visual import (
     DEFAULT_OPENAI_IMAGE_MODEL,
     IDEA_VISUAL_OUTPUT_FORMATS,
@@ -213,6 +221,9 @@ async def idea_detail(request: Request, idea_id: int):
             "visual_vision_models": visual_vision_models_map(),
             "idea_visual_formats": IDEA_VISUAL_OUTPUT_FORMATS,
             "source_attachments": source_attachments,
+            "source_process_tasks": SOURCE_PROCESS_TASKS,
+            "assess_tasks": IDEA_ASSESS_TASKS,
+            "attach_error": qp.get("attach_error"),
         },
     )
 
@@ -223,13 +234,77 @@ async def idea_assess(
     idea_id: int,
     provider: str = Form("openai"),
     model: str = Form(""),
+    input_llm_provider: str = Form(""),
+    input_llm_model: str = Form(""),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
+    source_tasks: list[str] = Form(default=[]),
+    assess_tasks: list[str] = Form(default=[]),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
-    result = assess_project_idea_with_ai(idea_id, provider=provider, model=model)
+    settings = load_user_settings()
+    fb_p = settings.get("provider", "openai")
+    fb_m = settings.get("model", "")
+    ip, im = resolve_visual_llm(input_llm_provider, input_llm_model, fb_p, fb_m)
+    ap, am = resolve_visual_llm(visual_llm_provider, visual_llm_model, provider or fb_p, model or fb_m)
+    src = parse_task_selection(source_tasks, SOURCE_PROCESS_TASKS)
+    at = parse_task_selection(assess_tasks, IDEA_ASSESS_TASKS)
+    result = assess_project_idea_with_ai(
+        idea_id,
+        provider=ap,
+        model=am,
+        assess_tasks=at,
+        source_tasks=src,
+        input_provider=ip,
+        input_model=im,
+    )
     if not result or result.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?assess_error=1", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+
+
+@router.post("/idea/{idea_id}/add-source-attachments", response_class=HTMLResponse)
+async def idea_add_source_attachments(
+    request: Request,
+    idea_id: int,
+    attachments: list[UploadFile] = File(default=[]),
+):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    _require_may_edit(request, idea)
+    att_dir = idea_source_attachments_dir()
+    bundles = []
+    for f in attachments:
+        if not f.filename:
+            continue
+        data = await f.read()
+        err, bundle = process_upload_bytes(f.filename, data, att_dir)
+        if err:
+            return RedirectResponse(url=f"/idea/{idea_id}?attach_error={err}", status_code=303)
+        if bundle:
+            bundles.append(bundle)
+    if bundles:
+        err = append_source_attachments(idea_id, bundles)
+        if err:
+            return RedirectResponse(url=f"/idea/{idea_id}?attach_error={err}", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+
+
+@router.post("/idea/{idea_id}/delete-source-attachment", response_class=HTMLResponse)
+async def idea_delete_source_attachment(
+    request: Request,
+    idea_id: int,
+    att_path: str = Form(...),
+):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    _require_may_edit(request, idea)
+    if not remove_source_attachment(idea_id, att_path):
+        return RedirectResponse(url=f"/idea/{idea_id}?attach_error=not_found", status_code=303)
     return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
 
 
@@ -243,6 +318,9 @@ async def idea_generate_visual(
     llm_model: str = Form(""),
     visual_llm_provider: str = Form(""),
     visual_llm_model: str = Form(""),
+    input_llm_provider: str = Form(""),
+    input_llm_model: str = Form(""),
+    source_tasks: list[str] = Form(default=[]),
     image_model: str = Form(DEFAULT_OPENAI_IMAGE_MODEL),
     cloud_confirm: str = Form(""),
 ):
@@ -256,6 +334,8 @@ async def idea_generate_visual(
     if fmt == "png_cloud" and cloud_confirm != "1":
         return RedirectResponse(url=f"/idea/{idea_id}?visual_error=cloud_confirm", status_code=303)
     vp, vm = resolve_visual_llm(visual_llm_provider, visual_llm_model, llm_provider, llm_model)
+    ip, im = resolve_visual_llm(input_llm_provider, input_llm_model, llm_provider, llm_model)
+    src = parse_task_selection(source_tasks, SOURCE_PROCESS_TASKS)
     if image_model not in OPENAI_IMAGE_MODELS:
         image_model = DEFAULT_OPENAI_IMAGE_MODEL
     obj, err = generate_idea_visual(
@@ -265,6 +345,9 @@ async def idea_generate_visual(
         llm_provider=vp,
         llm_model=vm,
         image_model=image_model,
+        input_llm_provider=ip,
+        input_llm_model=im,
+        source_tasks=src,
     )
     if not obj:
         return RedirectResponse(url=f"/idea/{idea_id}?visual_error={err or 'failed'}", status_code=303)

@@ -237,6 +237,36 @@ def merge_bundles(bundles: list[LabReferenceBundle]) -> LabReferenceBundle:
     return out
 
 
+# --- Aufgaben für Unterlagen-Verarbeitung (Checkboxen in UI) ---
+SOURCE_PROCESS_TASKS: dict[str, str] = {
+    "extract_text": "Text aus PDF/Word/TXT extrahieren (lokal, ohne KI)",
+    "vision_images": "Bilder / gescannte PDF-Seiten an Vision-KI senden",
+    "vision_describe": "Referenzbilder per KI beschreiben (Text für Prompts)",
+}
+DEFAULT_SOURCE_TASKS = frozenset(SOURCE_PROCESS_TASKS.keys())
+
+
+def parse_task_selection(selected: list[str], all_tasks: dict[str, str]) -> set[str]:
+    """Leere Auswahl = alle Aufgaben aktiv (Rückwärtskompatibilität)."""
+    keys = set(all_tasks.keys())
+    if not selected:
+        return keys
+    return {t for t in selected if t in keys}
+
+
+def filter_bundle_for_source_tasks(
+    bundle: LabReferenceBundle,
+    tasks: set[str],
+) -> LabReferenceBundle:
+    out = LabReferenceBundle()
+    out.stored = list(bundle.stored)
+    if "extract_text" in tasks:
+        out.text_blocks = list(bundle.text_blocks)
+    if "vision_images" in tasks:
+        out.images = list(bundle.images)
+    return out
+
+
 def resolve_vision_provider_model(
     preferred_provider: str,
     preferred_model: str,

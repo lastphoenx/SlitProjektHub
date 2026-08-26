@@ -21,6 +21,15 @@ from sqlmodel import Field, Session, SQLModel, select
 from .m01_config import get_settings
 from .m03_db import engine, get_session
 from .m08_llm import try_models_with_messages, model_supports_vision, get_model_id
+from .m17_visual_lab_refs import (
+    DEFAULT_SOURCE_TASKS,
+    describe_reference_images,
+    filter_bundle_for_source_tasks,
+    load_bundle_from_stored,
+    MAX_ATTACHMENTS,
+    parse_task_selection,
+    SOURCE_PROCESS_TASKS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -201,7 +210,17 @@ def soft_delete_idea(idea_id: int) -> None:
 
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 
-_SYSTEM_PROMPT = (
+IDEA_ASSESS_TASKS: dict[str, str] = {
+    "project_name": "Projektname vorschlagen",
+    "summary": "Zusammenfassung (3–5 Sätze)",
+    "resources": "Ressourcen (Personentage + externe Kosten)",
+    "challenges": "Herausforderungen / Risiken",
+    "phases": "Grobe Phasenplanung",
+    "recommendation": "Handlungsempfehlung",
+}
+DEFAULT_ASSESS_TASKS = frozenset(IDEA_ASSESS_TASKS.keys())
+
+_ASSESS_PROMPT_HEADER = (
     "Du bist eine erfahrene Projektportfolio-Managerin in einer öffentlichen Verwaltung "
     "(Schweiz). Du beurteilst eine ROHE PROJEKTIDEE, bevor ein formales Projekt existiert. "
     "Ziel: der Fachabteilung und dem Projektportfolio-Board eine strukturierte, nüchterne "
@@ -210,29 +229,54 @@ _SYSTEM_PROMPT = (
     "in der Begründung explizit.\n\n"
     "Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt, exakt in diesem Schema "
     "(keine weiteren Felder, kein Fliesstext davor oder danach):\n"
-    "{\n"
-    '  "project_name": "kurzer, prägnanter Projektname, max. 6 Wörter",\n'
-    '  "summary": "Zusammenfassung der Idee in 3-5 Sätzen, sachlich",\n'
-    '  "internal_pt": Zahl,  // geschätzte Personentage der Fachabteilung, ganze Zahl\n'
-    '  "internal_pt_reasoning": "kurze Begründung der Schätzung",\n'
-    '  "external_cost_chf": Zahl,  // geschätzte externe Kosten in CHF (Dienstleister/Lizenzen)\n'
-    '  "external_cost_reasoning": "kurze Begründung der Schätzung",\n'
-    '  "challenges": [\n'
-    '    {"title": "kurzer Titel", "description": "1-2 Sätze", "severity": "niedrig|mittel|hoch"}\n'
-    "  ],\n"
-    '  "phases": [\n'
-    '    {"name": "Phasenname", "description": "1-2 Sätze", "duration_estimate": "grobe Dauer, '
-    'z.B. \'2-3 Wochen\' oder \'1-2 Monate\' — NIEMALS ein Kalenderdatum"}\n'
-    "  ],\n"
-    '  "recommendation": "1-2 Sätze Handlungsempfehlung: z.B. weiterverfolgen, mit welchen '
-    'offenen Fragen, oder eher nicht"\n'
-    "}\n\n"
-    "Regeln:\n"
-    "- Phasen: 3 bis 6 grobe Phasen (z.B. Analyse, Konzept, Umsetzung, Test, Einführung) — "
-    "keine Datumsangaben, nur Durchlaufzeiten pro Phase.\n"
-    "- challenges: 2 bis 5 Einträge, die grössten Risiken/Unsicherheiten zuerst.\n"
-    "- Zahlen sind reine Zahlen ohne Einheiten/Tausendertrennzeichen im JSON."
 )
+
+
+def _build_assess_system_prompt(tasks: set[str]) -> str:
+    fields: list[str] = []
+    if "project_name" in tasks:
+        fields.append('  "project_name": "kurzer, prägnanter Projektname, max. 6 Wörter",')
+    if "summary" in tasks:
+        fields.append('  "summary": "Zusammenfassung der Idee in 3-5 Sätzen, sachlich",')
+    if "resources" in tasks:
+        fields.extend([
+            '  "internal_pt": Zahl,  // geschätzte Personentage der Fachabteilung, ganze Zahl',
+            '  "internal_pt_reasoning": "kurze Begründung der Schätzung",',
+            '  "external_cost_chf": Zahl,  // geschätzte externe Kosten in CHF (Dienstleister/Lizenzen)',
+            '  "external_cost_reasoning": "kurze Begründung der Schätzung",',
+        ])
+    if "challenges" in tasks:
+        fields.append(
+            '  "challenges": [\n'
+            '    {"title": "kurzer Titel", "description": "1-2 Sätze", "severity": "niedrig|mittel|hoch"}\n'
+            "  ],"
+        )
+    if "phases" in tasks:
+        fields.append(
+            '  "phases": [\n'
+            '    {"name": "Phasenname", "description": "1-2 Sätze", "duration_estimate": "grobe Dauer, '
+            'z.B. \'2-3 Wochen\' oder \'1-2 Monate\' — NIEMALS ein Kalenderdatum"}\n'
+            "  ],"
+        )
+    if "recommendation" in tasks:
+        fields.append(
+            '  "recommendation": "1-2 Sätze Handlungsempfehlung: z.B. weiterverfolgen, mit welchen '
+            'offenen Fragen, oder eher nicht"'
+        )
+    if not fields:
+        fields.append('  "summary": "kurze Zusammenfassung"')
+    body = "{\n" + "\n".join(fields) + "\n}"
+    rules = [
+        "Regeln:",
+        "- challenges: 2 bis 5 Einträge, die grössten Risiken/Unsicherheiten zuerst.",
+        "- Phasen: 3 bis 6 grobe Phasen — keine Datumsangaben, nur Durchlaufzeiten pro Phase.",
+        "- Zahlen sind reine Zahlen ohne Einheiten/Tausendertrennzeichen im JSON.",
+    ]
+    if "challenges" not in tasks:
+        rules = [r for r in rules if "challenges" not in r]
+    if "phases" not in tasks:
+        rules = [r for r in rules if "Phasen" not in r]
+    return _ASSESS_PROMPT_HEADER + body + "\n\n" + "\n".join(rules)
 
 
 def _idea_source_bundle(idea: ProjectIdea):
@@ -249,11 +293,90 @@ def _idea_source_bundle(idea: ProjectIdea):
     return load_bundle_from_stored(stored, idea_source_attachments_dir())
 
 
-def _build_user_prompt(idea: ProjectIdea) -> str:
+def _load_stored_attachments(idea: ProjectIdea) -> list[dict[str, Any]]:
+    if not idea.source_attachments_json:
+        return []
+    try:
+        raw = json.loads(idea.source_attachments_json)
+        return raw if isinstance(raw, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
+def _sync_source_metadata(idea_id: int, stored: list[dict[str, Any]]) -> None:
+    bundle = load_bundle_from_stored(stored, idea_source_attachments_dir()) if stored else None
+    ref_text = bundle.merged_text() if bundle else None
+    with get_session() as ses:
+        obj = ses.get(ProjectIdea, idea_id)
+        if not obj:
+            return
+        obj.source_attachments_json = (
+            json.dumps(stored, ensure_ascii=False) if stored else None
+        )
+        obj.source_reference_text = ref_text or None
+        obj.updated_at = datetime.now(timezone.utc)
+        ses.add(obj)
+        ses.commit()
+
+
+def append_source_attachments(
+    idea_id: int,
+    bundles: list,
+) -> Optional[str]:
+    """Hängt Unterlagen an eine Idee an. Gibt Fehlercode oder None bei Erfolg."""
+    idea = get_idea(idea_id)
+    if not idea:
+        return "not_found"
+    stored = _load_stored_attachments(idea)
+    for b in bundles:
+        if b and b.stored:
+            stored.extend(b.stored)
+    if len(stored) > MAX_ATTACHMENTS:
+        return "too_many"
+    _sync_source_metadata(idea_id, stored)
+    return None
+
+
+def remove_source_attachment(idea_id: int, att_path: str) -> bool:
+    idea = get_idea(idea_id)
+    if not idea:
+        return False
+    safe = Path(att_path).name
+    stored = _load_stored_attachments(idea)
+    new_stored = [x for x in stored if Path(x.get("path", "")).name != safe]
+    if len(new_stored) == len(stored):
+        return False
+    fp = idea_source_attachments_dir() / safe
+    if fp.is_file():
+        fp.unlink(missing_ok=True)
+    _sync_source_metadata(idea_id, new_stored)
+    return True
+
+
+def _build_user_prompt(
+    idea: ProjectIdea,
+    source_tasks: set[str],
+    input_provider: str = "",
+    input_model: str = "",
+) -> str:
     parts = [f"Projektidee (Rohtext):\n{idea.idea_text}"]
-    ref = (idea.source_reference_text or "").strip()
-    if ref:
-        parts.append(f"Angehängte Unterlagen (extrahiert, lokal):\n{ref[:10000]}")
+    bundle = _idea_source_bundle(idea)
+    if bundle:
+        filtered = filter_bundle_for_source_tasks(bundle, source_tasks)
+        if "extract_text" in source_tasks:
+            ref = filtered.merged_text().strip()
+            if not ref and idea.source_reference_text:
+                ref = (idea.source_reference_text or "").strip()
+            if ref:
+                parts.append(f"Angehängte Unterlagen (extrahiert, lokal):\n{ref[:10000]}")
+        if "vision_describe" in source_tasks and filtered.images:
+            desc = describe_reference_images(filtered, input_provider, input_model)
+            if desc:
+                parts.append(f"Referenz-Bildbeschreibung (KI):\n{desc[:4000]}")
+    elif idea.source_reference_text and "extract_text" in source_tasks:
+        ref = (idea.source_reference_text or "").strip()
+        if ref:
+            parts.append(f"Angehängte Unterlagen (extrahiert, lokal):\n{ref[:10000]}")
     if idea.title:
         parts.append(f"Arbeitstitel der Fachabteilung: {idea.title}")
     if idea.fachabteilung:
@@ -276,25 +399,39 @@ def assess_project_idea_with_ai(
     idea_id: int,
     provider: str = "openai",
     model: str = "gpt-4o-mini",
+    assess_tasks: set[str] | None = None,
+    source_tasks: set[str] | None = None,
+    input_provider: str = "",
+    input_model: str = "",
 ) -> Optional[ProjectIdea]:
     """KI-Vorbewertung einer Projektidee. Schreibt ausschliesslich in ai_*-Spalten."""
     idea = get_idea(idea_id)
     if not idea:
         return None
 
-    messages = [{"role": "user", "content": _build_user_prompt(idea)}]
+    tasks = assess_tasks or set(DEFAULT_ASSESS_TASKS)
+    src_tasks = source_tasks or set(DEFAULT_SOURCE_TASKS)
+    system_prompt = _build_assess_system_prompt(tasks)
+
+    messages = [{"role": "user", "content": _build_user_prompt(
+        idea, src_tasks, input_provider, input_model,
+    )}]
     bundle = _idea_source_bundle(idea)
-    images = bundle.image_payload() if bundle else []
-    model_id = get_model_id(provider, model) or model
-    use_images = images if images and model_supports_vision(provider, model_id) else None
+    images = None
+    if bundle and "vision_images" in src_tasks:
+        filtered = filter_bundle_for_source_tasks(bundle, src_tasks)
+        imgs = filtered.image_payload()
+        model_id = get_model_id(provider, model) or model
+        if imgs and model_supports_vision(provider, model_id):
+            images = imgs
     raw = try_models_with_messages(
         provider,
-        _SYSTEM_PROMPT,
+        system_prompt,
         messages,
         max_tokens=1800,
         temperature=0.3,
         model=model,
-        images=use_images,
+        images=images,
     )
 
     parsed: dict[str, Any] = {}
@@ -334,15 +471,21 @@ def assess_project_idea_with_ai(
         obj = ses.get(ProjectIdea, idea_id)
         if not obj:
             return None
-        obj.ai_project_name = (parsed.get("project_name") or "")[:120] or None
-        obj.ai_summary = parsed.get("summary") or None
-        obj.ai_internal_pt = _num("internal_pt")
-        obj.ai_internal_pt_reasoning = parsed.get("internal_pt_reasoning") or None
-        obj.ai_external_cost = _num("external_cost_chf")
-        obj.ai_external_cost_reasoning = parsed.get("external_cost_reasoning") or None
-        obj.ai_challenges_json = json.dumps(challenges, ensure_ascii=False)
-        obj.ai_phases_json = json.dumps(phases, ensure_ascii=False)
-        obj.ai_recommendation = parsed.get("recommendation") or None
+        if "project_name" in tasks:
+            obj.ai_project_name = (parsed.get("project_name") or "")[:120] or None
+        if "summary" in tasks:
+            obj.ai_summary = parsed.get("summary") or None
+        if "resources" in tasks:
+            obj.ai_internal_pt = _num("internal_pt")
+            obj.ai_internal_pt_reasoning = parsed.get("internal_pt_reasoning") or None
+            obj.ai_external_cost = _num("external_cost_chf")
+            obj.ai_external_cost_reasoning = parsed.get("external_cost_reasoning") or None
+        if "challenges" in tasks:
+            obj.ai_challenges_json = json.dumps(challenges, ensure_ascii=False)
+        if "phases" in tasks:
+            obj.ai_phases_json = json.dumps(phases, ensure_ascii=False)
+        if "recommendation" in tasks:
+            obj.ai_recommendation = parsed.get("recommendation") or None
         obj.ai_provider = provider
         obj.ai_model = model
         obj.ai_raw_json = raw or None
