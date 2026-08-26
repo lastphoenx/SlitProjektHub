@@ -9,8 +9,11 @@ from src.m08_llm import model_supports_vision
 from src.m17_visual_lab_refs import (
     LabReferenceBundle,
     build_prompt_with_references,
+    filter_bundle_for_source_tasks,
     merge_bundles,
+    parse_task_selection,
     process_upload_bytes,
+    SOURCE_PROCESS_TASKS,
 )
 
 
@@ -37,8 +40,30 @@ def test_build_prompt_with_reference_text():
     assert "Änderungen" in out
 
 
+def test_filter_bundle_source_tasks():
+    b = LabReferenceBundle(
+        text_blocks=["text"],
+        images=[(b"\x89PNG", "image/png", "x.png")],
+        stored=[{"path": "a"}],
+    )
+    only_text = filter_bundle_for_source_tasks(b, {"extract_text"})
+    assert only_text.merged_text()
+    assert not only_text.images
+    only_vision = filter_bundle_for_source_tasks(b, {"vision_images"})
+    assert only_vision.images
+    assert not only_vision.merged_text()
+
+
+def test_parse_task_selection_defaults():
+    all_keys = set(SOURCE_PROCESS_TASKS.keys())
+    assert parse_task_selection([], SOURCE_PROCESS_TASKS) == all_keys
+    assert parse_task_selection(["extract_text"], SOURCE_PROCESS_TASKS) == {"extract_text"}
+
+
 if __name__ == "__main__":
     test_model_supports_vision_ollama_vl()
     test_text_file_in_bundle()
     test_build_prompt_with_reference_text()
+    test_filter_bundle_source_tasks()
+    test_parse_task_selection_defaults()
     print("ok")

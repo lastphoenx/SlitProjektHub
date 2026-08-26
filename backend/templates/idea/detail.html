@@ -47,25 +47,54 @@
     {% endif %}
   </form>
 
-  {% if source_attachments %}
+  {% if attach_error %}
+  <p class="text-muted" style="color:#fca5a5;font-size:.78rem;margin-bottom:.5rem">
+    {% if attach_error == 'too_many' %}Maximal 5 Unterlagen.
+    {% elif attach_error == 'too_large' %}Datei zu gross (max. 10 MB).
+    {% elif attach_error == 'invalid_type' %}Dateityp nicht erlaubt.
+    {% elif attach_error == 'empty' %}Leere Datei.
+    {% else %}Unterlage konnte nicht verarbeitet werden.{% endif %}
+  </p>
+  {% endif %}
+
   <div style="margin-top:.75rem">
-    <label class="form-label" style="font-size:.72rem">Angehängte Unterlagen (KI-Bewertung)</label>
+    <label class="form-label" style="font-size:.72rem">Unterlagen für KI-Bewertung / Visualisierung</label>
+    {% if source_attachments %}
     <ul style="font-size:.75rem;margin:.25rem 0;padding:0;list-style:none">
       {% for a in source_attachments %}
-      <li style="margin-bottom:.2rem">
+      <li style="margin-bottom:.35rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
         <a href="/idea/{{ idea.id }}/source-file/{{ a.path }}" target="_blank" rel="noopener">{{ a.original_name }}</a>
         <span class="text-muted">({{ a.kind }})</span>
+        {% if may_edit %}
+        <form method="post" action="/idea/{{ idea.id }}/delete-source-attachment" style="display:inline"
+          onsubmit="return confirm('Unterlage löschen?')">
+          <input type="hidden" name="att_path" value="{{ a.path }}" />
+          <button type="submit" class="btn btn-ghost btn-sm" style="font-size:.65rem;color:var(--color-danger)">Löschen</button>
+        </form>
+        {% endif %}
       </li>
       {% endfor %}
     </ul>
+    {% else %}
+    <p class="text-muted" style="font-size:.72rem;margin:.25rem 0">Noch keine Unterlagen — optional PDF, Word, Bilder.</p>
+    {% endif %}
     {% if idea.source_reference_text %}
     <details style="font-size:.7rem;margin-top:.35rem">
-      <summary class="text-muted" style="cursor:pointer">Extrahierter Text für KI</summary>
+      <summary class="text-muted" style="cursor:pointer">Extrahierter Text (lokal)</summary>
       <pre style="white-space:pre-wrap;font-size:.68rem;margin-top:.35rem;background:var(--color-surface-2);padding:.5rem;border-radius:.375rem">{{ idea.source_reference_text[:2000] }}{% if idea.source_reference_text|length > 2000 %}…{% endif %}</pre>
     </details>
     {% endif %}
+    {% if may_edit %}
+    <form method="post" action="/idea/{{ idea.id }}/add-source-attachments" enctype="multipart/form-data" style="margin-top:.5rem;max-width:520px">
+      {% set zone_id = 'idea-src' %}
+      {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
+      {% set hint = 'Weitere Dateien — max. 5 gesamt, 10 MB je Datei' %}
+      {% include 'partials/_file_upload_zone.html' %}
+      <button type="submit" class="btn btn-secondary btn-sm" style="margin-top:.35rem">Unterlagen hinzufügen</button>
+    </form>
+    {% endif %}
   </div>
-  {% endif %}
+
 
   {% if idea.image_path %}
   <div style="margin-top:.75rem">
@@ -108,7 +137,7 @@
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Visualisierung erstellen</h2>
   <p class="text-muted" style="font-size:.78rem;margin-bottom:.75rem">
-    Text-Bewertung läuft über KI-Einstellungen. Hier nur Ausgabe-Format und optional eigene KI für Visualisierung (Standard / Anthropic / Ollama).
+    Input-KI liest Unterlagen; Ausgabe-KI strukturiert Folien/Berichte. Cloud-PNG nutzt OpenAI Bildmodell (gefiltert).
   </p>
 
   {% if visual_ok %}
@@ -142,7 +171,17 @@
       </select>
     </div>
     {% set form_id = 'idea-visual' %}
+    {% set llm_role = 'input' %}
+    {% set form_input_provider = '' %}
+    {% set form_input_model = '' %}
+    {% include 'partials/_llm_picker.html' %}
+    {% set prefix = 'source_tasks' %}
+    {% set title = 'Unterlagen-Verarbeitung (optional)' %}
+    {% set hint = 'Nur relevant wenn Unterlagen vorhanden — gleiche Optionen wie bei der Bewertung.' %}
+    {% set tasks = source_process_tasks %}
+    {% include 'partials/_ki_tasks_checkboxes.html' %}
     {% set llm_role = 'output' %}
+    {% set picker_title = 'KI für Ausgabe-Struktur (PPTX / Word / Diagramm)' %}
     {% set form_visual_provider = '' %}
     {% set form_visual_model = '' %}
     {% include 'partials/_llm_picker.html' %}
@@ -234,14 +273,34 @@
   {% if assess_error %}
   <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">KI-Bewertung fehlgeschlagen (Provider/Modell prüfen oder erneut versuchen).</p>
   {% endif %}
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
-    <h2 style="font-size:.95rem;font-weight:700">🤖 KI-Vorbewertung</h2>
-    <form method="post" action="/idea/{{ idea.id }}/assess">
-      <input type="hidden" name="provider" value="{{ llm_provider }}" />
-      <input type="hidden" name="model" value="{{ llm_model }}" />
-      <button type="submit" class="btn btn-primary btn-sm">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</button>
-    </form>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.75rem;flex-wrap:wrap">
+    <h2 style="font-size:.95rem;font-weight:700;margin:0">🤖 KI-Vorbewertung</h2>
   </div>
+
+  <form method="post" action="/idea/{{ idea.id }}/assess" class="idea-assess-form" style="display:grid;gap:.6rem;max-width:640px;margin-bottom:1rem;padding:.65rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)">
+    {% set form_id = 'idea-assess' %}
+    {% set llm_role = 'input' %}
+    {% set form_input_provider = '' %}
+    {% set form_input_model = '' %}
+    {% include 'partials/_llm_picker.html' %}
+    {% set prefix = 'source_tasks' %}
+    {% set title = 'Unterlagen-Verarbeitung' %}
+    {% set hint = 'Lokal: Textextraktion. KI: Vision-Bilder oder Bildbeschreibung für den Bewertungs-Prompt.' %}
+    {% set tasks = source_process_tasks %}
+    {% include 'partials/_ki_tasks_checkboxes.html' %}
+    {% set llm_role = 'output' %}
+    {% set picker_title = 'KI für Bewertung (JSON-Ergebnis)' %}
+    {% set form_visual_provider = llm_provider %}
+    {% set form_visual_model = llm_model %}
+    {% include 'partials/_llm_picker.html' %}
+    {% set prefix = 'assess_tasks' %}
+    {% set title = 'Bewertungs-Inhalte' %}
+    {% set hint = 'Welche Felder die KI erzeugen soll — abgewählte bleiben bei erneuter Bewertung erhalten.' %}
+    {% set tasks = assess_tasks %}
+    {% include 'partials/_ki_tasks_checkboxes.html' %}
+    <button type="submit" class="btn btn-primary btn-sm idea-assess-btn">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</button>
+    <p class="idea-assess-status text-muted" style="font-size:.72rem;display:none;margin:0">Bewertung läuft … bitte warten (30s–2min).</p>
+  </form>
 
   {% if idea.status != 'bewertet' %}
   <p class="text-muted">Noch nicht bewertet. Klicke oben auf «KI bewerten».</p>
@@ -348,6 +407,14 @@ document.querySelectorAll('.idea-gen-form').forEach(form => {
     const btn = form.querySelector('.idea-gen-btn');
     const st = form.querySelector('.idea-gen-status');
     if (btn) { btn.disabled = true; btn.textContent = 'Generiere …'; }
+    if (st) st.style.display = 'block';
+  });
+});
+document.querySelectorAll('.idea-assess-form').forEach(form => {
+  form.addEventListener('submit', () => {
+    const btn = form.querySelector('.idea-assess-btn');
+    const st = form.querySelector('.idea-assess-status');
+    if (btn) { btn.disabled = true; btn.textContent = 'Bewertung läuft …'; }
     if (st) st.style.display = 'block';
   });
 });

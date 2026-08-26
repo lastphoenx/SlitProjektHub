@@ -6,7 +6,9 @@
 {% set sel_model = form_input_model if role == 'input' else form_visual_model %}
 <div style="padding:.5rem .6rem;border:1px dashed var(--color-border);border-radius:.375rem;background:var(--color-surface-2)">
   <label class="form-label" style="font-size:.72rem;margin-bottom:.35rem">
-    {% if role == 'input' %}
+    {% if picker_title %}
+    {{ picker_title }}
+    {% elif role == 'input' %}
     KI für Referenz-Verarbeitung
     {% else %}
     KI für Ausgabe-Struktur (PPTX / Preview)

@@ -203,6 +203,51 @@ def resolve_visual_llm(
     return fallback_provider, fallback_model or ""
 
 
+def _merge_refinement_with_reference(refinement_notes: str, reference_text: str) -> str:
+    parts: list[str] = []
+    if (reference_text or "").strip():
+        parts.append(
+            "Berücksichtige folgende Referenzunterlagen:\n"
+            + reference_text.strip()[:8000]
+        )
+    if (refinement_notes or "").strip():
+        parts.append(refinement_notes.strip())
+    return "\n\n".join(parts)
+
+
+def resolve_idea_reference_context(
+    idea: ProjectIdea,
+    source_tasks: set[str],
+    input_provider: str,
+    input_model: str,
+) -> tuple[str, list[tuple[bytes, str]]]:
+    from .m16_idea import _idea_source_bundle
+    from .m17_visual_lab_refs import (
+        DEFAULT_SOURCE_TASKS,
+        describe_reference_images,
+        filter_bundle_for_source_tasks,
+    )
+
+    tasks = source_tasks if source_tasks is not None else set(DEFAULT_SOURCE_TASKS)
+    bundle = _idea_source_bundle(idea)
+    if not bundle:
+        return "", []
+    filtered = filter_bundle_for_source_tasks(bundle, tasks)
+    text_parts: list[str] = []
+    if "extract_text" in tasks:
+        t = filtered.merged_text().strip()
+        if not t and idea.source_reference_text:
+            t = (idea.source_reference_text or "").strip()
+        if t:
+            text_parts.append(t)
+    if "vision_describe" in tasks and filtered.images:
+        desc = describe_reference_images(filtered, input_provider, input_model)
+        if desc:
+            text_parts.append("Referenz-Bildbeschreibung:\n" + desc)
+    images = filtered.image_payload() if "vision_images" in tasks else []
+    return "\n\n".join(text_parts), images
+
+
 def sanitize_structured_field(text: str) -> str:
     """Kontakt und Herr/Frau — ohne Paar-Heuristik (deutsche Produktnamen bleiben erhalten)."""
     if not text:
@@ -291,8 +336,11 @@ def build_dsgvo_illustration_prompt(
     llm_provider: str = "openai",
     llm_model: str = "",
     refinement_notes: str = "",
+    extra_reference: str = "",
 ) -> Optional[str]:
     user = _build_illustration_user_prompt(idea, refinement_notes)
+    if (extra_reference or "").strip():
+        user += "\n\nReferenzunterlagen (abstrakt):\n" + sanitize_for_cloud_text(extra_reference)[:3000]
     raw = try_models_with_messages(
         llm_provider,
         _ILLUSTRATION_SYSTEM,
@@ -896,12 +944,17 @@ def generate_cloud_illustration(
     llm_provider: str = "openai",
     llm_model: str = "",
     refinement_notes: str = "",
+    extra_reference: str = "",
 ) -> Optional[ProjectIdea]:
     idea = get_idea(idea_id)
     if not idea or idea.status != "bewertet":
         return None
     safe_prompt = build_dsgvo_illustration_prompt(
-        idea, llm_provider, llm_model, refinement_notes=refinement_notes
+        idea,
+        llm_provider,
+        llm_model,
+        refinement_notes=refinement_notes,
+        extra_reference=extra_reference,
     )
     if not safe_prompt:
         return None
@@ -1033,27 +1086,46 @@ def generate_idea_visual(
     llm_provider: str = "openai",
     llm_model: str = "",
     image_model: str = DEFAULT_OPENAI_IMAGE_MODEL,
+    input_llm_provider: str = "",
+    input_llm_model: str = "",
+    source_tasks: set[str] | None = None,
 ) -> tuple[Optional[ProjectIdea], Optional[str]]:
     fmt = (output_format or "").strip().lower()
     if fmt not in IDEA_VISUAL_OUTPUT_FORMATS:
         return None, "invalid_format"
+
+    idea = get_idea(idea_id)
+    if not idea:
+        return None, "not_found"
+    from .m17_visual_lab_refs import DEFAULT_SOURCE_TASKS
+
+    src = source_tasks if source_tasks is not None else set(DEFAULT_SOURCE_TASKS)
+    ip, im = resolve_visual_llm(input_llm_provider, input_llm_model, llm_provider, llm_model)
+    ref_text, _ = resolve_idea_reference_context(idea, src, ip, im)
+    merged_notes = _merge_refinement_with_reference(refinement_notes, ref_text)
+
     if fmt == "pptx":
-        obj = generate_portfolio_deck(idea_id, refinement_notes, llm_provider, llm_model)
+        obj = generate_portfolio_deck(idea_id, merged_notes, llm_provider, llm_model)
         return obj, None if obj else "generation_failed"
     if fmt == "png_local":
-        obj = generate_local_diagram_png(idea_id, refinement_notes, llm_provider, llm_model)
+        obj = generate_local_diagram_png(idea_id, merged_notes, llm_provider, llm_model)
         return obj, None if obj else "generation_failed"
     if fmt == "png_cloud":
         if not have_key("openai"):
             return None, "no_key"
         obj = generate_cloud_illustration(
-            idea_id, image_model, llm_provider, llm_model, refinement_notes
+            idea_id,
+            image_model,
+            llm_provider,
+            llm_model,
+            refinement_notes,
+            extra_reference=ref_text,
         )
         return obj, None if obj else "png_failed"
     if fmt == "docx":
-        obj = generate_idea_docx(idea_id, False, refinement_notes, llm_provider, llm_model)
+        obj = generate_idea_docx(idea_id, False, merged_notes, llm_provider, llm_model)
         return obj, None if obj else "generation_failed"
     if fmt == "docx_png":
-        obj = generate_idea_docx(idea_id, True, refinement_notes, llm_provider, llm_model)
+        obj = generate_idea_docx(idea_id, True, merged_notes, llm_provider, llm_model)
         return obj, None if obj else "generation_failed"
     return None, "invalid_format"
