@@ -68,20 +68,6 @@ IDEA_VISUAL_OUTPUT_FORMATS: dict[str, str] = {
     "docx_png": "Word — Bericht + Diagramm",
 }
 
-_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
-_PHONE_RE = re.compile(
-    r"(?:\+41|0041)\s*(?:\(0\)\s*)?[\d\s./()-]{8,}"
-    r"|"
-    r"0\d{2}\s*[\d\s./()-]{6,}"
-)
-_PERSON_LINE_RE = re.compile(
-    r"(?:Herr|Frau|Dr\.|Prof\.)\s+[A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)?",
-    re.IGNORECASE,
-)
-# Heuristik: zwei aufeinanderfolgende Wörter mit Grossbuchstaben (kein Ersatz für fachliche Prüfung)
-_NAME_PAIR_RE = re.compile(
-    r"\b[A-ZÄÖÜ][a-zäöüß]{2,}\s+[A-ZÄÖÜ][a-zäöüß]{2,}\b"
-)
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 
 CLOUD_LLM_PROVIDERS = frozenset({"openai", "anthropic"})
@@ -377,12 +363,9 @@ def resolve_idea_reference_context(
 
 def sanitize_structured_field(text: str) -> str:
     """Kontakt und Herr/Frau — ohne Paar-Heuristik (deutsche Produktnamen bleiben erhalten)."""
-    if not text:
-        return ""
-    t = _EMAIL_RE.sub("", text)
-    t = _PHONE_RE.sub("", t)
-    t = _PERSON_LINE_RE.sub("", t)
-    return re.sub(r"\s+", " ", t).strip()
+    from .m20_pii_stage1 import sanitize_structured_field as _stage1_structured
+
+    return _stage1_structured(text)
 
 
 def sanitize_for_cloud_text(text: str) -> str:
@@ -395,11 +378,10 @@ def sanitize_for_cloud_with_meta(text: str) -> tuple[str, list[dict[str, str | f
     """Wie sanitize_for_cloud_text, zusätzlich Presidio-Findings aus einem anonymize-Lauf."""
     if not text:
         return "", []
-    t = sanitize_structured_field(text)
-    t = _NAME_PAIR_RE.sub("[Name entfernt]", t)
-    t = re.sub(r"\s+", " ", t).strip()
     from .m18_cloud_pii import apply_swiss_pii_anonymize_details
+    from .m20_pii_stage1 import apply_pii_stage1
 
+    t = apply_pii_stage1(text, preserve_newlines=False)
     return apply_swiss_pii_anonymize_details(t)
 
 
