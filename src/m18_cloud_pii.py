@@ -134,6 +134,11 @@ def _ensure_pii_analyzer() -> bool:
             return False
 
 
+def is_pii_analyzer_ready() -> bool:
+    """True wenn Stufe-2-Analyzer bereits geladen ist (ohne erneutes Laden)."""
+    return _analyzer_ready
+
+
 def warmup_pii_analyzer() -> bool:
     """Einmalig beim App-Start (Background-Thread) — Modelle vor erstem Request laden."""
     _ensure_model_cache_paths()

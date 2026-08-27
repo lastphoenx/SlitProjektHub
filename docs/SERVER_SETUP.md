@@ -263,6 +263,8 @@ print(sanitize_for_cloud_text('Kontakt Maria Muster, AHV 756.1234.5678.97'))
 
 Erwartung: `[PERSON]`, `[CH_AHV_NR]` (nicht nur Regex-Stufe 1).
 
+Web-UI: unter **PII-Sanitizer** (`/sanitize`) Text oder PDF hochladen — gleiche Pipeline, mit Entitäten-Vorschau.
+
 ### Troubleshooting
 
 | Symptom | Ursache | Fix |

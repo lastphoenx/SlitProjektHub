@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}PII-Sanitizer — SlitProjektHub{% endblock %}
+{% block topbar_title %}PII-Sanitizer{% endblock %}
+
+{% block content %}
+<div style="max-width:1100px">
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">PII-Sanitizer</h1>
+    <p class="page-subtitle">Dokumente und Texte für Cloud-KI aufbereiten (Regex + <a href="https://github.com/lastphoenx/swiss-pii-anonymizer" target="_blank" rel="noopener">swiss-pii-anonymizer</a>)</p>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:1rem;padding:.65rem .85rem">
+  <p style="font-size:.78rem;margin:0">
+    <strong>Pipeline:</strong>
+    {% if pii_status.stage2_enabled and pii_status.stage2_ready %}
+    Stufe 1 (Regex) + Stufe 2 (Presidio/Flair) aktiv — dieselbe Logik wie Projektideen, Offertbeurteilung und Visual-Lab.
+    {% elif pii_status.stage2_enabled %}
+    Stufe 2 konfiguriert, Modelle noch nicht geladen — nur Regex bis Warmup/Prefetch (siehe <code>docs/SERVER_SETUP.md</code> §7).
+    {% else %}
+    Nur Stufe 1 (Regex) — <code>SWISS_PII_ANONYMIZER=0</code> oder Paket fehlt.
+    {% endif %}
+  </p>
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Eingabe</h2>
+  <form method="post" action="/sanitize" enctype="multipart/form-data" style="display:grid;gap:.75rem">
+    <div>
+      <label class="form-label">Text (optional)</label>
+      <textarea class="form-input" name="source_text" rows="6" placeholder="Rohtext einfügen …">{{ result.original if result else '' }}</textarea>
+    </div>
+    <div>
+      <label class="form-label">oder Datei (PDF, DOCX, TXT, MD)</label>
+      <input class="form-input" type="file" name="file" accept=".pdf,.docx,.txt,.md,.csv,.json,.yaml,.yml" />
+    </div>
+    <label style="display:flex;align-items:center;gap:.4rem;font-size:.8rem;cursor:pointer">
+      <input type="checkbox" name="full_pipeline" value="1" checked />
+      Volle Pipeline (Regex + swiss-pii-anonymizer) — empfohlen vor Cloud-Übertragung
+    </label>
+    <button type="submit" class="btn btn-primary" style="justify-self:start">Sanitizen</button>
+  </form>
+  {% if error %}
+  <p style="color:var(--color-danger);font-size:.85rem;margin:.75rem 0 0">{{ error }}</p>
+  {% endif %}
+</div>
+
+{% if result %}
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.5rem">Ergebnis{% if input_label %} — {{ input_label }}{% endif %}</h2>
+  <p class="text-muted" style="font-size:.75rem;margin-bottom:.75rem">
+    {{ result.char_count }} Zeichen → {{ result.reduction }} Zeichen gekürzt/ersetzt.
+    {% if result.findings %} · {{ result.findings|length }} Entität(en) erkannt{% endif %}
+  </p>
+
+  {% if result.findings %}
+  <div class="table-wrap" style="margin-bottom:.75rem">
+    <table>
+      <thead><tr><th>Typ</th><th>Text</th><th>Score</th></tr></thead>
+      <tbody>
+        {% for f in result.findings %}
+        <tr>
+          <td><span class="badge badge-neutral">{{ f.entity_type }}</span></td>
+          <td style="font-size:.8rem">{{ f.text }}</td>
+          <td>{{ f.score }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+    <div>
+      <label class="form-label" style="font-size:.72rem">Original (Auszug)</label>
+      <textarea class="form-input" rows="14" readonly style="font-size:.75rem">{{ result.original[:12000] }}{% if result.original|length > 12000 %}…{% endif %}</textarea>
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Sanitized (für Cloud)</label>
+      <textarea id="sanitized-output" class="form-input" rows="14" readonly style="font-size:.75rem">{{ result.sanitized[:12000] }}{% if result.sanitized|length > 12000 %}…{% endif %}</textarea>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.75rem">
+    <button type="button" class="btn btn-secondary btn-sm" onclick="copySanitized()">In Zwischenablage</button>
+    <button type="button" class="btn btn-primary btn-sm" onclick="sendSanitizedToChat()">Im Chat verwenden</button>
+    <button type="button" class="btn btn-secondary btn-sm" onclick="downloadSanitized()">Als .txt herunterladen</button>
+  </div>
+  <p class="text-muted" style="font-size:.72rem;margin-top:.5rem">
+    «Im Chat verwenden» füllt das Chat-Eingabefeld (RAG aus, Frontier-Modell wählen) — bitte vor dem Senden kurz prüfen.
+  </p>
+</div>
+{% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function copySanitized() {
+  const el = document.getElementById('sanitized-output');
+  if (!el) return;
+  navigator.clipboard.writeText(el.value).then(() => showToast('Kopiert', 'success'));
+}
+function sendSanitizedToChat() {
+  const el = document.getElementById('sanitized-output');
+  if (!el || !el.value.trim()) return;
+  sessionStorage.setItem('slit_chat_prefill', el.value);
+  sessionStorage.setItem('slit_chat_prefill_rag', '0');
+  window.location.href = '/chat';
+}
+function downloadSanitized() {
+  const el = document.getElementById('sanitized-output');
+  if (!el) return;
+  const name = {{ (input_label or 'sanitized')|tojson }} || 'sanitized';
+  const base = String(name).replace(/\.[^.]+$/, '') || 'sanitized';
+  const blob = new Blob([el.value], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = base + '.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+</script>
+{% endblock %}
