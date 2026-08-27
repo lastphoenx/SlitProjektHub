@@ -138,6 +138,7 @@ tbody td {
 }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover td { background: rgba(255,255,255,.025); }
+tbody td.eval-matrix-cell:hover { background: rgba(99,102,241,.12); outline: 1px solid rgba(99,102,241,.35); }
 
 .badge {
   display: inline-flex;
