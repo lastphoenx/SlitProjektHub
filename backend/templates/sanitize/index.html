@@ -13,35 +13,61 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem;padding:.65rem .85rem">
-  <p style="font-size:.78rem;margin:0">
+  <p style="font-size:.78rem;margin:0 0 .35rem">
     <strong>Pipeline:</strong>
     {% if pii_status.stage2_enabled and pii_status.stage2_ready %}
-    Stufe 1 (Regex) + Stufe 2 (Presidio/Flair) aktiv — dieselbe Logik wie Projektideen, Offertbeurteilung und Visual-Lab.
+    Stufe 1 (Regex) + Stufe 2 (Presidio/Flair) aktiv.
     {% elif pii_status.stage2_enabled %}
-    Stufe 2 konfiguriert, Modelle noch nicht geladen — nur Regex bis Warmup/Prefetch (siehe <code>docs/SERVER_SETUP.md</code> §7).
+    Stufe 2 konfiguriert, Modelle noch nicht geladen — nur Regex bis Warmup.
     {% else %}
-    Nur Stufe 1 (Regex) — <code>SWISS_PII_ANONYMIZER=0</code> oder Paket fehlt.
+    Nur Stufe 1 (Regex).
     {% endif %}
     · Limit: {{ "{:,}".format(pii_status.max_chars) }} Zeichen, PDF max. {{ pii_status.max_pdf_pages }} Seiten.
   </p>
+  <p style="font-size:.72rem;margin:0;color:var(--color-text-muted);line-height:1.45">
+    <strong>Erkannt:</strong> Personen (Flair), E-Mail, CH-Telefon, AHV, IBAN, UID, Adressen/PLZ (Regex).
+    <strong>Nicht automatisch:</strong> Firmennamen/Organisationen (für Offert-Kontext oft gewollt).
+    Vor Cloud-Übertragung immer stichprobenartig prüfen — kein Ersatz für menschliche Kontrolle.
+  </p>
+</div>
+
+<div id="sanitize-busy" class="card sanitize-busy-banner" style="display:none;margin-bottom:1rem;padding:.75rem .85rem;border-color:var(--color-primary)">
+  <div style="display:flex;align-items:center;gap:.65rem">
+    <svg class="sanitize-spinner" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+    <div>
+      <p style="font-size:.85rem;font-weight:600;margin:0">Sanitizer läuft …</p>
+      <p style="font-size:.75rem;margin:.2rem 0 0;color:var(--color-text-muted)">
+        PDF-Extraktion und Flair-NER können <strong>30–120 Sekunden</strong> dauern. Tab bleibt aktiv — bitte warten.
+      </p>
+    </div>
+  </div>
 </div>
 
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Eingabe</h2>
-  <form method="post" action="/sanitize" enctype="multipart/form-data" style="display:grid;gap:.75rem">
+  <form id="sanitize-form" method="post" action="/sanitize" enctype="multipart/form-data" style="display:grid;gap:.75rem" onsubmit="return startSanitize()">
     <div>
       <label class="form-label">Text (optional)</label>
       <textarea class="form-input" name="source_text" rows="6" placeholder="Rohtext einfügen …">{{ result.original if result else '' }}</textarea>
     </div>
-    <div>
-      <label class="form-label">oder Datei (PDF, DOCX, TXT, MD)</label>
-      <input class="form-input" type="file" name="file" accept=".pdf,.docx,.txt,.md,.csv,.json,.yaml,.yml" />
+    <div style="display:grid;grid-template-columns:1fr auto;gap:.75rem;align-items:end">
+      <div>
+        <label class="form-label">oder Datei (PDF, DOCX, TXT, MD)</label>
+        <input id="sanitize-file" class="form-input" type="file" name="file" accept=".pdf,.docx,.txt,.md,.csv,.json,.yaml,.yml" />
+      </div>
+      <div>
+        <label class="form-label">PDF max. Seiten</label>
+        <input class="form-input" type="number" name="pdf_max_pages" min="1" max="{{ pii_status.max_pdf_pages }}"
+               value="{{ pii_status.max_pdf_pages }}" style="width:5.5rem" title="Server-Maximum {{ pii_status.max_pdf_pages }}" />
+      </div>
     </div>
     <label style="display:flex;align-items:center;gap:.4rem;font-size:.8rem;cursor:pointer">
       <input type="checkbox" name="full_pipeline" value="1" checked />
-      Volle Pipeline (Regex + swiss-pii-anonymizer) — empfohlen vor Cloud-Übertragung
+      Volle Pipeline (Regex + swiss-pii-anonymizer)
     </label>
-    <button type="submit" class="btn btn-primary" style="justify-self:start">Sanitizen</button>
+    <button id="sanitize-btn" type="submit" class="btn btn-primary" style="justify-self:start;min-width:9rem">
+      Sanitizen
+    </button>
   </form>
   {% if error %}
   <p style="color:var(--color-danger);font-size:.85rem;margin:.75rem 0 0">{{ error }}</p>
@@ -58,7 +84,7 @@
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.5rem">Ergebnis{% if input_label %} — {{ input_label }}{% endif %}</h2>
   <p class="text-muted" style="font-size:.75rem;margin-bottom:.75rem">
     {{ result.char_count }} Zeichen → {{ result.reduction }} Zeichen gekürzt/ersetzt.
-    {% if result.findings %} · {{ result.findings|length }} Entität(en) erkannt{% endif %}
+    {% if result.findings %} · {{ result.findings|length }} Entität(en) in Stufe 2{% endif %}
   </p>
 
   {% if result.findings %}
@@ -76,6 +102,10 @@
       </tbody>
     </table>
   </div>
+  {% elif result.char_count > 0 %}
+  <p class="text-muted" style="font-size:.72rem;margin-bottom:.75rem">
+    Stufe 2 hat keine gemappten Entitäten gelistet (Presidio-Warnungen zu MISC sind normal) — Regex-Ersetzungen siehe sanitized Text.
+  </p>
   {% endif %}
 
   {% if result.warnings %}
@@ -92,7 +122,7 @@
       <textarea class="form-input" rows="14" readonly style="font-size:.75rem">{{ result.original[:12000] }}{% if result.original|length > 12000 %}…{% endif %}</textarea>
     </div>
     <div>
-      <label class="form-label" style="font-size:.72rem">Sanitized (Auszug — vollständig für Export unten)</label>
+      <label class="form-label" style="font-size:.72rem">Sanitized (Auszug)</label>
       <textarea id="sanitized-output" class="form-input" rows="14" readonly style="font-size:.75rem">{{ result.sanitized[:12000] }}{% if result.sanitized|length > 12000 %}…{% endif %}</textarea>
     </div>
   </div>
@@ -103,7 +133,7 @@
     <button type="button" class="btn btn-secondary btn-sm" onclick="downloadSanitized()">Als .txt herunterladen</button>
   </div>
   <p class="text-muted" style="font-size:.72rem;margin-top:.5rem">
-    «Im Chat verwenden» füllt das Chat-Eingabefeld (RAG aus, Frontier-Modell wählen) — bitte vor dem Senden kurz prüfen.
+    «Im Chat verwenden» füllt das Chat-Eingabefeld (RAG aus) — bitte vor dem Senden kurz prüfen.
   </p>
 </div>
 {% endif %}
@@ -112,7 +142,22 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<style>
+  @keyframes sanitize-spin { to { transform: rotate(360deg); } }
+  .sanitize-spinner { animation: sanitize-spin 1s linear infinite; flex-shrink:0; }
+  #sanitize-form.is-busy { opacity: .55; pointer-events: none; }
+</style>
 <script>
+function startSanitize() {
+  const form = document.getElementById('sanitize-form');
+  const btn = document.getElementById('sanitize-btn');
+  const busy = document.getElementById('sanitize-busy');
+  if (form) form.classList.add('is-busy');
+  if (btn) { btn.disabled = true; btn.textContent = 'Läuft …'; }
+  if (busy) busy.style.display = '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  return true;
+}
 function _sanitizedText() {
   const full = document.getElementById('sanitized-full');
   if (full && full.value) return full.value;

@@ -69,7 +69,11 @@ IDEA_VISUAL_OUTPUT_FORMATS: dict[str, str] = {
 }
 
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
-_PHONE_RE = re.compile(r"(?:\+41|0)\s*[\d\s./-]{8,}")
+_PHONE_RE = re.compile(
+    r"(?:\+41|0041)\s*(?:\(0\)\s*)?[\d\s./()-]{8,}"
+    r"|"
+    r"0\d{2}\s*[\d\s./()-]{6,}"
+)
 _PERSON_LINE_RE = re.compile(
     r"(?:Herr|Frau|Dr\.|Prof\.)\s+[A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)?",
     re.IGNORECASE,

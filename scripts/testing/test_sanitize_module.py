@@ -6,7 +6,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.m19_sanitize import extract_text_from_bytes, sanitize_plaintext
+from src.m19_sanitize import (
+    extract_text_from_bytes,
+    sanitize_document_stage1,
+    sanitize_plaintext,
+)
 
 
 def test_extract_text_from_txt():
@@ -23,9 +27,23 @@ def test_extract_text_empty():
     assert warnings == []
 
 
+def test_sanitize_document_stage1_phone_and_uid():
+    raw = (
+        "Apps with love AG, Utengasse 52, 4058 Basel. "
+        "Tel +41 (0)31 333 01 51, UID CHE-116.029.116, mail test@beispiel.ch"
+    )
+    out = sanitize_document_stage1(raw)
+    assert "Apps with love" in out
+    assert "[CH_PHONE_NUMBER]" in out
+    assert "[CH_UID]" in out
+    assert "[EMAIL_ADDRESS]" in out
+    assert "[ADDRESS]" in out or "[LOCATION]" in out
+    assert "+41" not in out
+
+
 def test_sanitize_plaintext_calls_pipeline():
     with patch(
-        "src.m19_sanitize.sanitize_for_cloud_with_meta",
+        "src.m19_sanitize.sanitize_document_for_cloud_with_meta",
         return_value=("[PERSON]", [{"entity_type": "PERSON", "text": "Max", "score": 0.9}]),
     ) as mock_s:
         out = sanitize_plaintext("Max Muster", full_pipeline=True)
@@ -37,7 +55,7 @@ def test_sanitize_plaintext_calls_pipeline():
 def test_sanitize_plaintext_truncates_long_text():
     with patch("src.m19_sanitize.sanitize_max_chars", return_value=10):
         with patch(
-            "src.m19_sanitize.sanitize_for_cloud_with_meta",
+            "src.m19_sanitize.sanitize_document_for_cloud_with_meta",
             return_value=("short", []),
         ):
             out = sanitize_plaintext("x" * 100, full_pipeline=True)
@@ -46,9 +64,8 @@ def test_sanitize_plaintext_truncates_long_text():
 
 
 def test_sanitize_plaintext_regex_only():
-    with patch("src.m19_sanitize.sanitize_structured_field", return_value="clean") as mock_r:
-        with patch("src.m19_sanitize.pii_sanitize_enabled", return_value=False):
-            out = sanitize_plaintext("raw", full_pipeline=False)
+    with patch("src.m19_sanitize.sanitize_document_stage1", return_value="clean") as mock_r:
+        out = sanitize_plaintext("raw", full_pipeline=False)
     mock_r.assert_called_once_with("raw")
     assert out["sanitized"] == "clean"
     assert out["findings"] == []
