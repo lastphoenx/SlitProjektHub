@@ -35,7 +35,8 @@ async def sanitize_run(
     request: Request,
     source_text: str = Form(""),
     full_pipeline: str = Form("1"),
-    pdf_max_pages: str = Form(""),
+    pdf_page_from: str = Form(""),
+    pdf_page_to: str = Form(""),
     file: UploadFile | None = File(None),
 ):
     file_bytes: bytes | None = None
@@ -45,9 +46,12 @@ async def sanitize_run(
         file_bytes = await file.read()
 
     pipeline_on = full_pipeline in ("1", "true", "on", "yes")
-    page_limit: int | None = None
-    if (pdf_max_pages or "").strip().isdigit():
-        page_limit = int(pdf_max_pages.strip())
+    page_from: int | None = None
+    page_to: int | None = None
+    if (pdf_page_from or "").strip().isdigit():
+        page_from = int(pdf_page_from.strip())
+    if (pdf_page_to or "").strip().isdigit():
+        page_to = int(pdf_page_to.strip())
 
     error: str | None = None
     result = None
@@ -61,7 +65,8 @@ async def sanitize_run(
             file_name=file_name,
             file_bytes=file_bytes,
             full_pipeline=pipeline_on,
-            max_pdf_pages=page_limit,
+            pdf_page_from=page_from,
+            pdf_page_to=page_to,
         )
         if result:
             label = result.pop("input_label", label)

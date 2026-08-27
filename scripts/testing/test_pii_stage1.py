@@ -48,3 +48,16 @@ def test_phone_with_parentheses():
     out = apply_pii_stage1("Ruf +41 (0)31 333 01 51 an.")
     assert "[CH_PHONE_NUMBER]" in out
     assert "333 01 51" not in out
+
+
+def test_uid_before_phone():
+    out = apply_pii_stage1("UID CHE-116.029.116, Tel +41 31 333 01 51.")
+    assert "[CH_UID]" in out
+    assert "CHE-116" not in out
+    assert "[CH_PHONE_NUMBER]" in out
+
+
+def test_date_range_not_phone():
+    out = apply_pii_stage1("Projektzeitraum 07/2021 – 08/2023.")
+    assert "[CH_PHONE_NUMBER]" not in out
+    assert "07/2021" in out

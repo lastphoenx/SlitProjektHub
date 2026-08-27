@@ -22,7 +22,7 @@
     {% else %}
     Nur Stufe 1 (Regex).
     {% endif %}
-    · Limit: {{ "{:,}".format(pii_status.max_chars) }} Zeichen, PDF max. {{ pii_status.max_pdf_pages }} Seiten.
+    · Limit: {{ "{:,}".format(pii_status.max_chars) }} Zeichen, PDF max. {{ pii_status.max_pdf_pages }} Seiten pro Lauf (Seitenbereich wählbar).
   </p>
   <p style="font-size:.72rem;margin:0;color:var(--color-text-muted);line-height:1.45">
     <strong>Erkannt:</strong> Personen (Flair), E-Mail, CH-Telefon, AHV, IBAN, UID, Adressen/PLZ (Regex).
@@ -55,10 +55,19 @@
         <label class="form-label">oder Datei (PDF, DOCX, TXT, MD)</label>
         <input id="sanitize-file" class="form-input" type="file" name="file" accept=".pdf,.docx,.txt,.md,.csv,.json,.yaml,.yml" />
       </div>
-      <div>
-        <label class="form-label">PDF max. Seiten</label>
-        <input class="form-input" type="number" name="pdf_max_pages" min="1" max="{{ pii_status.max_pdf_pages }}"
-               value="{{ pii_status.max_pdf_pages }}" style="width:5.5rem" title="Server-Maximum {{ pii_status.max_pdf_pages }}" />
+      <div style="display:flex;gap:.5rem;align-items:end;flex-wrap:wrap">
+        <div>
+          <label class="form-label">PDF Seiten von</label>
+          <input class="form-input" type="number" name="pdf_page_from" min="1" value="1" style="width:4.5rem" />
+        </div>
+        <div>
+          <label class="form-label">bis</label>
+          <input class="form-input" type="number" name="pdf_page_to" min="1" placeholder="auto"
+                 style="width:4.5rem" title="Leer = von + {{ pii_status.max_pdf_pages - 1 }} (max. {{ pii_status.max_pdf_pages }} Seiten)" />
+        </div>
+        <p class="text-muted" style="font-size:.68rem;margin:0 0 .15rem;max-width:11rem;line-height:1.35">
+          Max. {{ pii_status.max_pdf_pages }} Seiten/Lauf. 173-Seiten-PDF z. B. 1–20, dann 21–40 …
+        </p>
       </div>
     </div>
     <label style="display:flex;align-items:center;gap:.4rem;font-size:.8rem;cursor:pointer">

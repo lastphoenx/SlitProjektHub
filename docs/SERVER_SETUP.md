@@ -264,7 +264,7 @@ print(sanitize_for_cloud_text('Kontakt Maria Muster, AHV 756.1234.5678.97'))
 
 Erwartung: `[PERSON]`, `[CH_AHV_NR]` (nicht nur Regex-Stufe 1).
 
-Web-UI: unter **PII-Sanitizer** (`/sanitize`) Text oder PDF hochladen — gleiche Pipeline, mit Entitäten-Vorschau.
+Web-UI: unter **PII-Sanitizer** (`/sanitize`) Text oder PDF hochladen — gleiche Pipeline, mit Entitäten-Vorschau. Bei langen PDFs **Seiten von/bis** wählen (z. B. 1–20, dann 21–40); `SANITIZE_MAX_PDF_PAGES` begrenzt die Spanne pro Lauf.
 
 Optional in `.env` (Schutz vor OOM bei grossen PDFs):
 
