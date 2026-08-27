@@ -17,11 +17,25 @@ from sqlmodel import Field, Session, SQLModel, select
 from .m03_db import engine, get_session
 from .m08_llm import try_models_with_messages
 from .m09_rag import retrieve_relevant_chunks_hybrid
+from .m16_idea_visual import is_cloud_llm_provider, sanitize_for_cloud_text
 
 log = logging.getLogger(__name__)
 
 CRITERION_KINDS = ("eignung", "zuschlag")
 ANGEbot_CLASSIFICATION = "Angebot (Bieter)"
+ANGEbot_SUBTYPES = (
+    "Preisblatt",
+    "Bilanz/Erfolgsrechnung",
+    "Referenzprojektblatt",
+    "Vorbehaltsliste",
+    "Management Summary",
+    "Grobkonzept/Lösungskonzept",
+    "Eignungsnachweis",
+    "Zertifizierung",
+    "Proof of Concept",
+    "Vorstellung Lieferantin",
+    "Sonstiges",
+)
 
 
 class Bidder(SQLModel, table=True):
@@ -405,6 +419,19 @@ def get_bidder_document_ids(bidder_id: int) -> list[int]:
         ]
 
 
+def validate_evaluation_cloud_gate(
+    provider: str,
+    bidder_id: int,
+    cloud_confirm: bool,
+) -> Optional[str]:
+    """Blockiert Cloud-LLM-Calls mit Bieter-Dokumenten ohne Bestätigungs-Checkbox."""
+    if not is_cloud_llm_provider(provider):
+        return None
+    if get_bidder_document_ids(bidder_id) and not cloud_confirm:
+        return "cloud_confirm"
+    return None
+
+
 # ── Preisblatt (TCO) ────────────────────────────────────────────────────────
 
 PRICE_CATEGORIES = ("einmalig", "wiederkehrend")
@@ -672,6 +699,8 @@ def suggest_score_with_rag(
         context_parts.append(f"[{i}] Datei: {fname}, Chunk {chunk_id}\n{text}")
 
     context = "\n\n".join(context_parts) or "Keine passenden Angebotsstellen gefunden."
+    if is_cloud_llm_provider(provider):
+        context = sanitize_for_cloud_text(context)
     scale_max = max(1, criterion.scale_max)
     system = (
         "Du bist Vergabesachverständiger. Bewerte ein Angebot zu einem Kriterium. "
