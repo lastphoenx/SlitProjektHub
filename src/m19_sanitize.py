@@ -39,11 +39,30 @@ def sanitize_max_file_bytes() -> int:
     return _env_int("SANITIZE_MAX_FILE_BYTES", _DEFAULT_MAX_FILE_BYTES, minimum=1024 * 1024)
 
 
-def resolve_pdf_page_limit(requested: int | None) -> int:
-    cap = sanitize_max_pdf_pages()
-    if requested is None or requested <= 0:
-        return cap
-    return min(requested, cap)
+def resolve_pdf_page_range(
+    page_from: int | None,
+    page_to: int | None,
+    *,
+    total_pages: int | None = None,
+) -> tuple[int, int, list[str]]:
+    """1-basiert inklusive; max. `sanitize_max_pdf_pages()` Seiten pro Lauf."""
+    warnings: list[str] = []
+    max_span = sanitize_max_pdf_pages()
+    start = max(1, page_from or 1)
+    end = max(start, page_to) if page_to and page_to > 0 else start + max_span - 1
+
+    if end - start + 1 > max_span:
+        end = start + max_span - 1
+        warnings.append(
+            f"Seitenbereich auf {max_span} Seiten begrenzt (Server-Maximum `SANITIZE_MAX_PDF_PAGES`)."
+        )
+
+    if total_pages is not None:
+        if start > total_pages:
+            return start, start, [f"Seite {start} existiert nicht (PDF hat {total_pages} Seiten)."]
+        end = min(end, total_pages)
+
+    return start, end, warnings
 
 
 def pii_pipeline_status() -> dict[str, Any]:
@@ -76,7 +95,8 @@ def extract_text_from_bytes(
     file_name: str,
     file_bytes: bytes,
     *,
-    max_pdf_pages: int | None = None,
+    pdf_page_from: int | None = None,
+    pdf_page_to: int | None = None,
 ) -> tuple[bool, str, list[str]]:
     """PDF/DOCX/TXT/MD → Plaintext. Kein RAG-Ingest."""
     warnings: list[str] = []
@@ -96,21 +116,29 @@ def extract_text_from_bytes(
         path = Path(tmp.name)
     try:
         if ext == ".pdf":
-            page_limit = resolve_pdf_page_limit(max_pdf_pages)
-            text = extract_text_from_pdf(path, max_pages=page_limit)
+            total: int | None = None
             try:
                 import pdfplumber
 
                 with pdfplumber.open(path) as pdf:
                     total = len(pdf.pages)
-                if total > page_limit:
-                    warnings.append(
-                        f"Nur die ersten {page_limit} von {total} PDF-Seiten extrahiert "
-                        f"(Limit `SANITIZE_MAX_PDF_PAGES`, RAM-Schutz). "
-                        f"Für mehr Seiten in `.env` erhöhen und erneut versuchen."
-                    )
             except Exception:
                 pass
+
+            page_start, page_end, range_warnings = resolve_pdf_page_range(
+                pdf_page_from, pdf_page_to, total_pages=total
+            )
+            warnings.extend(range_warnings)
+            if total is not None and page_start > total:
+                return False, range_warnings[0], warnings
+
+            text = extract_text_from_pdf(
+                path, page_start=page_start, page_end=page_end
+            )
+            if total is not None:
+                warnings.append(
+                    f"PDF-Seiten {page_start}–{page_end} von {total} extrahiert."
+                )
         elif ext == ".docx":
             text = extract_text_from_docx(path)
         elif ext in _TEXT_EXTENSIONS:
@@ -175,7 +203,8 @@ def run_sanitize_job(
     file_name: str | None = None,
     file_bytes: bytes | None = None,
     full_pipeline: bool = True,
-    max_pdf_pages: int | None = None,
+    pdf_page_from: int | None = None,
+    pdf_page_to: int | None = None,
 ) -> tuple[str | None, dict[str, Any] | None, list[str]]:
     """Blocking-Job für Thread-Pool: (error, result, extract_warnings)."""
     label = "Eingabetext"
@@ -185,7 +214,10 @@ def run_sanitize_job(
 
     if file_bytes and file_name:
         ok, extracted, extract_warnings = extract_text_from_bytes(
-            file_name, file_bytes, max_pdf_pages=max_pdf_pages
+            file_name,
+            file_bytes,
+            pdf_page_from=pdf_page_from,
+            pdf_page_to=pdf_page_to,
         )
         warnings.extend(extract_warnings)
         if not ok:

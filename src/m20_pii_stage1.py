@@ -9,12 +9,13 @@ import re
 
 # Kontakt & Identifikatoren
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+# Kein "/" in Ziffernblöcken — vermeidet Datumsbereiche wie 07/2021–08/2023.
 PHONE_RE = re.compile(
-    r"(?:\+41|0041)\s*(?:\(0\)\s*)?[\d\s./()-]{8,}"
+    r"(?:\+41|0041)\s*(?:\(0\)\s*)?[\d\s.\-()]{8,}\d"
     r"|"
-    r"0\d{2}\s*[\d\s./()-]{6,}"
+    r"0\d{2}[\s.\-]?\d{2,3}[\s.\-]?\d{2}[\s.\-]?\d{2}\b"
     r"|"
-    r"(?:Tel\.?|Telefon|Phone)\s*:?\s*(?:\+41|0041|0)[\d\s./()-]{6,}",
+    r"(?:Tel\.?|Telefon|Phone)\s*:?\s*(?:\+41|0041|0)[\d\s.\-()]{6,}",
     re.IGNORECASE,
 )
 PERSON_LINE_RE = re.compile(
@@ -55,8 +56,8 @@ def apply_pii_stage1(text: str, *, preserve_newlines: bool = True) -> str:
         return ""
     t = text
     t = EMAIL_RE.sub("[EMAIL_ADDRESS]", t)
-    t = PHONE_RE.sub("[CH_PHONE_NUMBER]", t)
     t = CH_UID_RE.sub("[CH_UID]", t)
+    t = PHONE_RE.sub("[CH_PHONE_NUMBER]", t)
     t = STREET_RE.sub("[ADDRESS]", t)
     t = PLZ_CITY_RE.sub("[LOCATION]", t)
     t = PERSON_LINE_RE.sub("[PERSON]", t)

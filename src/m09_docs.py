@@ -85,7 +85,33 @@ def calculate_sha256(file_bytes: bytes) -> str:
     return sha256_hash.hexdigest()
 
 
-def extract_text_from_pdf(file_path: Path, max_pages: int | None = None) -> str:
+def _slice_pdf_pages(
+    pages,
+    *,
+    max_pages: int | None = None,
+    page_start: int = 1,
+    page_end: int | None = None,
+):
+    """Seitenauswahl: 1-basiert, page_end inklusive."""
+    total = len(pages)
+    if page_start > 1 or page_end is not None:
+        start = max(0, min(page_start - 1, total))
+        end = min(page_end or total, total)
+        if end < start:
+            end = start
+        return pages[start:end]
+    if max_pages is not None:
+        return pages[:max_pages]
+    return pages
+
+
+def extract_text_from_pdf(
+    file_path: Path,
+    max_pages: int | None = None,
+    *,
+    page_start: int = 1,
+    page_end: int | None = None,
+) -> str:
     """Extrahiert Text aus einer PDF-Datei mit Fallback-Strategien."""
     text_content = []
     
@@ -94,7 +120,12 @@ def extract_text_from_pdf(file_path: Path, max_pages: int | None = None) -> str:
         try:
             with open(file_path, "rb") as f:
                 reader = PyPDF2.PdfReader(f)
-                pages = reader.pages[:max_pages] if max_pages else reader.pages
+                pages = _slice_pdf_pages(
+                    reader.pages,
+                    max_pages=max_pages,
+                    page_start=page_start,
+                    page_end=page_end,
+                )
                 for page in pages:
                     text = page.extract_text()
                     if text:
@@ -111,7 +142,12 @@ def extract_text_from_pdf(file_path: Path, max_pages: int | None = None) -> str:
         try:
             text_content = []
             with pdfplumber.open(file_path) as pdf:
-                pages = pdf.pages[:max_pages] if max_pages else pdf.pages
+                pages = _slice_pdf_pages(
+                    pdf.pages,
+                    max_pages=max_pages,
+                    page_start=page_start,
+                    page_end=page_end,
+                )
                 for page in pages:
                     text = page.extract_text()
                     if text:
