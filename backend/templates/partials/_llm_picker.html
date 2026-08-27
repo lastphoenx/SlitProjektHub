@@ -15,7 +15,9 @@
     {% endif %}
   </label>
   <p class="text-muted" style="font-size:.68rem;margin:0 0 .45rem">
-    {% if role == 'input' %}
+    {% if picker_hint %}
+    {{ picker_hint }}
+    {% elif role == 'input' %}
     Liest hochgeladene PDF/Bilder: Text lokal, Bilder an <span class="badge" style="font-size:.62rem;vertical-align:middle">Vision</span>-Modelle.
     Leer = KI-Einstellungen (<strong>{{ llm_provider }}</strong> / <strong>{{ llm_model or 'Standard' }}</strong>).
     {% else %}

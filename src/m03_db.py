@@ -144,6 +144,7 @@ class Document(SQLModel, table=True):
     chunk_count: int = Field(default=0)
     chunk_size_used: Optional[int] = None  # Verwendete Chunk-Größe beim Upload
     linked_role_keys: Optional[str] = None  # JSON-Array: ["role-1", "role-2"] für Rollen-Dokumente
+    doc_subtype: Optional[str] = Field(default=None, sa_column=Column(String(80), nullable=True))
     uploaded_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False, index=True)
@@ -401,7 +402,15 @@ def migrate_db() -> None:
             """))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_document_sha256 ON document(sha256_hash);"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_document_uploaded ON document(uploaded_at);"))
-        
+
+        if _column_exists("document", "id"):
+            if not _column_exists("document", "chunk_size_used"):
+                conn.execute(text("ALTER TABLE document ADD COLUMN chunk_size_used INTEGER;"))
+            if not _column_exists("document", "linked_role_keys"):
+                conn.execute(text("ALTER TABLE document ADD COLUMN linked_role_keys TEXT;"))
+            if not _column_exists("document", "doc_subtype"):
+                conn.execute(text("ALTER TABLE document ADD COLUMN doc_subtype VARCHAR(80);"))
+
         # DocumentChunk table
         if not _column_exists("document_chunk", "document_id"):
             conn.execute(text("""

@@ -4,12 +4,12 @@ from __future__ import annotations
 import csv
 import io
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from backend.app.jinja_env import templates
 
 from src.m07_projects import list_projects_df
-from src.m09_docs import get_project_documents
+from src.m09_docs import get_project_documents, ingest_document, calculate_sha256, get_document_by_sha256, link_document_to_project
 from src.m14_auth import (
     can_evaluate,
     can_view_evaluator_details,
@@ -19,6 +19,7 @@ from src.m14_auth import (
 )
 from src.m15_evaluation import (
     ANGEbot_CLASSIFICATION,
+    ANGEbot_SUBTYPES,
     CRITERION_KINDS,
     compute_bidder_tco,
     compute_rankings,
@@ -42,6 +43,7 @@ from src.m15_evaluation import (
     unlink_document_from_bidder,
     upsert_price_item,
     upsert_score,
+    validate_evaluation_cloud_gate,
 )
 from src.m01_config import load_user_settings
 
@@ -71,6 +73,27 @@ def _project_title(project_key: str) -> str:
         if p["key"] == project_key:
             return p["title"]
     return project_key
+
+
+def _llm_picker_context() -> dict:
+    from src.m16_idea_visual import (
+        visual_text_models_map,
+        visual_text_providers_available,
+        visual_vision_models_map,
+    )
+
+    settings = load_user_settings()
+    return {
+        "llm_provider": settings.get("provider", "openai"),
+        "llm_model": settings.get("model", ""),
+        "visual_llm_providers": visual_text_providers_available(),
+        "visual_llm_models": visual_text_models_map(),
+        "visual_vision_models": visual_vision_models_map(),
+        "form_visual_provider": "",
+        "form_visual_model": "",
+        "form_input_provider": "",
+        "form_input_model": "",
+    }
 
 
 @router.get("/evaluation", response_class=HTMLResponse)
@@ -149,35 +172,32 @@ async def evaluation_page(request: Request, project_key: str = ""):
 
     who = _username(request)
     user_id = get_user_id(who) if who else None
-    settings = load_user_settings()
-
-    return templates.TemplateResponse(
-        "evaluation/index.html",
-        {
-            "request": request,
-            "active_page": "evaluation",
-            "projects": projects,
-            "project_key": project_key,
-            "project_title": _project_title(project_key) if project_key else "",
-            "bidders": bidders,
-            "criteria": criteria,
-            "top_criteria": top_criteria,
-            "rankings": rankings,
-            "matrix_rows": matrix_rows,
-            "offer_docs": offer_docs,
-            "bidder_docs": bidder_docs,
-            "criterion_kinds": CRITERION_KINDS,
-            "angebot_class": ANGEbot_CLASSIFICATION,
-            "may_evaluate": can_evaluate(who),
-            "may_see_evaluators": can_view_evaluator_details(who),
-            "super_user": is_super_user(who),
-            "user_id": user_id,
-            "error": None,
-            "message": None,
-            "llm_provider": settings.get("provider", "openai"),
-            "llm_model": settings.get("model", ""),
-        },
-    )
+    ctx = {
+        "request": request,
+        "active_page": "evaluation",
+        "projects": projects,
+        "project_key": project_key,
+        "project_title": _project_title(project_key) if project_key else "",
+        "bidders": bidders,
+        "criteria": criteria,
+        "top_criteria": top_criteria,
+        "rankings": rankings,
+        "matrix_rows": matrix_rows,
+        "offer_docs": offer_docs,
+        "bidder_docs": bidder_docs,
+        "criterion_kinds": CRITERION_KINDS,
+        "angebot_class": ANGEbot_CLASSIFICATION,
+        "angebot_subtypes": ANGEbot_SUBTYPES,
+        "may_evaluate": can_evaluate(who),
+        "may_see_evaluators": can_view_evaluator_details(who),
+        "super_user": is_super_user(who),
+        "user_id": user_id,
+        "error": None,
+        "message": None,
+        "doc_upload": request.query_params.get("doc_upload"),
+    }
+    ctx.update(_llm_picker_context())
+    return templates.TemplateResponse("evaluation/index.html", ctx)
 
 
 @router.post("/evaluation/bidder", response_class=HTMLResponse)
@@ -337,25 +357,22 @@ async def evaluation_cell(request: Request, bidder_id: int, criterion_id: int, p
     ai_row = next((s for s in cell_scores if s.source_key == "ai"), None)
     user_rows = [s for s in cell_scores if s.source_key.startswith("user:")]
     uid = get_user_id(who) if who else None
-
-    return templates.TemplateResponse(
-        "evaluation/_cell.html",
-        {
-            "request": request,
-            "project_key": project_key,
-            "bidder": bidder,
-            "criterion": crit,
-            "ai_row": ai_row,
-            "user_rows": user_rows,
-            "official": official_score(bidder_id, crit, cell_scores),
-            "may_evaluate": can_evaluate(who),
-            "may_see_evaluators": can_view_evaluator_details(who),
-            "super_user": is_super_user(who),
-            "my_user_id": uid,
-            "llm_provider": load_user_settings().get("provider", "openai"),
-            "llm_model": load_user_settings().get("model", ""),
-        },
-    )
+    ctx = {
+        "request": request,
+        "project_key": project_key,
+        "bidder": bidder,
+        "criterion": crit,
+        "ai_row": ai_row,
+        "user_rows": user_rows,
+        "official": official_score(bidder_id, crit, cell_scores),
+        "may_evaluate": can_evaluate(who),
+        "may_see_evaluators": can_view_evaluator_details(who),
+        "super_user": is_super_user(who),
+        "my_user_id": uid,
+        "has_bidder_docs": bool(get_bidder_document_ids(bidder_id)),
+    }
+    ctx.update(_llm_picker_context())
+    return templates.TemplateResponse("evaluation/_cell.html", ctx)
 
 
 @router.post("/evaluation/suggest", response_class=HTMLResponse)
@@ -366,27 +383,50 @@ async def evaluation_suggest(
     criterion_id: int = Form(...),
     provider: str = Form("openai"),
     model: str = Form(""),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
+    cloud_confirm: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
     from src.m15_evaluation import Criterion
     from src.m03_db import get_session
+    from src.m16_idea_visual import resolve_visual_llm
 
     with get_session() as session:
         crit = session.get(Criterion, criterion_id)
     if not crit:
         raise HTTPException(404, "Kriterium nicht gefunden")
+
+    settings = load_user_settings()
+    fallback_p = (provider or "").strip() or settings.get("provider", "openai")
+    fallback_m = (model or "").strip() or settings.get("model", "")
+    ap, am = resolve_visual_llm(visual_llm_provider, visual_llm_model, fallback_p, fallback_m)
+    gate_err = validate_evaluation_cloud_gate(
+        ap, bidder_id, cloud_confirm in ("1", "true", "on", "yes")
+    )
+    tpl_ctx = {
+        "request": request,
+        "suggestion": {"value": None},
+        "gate_error": gate_err,
+        "cloud_provider": ap,
+        "project_key": project_key,
+        "bidder_id": bidder_id,
+        "criterion_id": criterion_id,
+    }
+    if gate_err:
+        return templates.TemplateResponse("evaluation/_suggestion.html", tpl_ctx, status_code=400)
+
     suggestion = suggest_score_with_rag(
         project_key,
         bidder_id,
         crit,
-        provider=provider,
-        model=model or None,
+        provider=ap,
+        model=am or None,
     )
-    return templates.TemplateResponse(
-        "evaluation/_suggestion.html",
-        {"request": request, "suggestion": suggestion, "project_key": project_key, "bidder_id": bidder_id, "criterion_id": criterion_id},
-    )
+    tpl_ctx["suggestion"] = suggestion
+    tpl_ctx["gate_error"] = None
+    return templates.TemplateResponse("evaluation/_suggestion.html", tpl_ctx)
 
 
 @router.post("/evaluation/bidder-doc", response_class=HTMLResponse)
@@ -404,6 +444,48 @@ async def evaluation_bidder_doc(
     else:
         unlink_document_from_bidder(bidder_id, document_id)
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
+
+
+@router.post("/evaluation/bidder-doc-upload", response_class=HTMLResponse)
+async def evaluation_bidder_doc_upload(
+    request: Request,
+    project_key: str = Form(...),
+    bidder_id: int = Form(...),
+    file: UploadFile = File(...),
+    classification: str = Form(""),
+    doc_subtype: str = Form(""),
+    chunk_size: int = Form(1000),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    file_bytes = await file.read()
+    redirect = f"/evaluation?project_key={project_key}"
+    if not file_bytes or not file.filename:
+        return RedirectResponse(url=f"{redirect}&doc_upload=error", status_code=303)
+
+    cls = (classification or "").strip() or ANGEbot_CLASSIFICATION
+    subtype = (doc_subtype or "").strip() or None
+    if subtype and subtype not in ANGEbot_SUBTYPES:
+        subtype = None
+    try:
+        chunk_size = max(200, min(4000, int(chunk_size)))
+    except (TypeError, ValueError):
+        chunk_size = 1000
+
+    success, _msg = ingest_document(
+        file_name=file.filename,
+        file_bytes=file_bytes,
+        classification=cls,
+        chunk_size=chunk_size,
+        doc_subtype=subtype,
+    )
+    doc = get_document_by_sha256(calculate_sha256(file_bytes), include_deleted=True)
+    if not doc:
+        return RedirectResponse(url=f"{redirect}&doc_upload=error", status_code=303)
+    link_document_to_project(project_key, doc.id)
+    link_document_to_bidder(bidder_id, doc.id)
+    status = "ok" if success else "linked"
+    return RedirectResponse(url=f"{redirect}&doc_upload={status}", status_code=303)
 
 
 @router.post("/evaluation/delete-bidder", response_class=HTMLResponse)

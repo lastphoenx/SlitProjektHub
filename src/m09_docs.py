@@ -234,13 +234,25 @@ def process_csv_to_chunks(file_path: Path, delimiter: str = ";") -> Tuple[bool, 
     return True, f"CSV erfolgreich verarbeitet: {len(chunks)} Zeilen/Fragen", chunks
 
 
+def chunk_meta_prefix(
+    classification: str,
+    file_name: str,
+    doc_subtype: str | None = None,
+) -> str:
+    """Chunk-Prefix für RAG: optionaler Subtyp übersteuert nur die Anzeige, nicht den Dateiname-Boost."""
+    if doc_subtype:
+        return f"[{classification} · {doc_subtype} | {file_name}]\n"
+    return f"[{classification} | {file_name}]\n"
+
+
 def ingest_document(
     file_name: str,
     file_bytes: bytes,
     classification: str,
     chunk_size: int = 1000,
     csv_delimiter: str = ";",
-    linked_role_keys: list[str] | None = None
+    linked_role_keys: list[str] | None = None,
+    doc_subtype: str | None = None,
 ) -> Tuple[bool, str]:
     """
     Verarbeitet ein hochgeladenes Dokument:
@@ -252,6 +264,7 @@ def ingest_document(
     
     Für CSV: csv_delimiter bestimmt das Trennzeichen (default: ";")
     linked_role_keys: Optional, für "Pflichtenheft (Rolle)" - Liste von role.key Werten
+    doc_subtype: Optional, feinere Art innerhalb der Klassifikation (z.B. Preisblatt)
     """
     file_hash = calculate_sha256(file_bytes)
     
@@ -271,6 +284,7 @@ def ingest_document(
                 existing.classification = classification
                 existing.chunk_size_used = chunk_size
                 existing.chunk_count = 0
+                existing.doc_subtype = (doc_subtype or "").strip() or None
                 if linked_role_keys is not None:
                     existing.linked_role_keys = json.dumps(linked_role_keys)
                 session.add(existing)
@@ -329,6 +343,7 @@ def ingest_document(
             if _reingest_doc is not None:
                 doc = session2.get(Document, _reingest_doc.id)
                 doc.file_path = str(file_path)
+                doc.doc_subtype = (doc_subtype or "").strip() or None
             else:
                 doc = Document(
                     filename=file_name,
@@ -339,7 +354,8 @@ def ingest_document(
                     embedding_model=EMBEDDING_MODEL,
                     chunk_count=0,
                     chunk_size_used=chunk_size,
-                    linked_role_keys=linked_keys_json
+                    linked_role_keys=linked_keys_json,
+                    doc_subtype=(doc_subtype or "").strip() or None,
                 )
                 session2.add(doc)
             session2.commit()
@@ -396,8 +412,9 @@ def ingest_document(
 
                 # Contextual Chunking: Prefix mit Metadaten (Klassifizierung + Dateiname)
                 # Format: [{classification} | {filename}]\n{chunk_text}
+                # Mit Subtyp: [{classification} · {subtype} | {filename}]\n{chunk_text}
                 contextual_chunks = []
-                prefix = f"[{classification} | {file_name}]\n"
+                prefix = chunk_meta_prefix(classification, file_name, doc_subtype)
                 for chunk_str in chunks:
                     contextual_chunks.append(prefix + chunk_str)
 
@@ -457,6 +474,16 @@ def get_document_by_id(doc_id: int) -> Optional[Document]:
     with get_session() as session:
         doc = session.get(Document, doc_id)
         if not doc or doc.is_deleted:
+            return None
+        return doc
+
+
+def get_document_by_sha256(file_hash: str, include_deleted: bool = False) -> Optional[Document]:
+    with get_session() as session:
+        doc = session.exec(select(Document).where(Document.sha256_hash == file_hash)).first()
+        if not doc:
+            return None
+        if doc.is_deleted and not include_deleted:
             return None
         return doc
 

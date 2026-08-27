@@ -149,7 +149,94 @@ def test_create_bidder_and_criterion():
     ev.engine = old_engine
 
 
+def test_chunk_meta_prefix_subtype():
+    from src.m09_docs import chunk_meta_prefix
+
+    assert chunk_meta_prefix("Angebot (Bieter)", "x.pdf") == "[Angebot (Bieter) | x.pdf]\n"
+    assert chunk_meta_prefix("Angebot (Bieter)", "x.pdf", "Preisblatt") == (
+        "[Angebot (Bieter) · Preisblatt | x.pdf]\n"
+    )
+
+
+def test_validate_evaluation_cloud_gate():
+    from unittest.mock import patch
+    from src.m15_evaluation import validate_evaluation_cloud_gate
+
+    with patch("src.m15_evaluation.get_bidder_document_ids", return_value=[11, 12]):
+        assert validate_evaluation_cloud_gate("openai", 1, False) == "cloud_confirm"
+        assert validate_evaluation_cloud_gate("openai", 1, True) is None
+        assert validate_evaluation_cloud_gate("ollama", 1, False) is None
+    with patch("src.m15_evaluation.get_bidder_document_ids", return_value=[]):
+        assert validate_evaluation_cloud_gate("openai", 1, False) is None
+
+
+def test_suggest_score_sanitizes_cloud_context():
+    from unittest.mock import patch
+    from src.m15_evaluation import Criterion, suggest_score_with_rag
+
+    crit = Criterion(id=1, project_key="p", kind="zuschlag", name="Lösung", scale_max=10)
+    rag = {
+        "documents": [
+            {
+                "text": "Kontakt Maria Muster, AHV 756.1234.5678.97, Budget CHF 1.2 Mio.",
+                "filename": "angebot.pdf",
+                "chunk_id": 7,
+            }
+        ]
+    }
+    captured: dict = {}
+
+    def fake_try(provider, system, messages, **kwargs):
+        captured["user"] = messages[0]["content"]
+        return '{"value": 8, "justification": "ok", "source_quote": "x", "source_chunk_id": 7}'
+
+    def fake_sanitize(text: str) -> str:
+        return (text or "").replace("Maria Muster", "[Name entfernt]").replace(
+            "756.1234.5678.97", "[AHV]"
+        )
+
+    with patch("src.m15_evaluation.retrieve_relevant_chunks_hybrid", return_value=rag):
+        with patch("src.m15_evaluation.try_models_with_messages", side_effect=fake_try):
+            with patch("src.m15_evaluation.sanitize_for_cloud_text", side_effect=fake_sanitize) as mock_s:
+                suggest_score_with_rag("p", 1, crit, provider="openai", model="gpt-4o-mini")
+
+    mock_s.assert_called()
+    user = captured["user"]
+    assert "Maria Muster" not in user
+    assert "756.1234.5678.97" not in user
+    assert "[Name entfernt]" in user
+
+
+def test_suggest_score_skips_sanitize_for_local_provider():
+    from unittest.mock import patch
+    from src.m15_evaluation import Criterion, suggest_score_with_rag
+
+    crit = Criterion(id=1, project_key="p", kind="zuschlag", name="Lösung", scale_max=10)
+    rag = {
+        "documents": [
+            {"text": "Kontakt Maria Muster intern.", "filename": "angebot.pdf", "chunk_id": 1}
+        ]
+    }
+    captured: dict = {}
+
+    def fake_try(provider, system, messages, **kwargs):
+        captured["user"] = messages[0]["content"]
+        return '{"value": 5, "justification": "ok"}'
+
+    with patch("src.m15_evaluation.retrieve_relevant_chunks_hybrid", return_value=rag):
+        with patch("src.m15_evaluation.try_models_with_messages", side_effect=fake_try):
+            with patch("src.m15_evaluation.sanitize_for_cloud_text") as mock_s:
+                suggest_score_with_rag("p", 1, crit, provider="ollama", model="qwen3:32b")
+
+    mock_s.assert_not_called()
+    assert "Maria Muster" in captured["user"]
+
+
 if __name__ == "__main__":
     test_create_bidder_and_criterion()
     test_ranking_ko_and_weighted_sum()
+    test_chunk_meta_prefix_subtype()
+    test_validate_evaluation_cloud_gate()
+    test_suggest_score_sanitizes_cloud_context()
+    test_suggest_score_skips_sanitize_for_local_provider()
     print("OK")

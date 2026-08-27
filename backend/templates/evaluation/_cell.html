@@ -1,5 +1,5 @@
 <div class="modal-backdrop">
-  <div class="modal" style="max-width:min(96vw,640px);width:min(96vw,640px);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:min(96vw,720px);width:min(96vw,720px);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true">
     <div class="modal-header" style="flex-shrink:0">
       <div style="min-width:0">
         <h2 class="modal-title" style="font-size:.95rem">{{ bidder.name }} — {{ criterion.name }}</h2>
@@ -67,6 +67,26 @@
         {% endif %}
         <textarea class="form-input" name="justification" rows="2" placeholder="Begründung"></textarea>
         <textarea class="form-input" name="source_chunk_ref" rows="2" placeholder="Zitat/Quelle aus dem Angebot"></textarea>
+        <div id="cell-llm-picker" style="margin:.25rem 0">
+          {% set form_id = 'eval-cell-' ~ bidder.id ~ '-' ~ criterion.id %}
+          {% set llm_role = 'output' %}
+          {% set picker_title = 'KI für Bewertungsvorschlag' %}
+          {% set picker_hint = 'Ein LLM-Aufruf: RAG-Stellen werden bewertet. Leer = KI-Einstellungen (' ~ (llm_provider or 'openai') ~ ' / ' ~ (llm_model or 'Standard') ~ '). Cloud-Provider brauchen die Bestätigung unten, sobald Bieter-Dokumente verknüpft sind.' %}
+          {% set form_visual_provider = form_visual_provider | default('') %}
+          {% set form_visual_model = form_visual_model | default('') %}
+          {% include 'partials/_llm_picker.html' %}
+        </div>
+        {% if has_bidder_docs %}
+        <div id="eval-cloud-gate-wrap" style="display:none;padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+          <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
+            Cloud-Provider mit verknüpften Angebotsdokumenten — Auszüge werden vor der Übertragung gefiltert.
+          </p>
+          <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
+            <input type="checkbox" name="cloud_confirm" value="1" id="eval-cloud-confirm" style="margin-top:.15rem" />
+            <span>Ich bestätige, dass die an die Cloud übermittelten Angebotsauszüge auf personenbezogene Daten geprüft wurden.</span>
+          </label>
+        </div>
+        {% endif %}
         <div style="display:flex;gap:.5rem">
           <button type="submit" class="btn btn-primary btn-sm">Speichern</button>
           <button type="button" class="btn btn-secondary btn-sm" onclick="cellSuggest(this)">KI-Vorschlag (RAG)</button>
@@ -78,14 +98,34 @@
   </div>
 </div>
 <script>
+(function() {
+  const picker = document.querySelector('#cell-llm-picker select[name="visual_llm_provider"]');
+  const wrap = document.getElementById('eval-cloud-gate-wrap');
+  function isCloud(p) { return p === 'openai' || p === 'anthropic'; }
+  function syncGate() {
+    if (!wrap) return;
+    const chosen = picker && picker.value ? picker.value : (window.KI && window.KI.provider) || '{{ llm_provider }}';
+    wrap.style.display = isCloud(chosen) ? 'block' : 'none';
+  }
+  if (picker) picker.addEventListener('change', syncGate);
+  syncGate();
+})();
 async function cellSuggest(btn) {
   const target = document.getElementById('cell-suggest-target');
   const fd = new FormData();
   fd.append('project_key', target.dataset.project);
   fd.append('bidder_id', target.dataset.bidder);
   fd.append('criterion_id', target.dataset.criterion);
-  fd.append('provider', window.KI?.provider || '{{ llm_provider }}');
-  fd.append('model', window.KI?.model || '{{ llm_model }}');
+  const picker = document.querySelector('#cell-llm-picker select[name="visual_llm_provider"]');
+  const modelSel = document.querySelector('#cell-llm-picker select[name="visual_llm_model"]');
+  const visProvider = picker ? picker.value : '';
+  const visModel = modelSel ? modelSel.value : '';
+  fd.append('visual_llm_provider', visProvider);
+  fd.append('visual_llm_model', visModel);
+  fd.append('provider', visProvider || (window.KI && window.KI.provider) || '{{ llm_provider }}');
+  fd.append('model', visModel || (window.KI && window.KI.model) || '{{ llm_model }}');
+  const confirm = document.getElementById('eval-cloud-confirm');
+  if (confirm && confirm.checked) fd.append('cloud_confirm', '1');
   target.innerHTML = '<p class="text-muted" style="margin-top:.5rem">RAG + LLM …</p>';
   const r = await fetch('/evaluation/suggest', { method: 'POST', body: fd });
   target.innerHTML = await r.text();

@@ -1,4 +1,12 @@
 <div class="card" style="margin-top:.5rem;background:var(--color-surface-2)">
+  {% if gate_error == 'cloud_confirm' %}
+  <strong>Cloud-Bestätigung erforderlich</strong>
+  <p style="font-size:.85rem;margin:.4rem 0 0">
+    Bitte die Checkbox aktivieren, bevor Angebotsauszüge an
+    <strong>{{ cloud_provider }}</strong> gesendet werden.
+    Die Texte werden vor der Übertragung gefiltert (Stufe 1+2).
+  </p>
+  {% else %}
   <strong>🤖 KI-Vorschlag</strong>
   {% if suggestion.value is not none %}
   <p>Wert: <strong>{{ suggestion.value }}</strong></p>
@@ -29,5 +37,6 @@
   <p class="text-muted" style="font-size:.75rem;margin-top:.4rem">"Nur als KI-Vorschlag" bleibt als eigene Spalte sichtbar, ohne dir zugeschrieben zu sein. "Als meine Bewertung" zählt in deinen Ø-Wert.</p>
   {% else %}
   <p class="text-muted">Kein Vorschlag — bitte manuell bewerten.</p>
+  {% endif %}
   {% endif %}
 </div>

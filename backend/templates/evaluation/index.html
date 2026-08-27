@@ -101,6 +101,19 @@
 </div>
 
 {% if may_evaluate %}
+{% if doc_upload == 'ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Dokument hochgeladen und mit dem Bieter verknüpft.</p>
+</div>
+{% elif doc_upload == 'linked' %}
+<div class="card" style="margin-bottom:1rem">
+  <p style="font-size:.85rem;margin:0">Dokument war bereits vorhanden — mit dem Bieter verknüpft.</p>
+</div>
+{% elif doc_upload == 'error' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">Upload fehlgeschlagen — Datei prüfen und erneut versuchen.</p>
+</div>
+{% endif %}
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Bieter anlegen</h2>
   <form method="post" action="/evaluation/bidder" style="display:flex;gap:.5rem;flex-wrap:wrap">
@@ -117,14 +130,39 @@
     <button type="submit" class="btn btn-danger btn-sm">Entfernen</button>
   </form>
   <a class="btn btn-secondary btn-sm" style="margin-left:.5rem" href="/evaluation/price?project_key={{ project_key }}&bidder_id={{ b.id }}">Preisblatt</a>
+    <form method="post" action="/evaluation/bidder-doc-upload" enctype="multipart/form-data"
+          style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:end;margin-top:.5rem">
+      <input type="hidden" name="project_key" value="{{ project_key }}" />
+      <input type="hidden" name="bidder_id" value="{{ b.id }}" />
+      <div>
+        <label class="form-label" style="font-size:.72rem">Dokument hochladen</label>
+        <input class="form-input" type="file" name="file" required
+               accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx" />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Art (optional)</label>
+        <select class="form-select" name="doc_subtype">
+          <option value="">— kein Subtyp —</option>
+          {% for st in angebot_subtypes %}
+          <option value="{{ st }}">{{ st }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Chunk-Grösse</label>
+        <input class="form-input" type="number" name="chunk_size" value="1000" min="200" max="4000" step="100" style="width:6.5rem" />
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Hochladen</button>
+    </form>
     {% if offer_docs %}
     <div style="margin-top:.35rem;font-size:.85rem">
+      <p class="text-muted" style="font-size:.72rem;margin:.35rem 0">Verknüpfung (auch für gemeinsame Anhänge):</p>
       {% for doc in offer_docs %}
       <label style="display:block;margin:.2rem 0">
         <input type="checkbox"
           onchange="const f=document.getElementById('doc-{{ b.id }}-{{ doc.id }}'); f.querySelector('[name=linked]').value=this.checked?'true':'false'; f.submit();"
           {% if doc.id in bidder_docs.get(b.id, []) %}checked{% endif %} />
-        {{ doc.filename }}
+        {{ doc.filename }}{% if doc.doc_subtype %} <span class="text-muted">({{ doc.doc_subtype }})</span>{% endif %}
       </label>
       <form id="doc-{{ b.id }}-{{ doc.id }}" method="post" action="/evaluation/bidder-doc" style="display:none">
         <input type="hidden" name="project_key" value="{{ project_key }}" />
@@ -135,7 +173,7 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="text-muted" style="font-size:.8rem">Keine «{{ angebot_class }}»-Dokumente — unter Dokumente hochladen.</p>
+    <p class="text-muted" style="font-size:.8rem">Noch keine «{{ angebot_class }}»-Dokumente — oben hochladen oder unter Dokumente nachträglich verknüpfen.</p>
     {% endif %}
   </div>
   {% endfor %}
