@@ -187,5 +187,23 @@
   document.addEventListener('htmx:afterSwap', e => {
     if (e.target.id === 'chat-messages') scrollToBottom();
   });
+  window.addEventListener('load', () => {
+    const pre = sessionStorage.getItem('slit_chat_prefill');
+    if (!pre) return;
+    const ta = document.querySelector('#chat-form textarea[name="message"]');
+    if (ta) ta.value = pre;
+    sessionStorage.removeItem('slit_chat_prefill');
+    if (sessionStorage.getItem('slit_chat_prefill_rag') === '0' && window.Alpine) {
+      const ki = Alpine.store('ki');
+      if (ki) {
+        ki.rag_enabled = false;
+        if (typeof ki.save === 'function') ki.save();
+      }
+      sessionStorage.removeItem('slit_chat_prefill_rag');
+      if (typeof showToast === 'function') {
+        showToast('Anonymisierter Text eingefügt — RAG deaktiviert', 'success');
+      }
+    }
+  });
 </script>
 {% endblock %}

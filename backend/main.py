@@ -54,6 +54,7 @@ from backend.app.routes.auth import router as auth_router
 from backend.app.routes.evaluation import router as evaluation_router
 from backend.app.routes.idea import router as idea_router
 from backend.app.routes.visual_lab import router as visual_lab_router
+from backend.app.routes.sanitize import router as sanitize_router
 from sqlmodel import select
 import uuid as _uuid
 
@@ -69,6 +70,7 @@ app.include_router(auth_router)
 app.include_router(evaluation_router)
 app.include_router(idea_router)
 app.include_router(visual_lab_router)
+app.include_router(sanitize_router)
 
 
 def _warmup_pii_analyzer() -> None:
