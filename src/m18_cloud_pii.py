@@ -150,30 +150,46 @@ def warmup_pii_analyzer() -> bool:
     return ok
 
 
-def apply_swiss_pii_sanitize(text: str) -> str:
-    """Presidio + Flair-NER — ersetzt erkannte PII mit [ENTITY_TYPE]."""
+def apply_swiss_pii_anonymize_details(
+    text: str,
+) -> tuple[str, list[dict[str, str | float]]]:
+    """Presidio + Flair — ein Aufruf, Text + Findings (kein doppeltes analyze)."""
     global _analyzer_ready
     _ensure_model_cache_paths()
     if not text or not pii_sanitize_enabled():
-        return text or ""
+        return text or "", []
     if not _ensure_pii_analyzer():
-        return text
+        return text, []
     try:
         from swiss_pii_anonymizer import anonymize
 
         result = anonymize(text)
         out = (result.text or "").strip()
-        return out if out else text
+        findings = [
+            {
+                "entity_type": f.entity_type,
+                "text": f.text,
+                "score": round(f.score, 3),
+            }
+            for f in (result.findings or [])
+        ]
+        return (out if out else text), findings
     except ImportError as exc:
         _analyzer_ready = False
         _open_circuit()
         _log_pii_fallback("nicht installiert", exc)
-        return text
+        return text, []
     except Exception as exc:
         _analyzer_ready = False
         _open_circuit()
         _log_pii_fallback("Fehler bei Anonymisierung", exc)
-        return text
+        return text, []
+
+
+def apply_swiss_pii_sanitize(text: str) -> str:
+    """Presidio + Flair-NER — ersetzt erkannte PII mit [ENTITY_TYPE]."""
+    out, _ = apply_swiss_pii_anonymize_details(text)
+    return out
 
 
 def pii_findings_for_preview(text: str) -> list[dict[str, str | float]]:

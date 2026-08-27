@@ -265,6 +265,16 @@ Erwartung: `[PERSON]`, `[CH_AHV_NR]` (nicht nur Regex-Stufe 1).
 
 Web-UI: unter **PII-Sanitizer** (`/sanitize`) Text oder PDF hochladen — gleiche Pipeline, mit Entitäten-Vorschau.
 
+Optional in `.env` (Schutz vor OOM bei grossen PDFs):
+
+```bash
+SANITIZE_MAX_CHARS=50000
+SANITIZE_MAX_PDF_PAGES=20
+SANITIZE_MAX_FILE_BYTES=15728640
+```
+
+Bei **502 Bad Gateway** auf `/sanitize`: meist OOM-Kill (`journalctl -u projekthub-backend | grep -i kill`) — RAM/Swap erhöhen (CT: `pct set <id> -memory 12288 -swap 4096`) oder Limits senken.
+
 ### Troubleshooting
 
 | Symptom | Ursache | Fix |
@@ -272,6 +282,7 @@ Web-UI: unter **PII-Sanitizer** (`/sanitize`) Text oder PDF hochladen — gleich
 | `No such file ... .flair/models/ner-german-large` | Cache nicht unter APP_ROOT | Prefetch mit `HF_HOME` oder kopieren + `chown projekthub` |
 | HF-Fehler offline, nur `pytorch_model.bin` im Cache | `xlm-roberta-large` fehlt | Prefetch erneut mit Internet oder `AutoTokenizer.from_pretrained('FacebookAI/xlm-roberta-large')` |
 | `Getötet` beim Prefetch | OOM | RAM 8 GB / Swap / `FLAIR_NER_MODEL=flair/ner-german` |
+| 502 auf `/sanitize` | PDF zu gross / Flair OOM | `SANITIZE_MAX_CHARS`/`SANITIZE_MAX_PDF_PAGES` senken; CT RAM 12 GB + Swap 4 GB |
 | 48s pro Request, HF-Retries | `HF_HUB_OFFLINE` fehlt | In `.env` + systemd; Circuit-Breaker in `m18_cloud_pii` |
 | Log: nur Stufe 1 | Warmup fehlgeschlagen | `journalctl -u projekthub-backend`, Rechte auf `.hf_cache` prüfen |
 

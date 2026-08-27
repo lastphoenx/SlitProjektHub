@@ -85,7 +85,7 @@ def calculate_sha256(file_bytes: bytes) -> str:
     return sha256_hash.hexdigest()
 
 
-def extract_text_from_pdf(file_path: Path) -> str:
+def extract_text_from_pdf(file_path: Path, max_pages: int | None = None) -> str:
     """Extrahiert Text aus einer PDF-Datei mit Fallback-Strategien."""
     text_content = []
     
@@ -94,7 +94,8 @@ def extract_text_from_pdf(file_path: Path) -> str:
         try:
             with open(file_path, "rb") as f:
                 reader = PyPDF2.PdfReader(f)
-                for page in reader.pages:
+                pages = reader.pages[:max_pages] if max_pages else reader.pages
+                for page in pages:
                     text = page.extract_text()
                     if text:
                         text_content.append(text)
@@ -110,7 +111,8 @@ def extract_text_from_pdf(file_path: Path) -> str:
         try:
             text_content = []
             with pdfplumber.open(file_path) as pdf:
-                for page in pdf.pages:
+                pages = pdf.pages[:max_pages] if max_pages else pdf.pages
+                for page in pages:
                     text = page.extract_text()
                     if text:
                         text_content.append(text)
