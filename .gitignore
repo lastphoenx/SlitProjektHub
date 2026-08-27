@@ -43,6 +43,17 @@ docs/interne_Dokumente/
 # Batch-QA Checkpoints (projektspezifische Laufdaten, vertraulich)
 data/batch_checkpoint_*.json
 
+# KRITISCH: Laufzeit-Uploads/Generate-Output Projektideen & Visual-Lab (NICHT in Git!)
+data/idea_images/
+data/idea_decks/
+data/idea_docx/
+data/idea_source_attachments/
+data/visual_lab/
+
+# Cloud-PII Stufe 2: Modell-Caches (mehrere GB, nie ins Repo)
+.flair/
+.hf_cache/
+
 # KRITISCH: Alle Dokumente (NICHT in Git!)
 *.pdf
 *.PDF
