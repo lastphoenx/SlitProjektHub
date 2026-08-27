@@ -1,20 +1,16 @@
-"""Dokument- und Text-Sanitizer für Cloud-Nutzung (Stufe 1+2 via m16/m18)."""
+"""Dokument- und Text-Sanitizer für Cloud-Nutzung (Stufe 1 via m20, Stufe 2 via m18)."""
 from __future__ import annotations
 
 import logging
 import os
-import re
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from .m09_docs import extract_text_from_docx, extract_text_from_pdf
-from .m16_idea_visual import _EMAIL_RE, _PERSON_LINE_RE, _PHONE_RE
-from .m18_cloud_pii import (
-    apply_swiss_pii_anonymize_details,
-    is_pii_analyzer_ready,
-    pii_sanitize_enabled,
-)
+from .m16_idea_visual import sanitize_for_cloud_with_meta
+from .m18_cloud_pii import is_pii_analyzer_ready, pii_sanitize_enabled
+from .m20_pii_stage1 import apply_pii_stage1
 
 log = logging.getLogger(__name__)
 
@@ -22,21 +18,6 @@ _TEXT_EXTENSIONS = {".md", ".txt", ".json", ".yaml", ".yml", ".csv"}
 _DEFAULT_MAX_CHARS = 50_000
 _DEFAULT_MAX_PDF_PAGES = 20
 _DEFAULT_MAX_FILE_BYTES = 15 * 1024 * 1024
-
-# Dokument-Stufe 1: strukturierte CH-PII (ohne Paar-Grossbuchstaben-Heuristik — die trifft Firmennamen)
-_CH_UID_RE = re.compile(r"CHE[-–]?\d{3}\.\d{3}\.\d{3}", re.IGNORECASE)
-_STREET_RE = re.compile(
-    r"\b[A-ZÄÖÜ][\wäöüß-]*(?:strasse|straße|str\.|gasse|weg|platz|allee|ring)\s+\d+\w?\b",
-    re.IGNORECASE,
-)
-_PLZ_CITY_RE = re.compile(
-    r"\b\d{4}\s+[A-ZÄÖÜ][a-zäöüß-]+(?:\s+[A-ZÄÖÜ][a-zäöüß-]+)?\b"
-)
-_CONTACT_PERSON_RE = re.compile(
-    r"(?:Kontaktperson|Ansprechpartner|Contact)\s*:?\s*"
-    r"[A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)?",
-    re.IGNORECASE,
-)
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -56,34 +37,6 @@ def sanitize_max_pdf_pages() -> int:
 
 def sanitize_max_file_bytes() -> int:
     return _env_int("SANITIZE_MAX_FILE_BYTES", _DEFAULT_MAX_FILE_BYTES, minimum=1024 * 1024)
-
-
-def _normalize_doc_whitespace(text: str) -> str:
-    """Zeilenumbrüche behalten — nur horizontale Leerzeichen pro Zeile normalisieren."""
-    return "\n".join(re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines())
-
-
-def sanitize_document_stage1(text: str) -> str:
-    """Regex für Offerten/Dokumente — ohne _NAME_PAIR_RE (Firmennamen bleiben erhalten)."""
-    if not text:
-        return ""
-    t = text
-    t = _EMAIL_RE.sub("[EMAIL_ADDRESS]", t)
-    t = _PHONE_RE.sub("[CH_PHONE_NUMBER]", t)
-    t = _CH_UID_RE.sub("[CH_UID]", t)
-    t = _STREET_RE.sub("[ADDRESS]", t)
-    t = _PLZ_CITY_RE.sub("[LOCATION]", t)
-    t = _PERSON_LINE_RE.sub("[PERSON]", t)
-    t = _CONTACT_PERSON_RE.sub("[PERSON]", t)
-    return _normalize_doc_whitespace(t)
-
-
-def sanitize_document_for_cloud_with_meta(text: str) -> tuple[str, list[dict[str, str | float]]]:
-    """Dokument-Pipeline: Stage1 ohne Namens-Paar-Heuristik + Presidio/Flair."""
-    if not text:
-        return "", []
-    t = sanitize_document_stage1(text)
-    return apply_swiss_pii_anonymize_details(t)
 
 
 def resolve_pdf_page_limit(requested: int | None) -> int:
@@ -195,10 +148,10 @@ def sanitize_plaintext(
         }
     try:
         if full_pipeline:
-            sanitized, findings = sanitize_document_for_cloud_with_meta(raw)
+            sanitized, findings = sanitize_for_cloud_with_meta(raw)
         else:
-            t = sanitize_document_stage1(raw)
-            sanitized, findings = (t, [])
+            sanitized = apply_pii_stage1(raw, preserve_newlines=True)
+            findings = []
     except Exception as exc:
         log.exception("sanitize_plaintext fehlgeschlagen (%d Zeichen)", len(raw))
         raise RuntimeError(

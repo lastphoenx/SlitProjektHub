@@ -1,6 +1,6 @@
 """Stufe-2 PII-Sanitize für Cloud-Prompts — swiss-pii-anonymizer (Presidio + Flair).
 
-Ergänzt Regex-Stufe 1 in m16_idea_visual.sanitize_for_cloud_text().
+Stufe 1: m20_pii_stage1.apply_pii_stage1() (einheitlich für alle Cloud-Pfade).
 Bei fehlendem Paket oder Modell-Fehler: stiller Fallback auf Stufe 1.
 """
 from __future__ import annotations

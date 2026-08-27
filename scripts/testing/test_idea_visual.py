@@ -50,10 +50,11 @@ def test_structured_field_keeps_german_product_name():
     assert "[Name entfernt]" not in name
 
 
-def test_cloud_sanitize_strips_name_pairs_in_free_text():
-    out = sanitize_for_cloud_text("Maria Muster plant den Digitalen Sportpass.")
-    assert "Maria" not in out
-    assert "[Name entfernt]" in out
+def test_cloud_sanitize_no_false_positive_product_names():
+    with patch.dict("os.environ", {"SWISS_PII_ANONYMIZER": "0"}):
+        out = sanitize_for_cloud_text("Maria Muster plant den Digitalen Sportpass.")
+    assert "[Name entfernt]" not in out
+    assert "Digitaler Sportpass" in out
 
 
 def test_fallback_prompt_excludes_raw_idea_text():
@@ -114,7 +115,7 @@ if __name__ == "__main__":
     test_diagram_font_resolves_on_system()
     test_vertical_diagram_png_with_umlauts()
     test_structured_field_keeps_german_product_name()
-    test_cloud_sanitize_strips_name_pairs_in_free_text()
+    test_cloud_sanitize_no_false_positive_product_names()
     test_fallback_prompt_excludes_raw_idea_text()
     test_is_cloud_llm_provider()
     test_validate_assess_cloud_gate()

@@ -148,6 +148,7 @@ location /_stcore/stream {
 
 Optional: anonymisiert Cloud-Prompts vor OpenAI/Anthropic (ergänzt Regex-Stufe 1 in
 `sanitize_for_cloud_text()`). Paket: `swiss-pii-anonymizer` (in `requirements.txt`).
+Stufe-1-Regex zentral in `src/m20_pii_stage1.py` (alle Cloud-Pfade: Offerte, Ideen, Visual-Lab, `/sanitize`).
 
 ### Was wird geladen?
 
