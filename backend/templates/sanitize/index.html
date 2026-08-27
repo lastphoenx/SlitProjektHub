@@ -22,6 +22,7 @@
     {% else %}
     Nur Stufe 1 (Regex) — <code>SWISS_PII_ANONYMIZER=0</code> oder Paket fehlt.
     {% endif %}
+    · Limit: {{ "{:,}".format(pii_status.max_chars) }} Zeichen, PDF max. {{ pii_status.max_pdf_pages }} Seiten.
   </p>
 </div>
 
@@ -44,6 +45,11 @@
   </form>
   {% if error %}
   <p style="color:var(--color-danger);font-size:.85rem;margin:.75rem 0 0">{{ error }}</p>
+  {% endif %}
+  {% if warnings %}
+  <ul style="font-size:.78rem;margin:.5rem 0 0;padding-left:1.1rem;color:var(--color-warning, #fbbf24)">
+    {% for w in warnings %}<li>{{ w }}</li>{% endfor %}
+  </ul>
   {% endif %}
 </div>
 
@@ -72,13 +78,21 @@
   </div>
   {% endif %}
 
+  {% if result.warnings %}
+  <ul style="font-size:.75rem;margin:0 0 .75rem;padding-left:1.1rem;color:var(--color-warning, #fbbf24)">
+    {% for w in result.warnings %}<li>{{ w }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  <textarea id="sanitized-full" style="display:none">{{ result.sanitized }}</textarea>
+
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
     <div>
       <label class="form-label" style="font-size:.72rem">Original (Auszug)</label>
       <textarea class="form-input" rows="14" readonly style="font-size:.75rem">{{ result.original[:12000] }}{% if result.original|length > 12000 %}…{% endif %}</textarea>
     </div>
     <div>
-      <label class="form-label" style="font-size:.72rem">Sanitized (für Cloud)</label>
+      <label class="form-label" style="font-size:.72rem">Sanitized (Auszug — vollständig für Export unten)</label>
       <textarea id="sanitized-output" class="form-input" rows="14" readonly style="font-size:.75rem">{{ result.sanitized[:12000] }}{% if result.sanitized|length > 12000 %}…{% endif %}</textarea>
     </div>
   </div>
@@ -99,24 +113,30 @@
 
 {% block extra_scripts %}
 <script>
-function copySanitized() {
+function _sanitizedText() {
+  const full = document.getElementById('sanitized-full');
+  if (full && full.value) return full.value;
   const el = document.getElementById('sanitized-output');
-  if (!el) return;
-  navigator.clipboard.writeText(el.value).then(() => showToast('Kopiert', 'success'));
+  return el ? el.value : '';
+}
+function copySanitized() {
+  const text = _sanitizedText();
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => showToast('Kopiert', 'success'));
 }
 function sendSanitizedToChat() {
-  const el = document.getElementById('sanitized-output');
-  if (!el || !el.value.trim()) return;
-  sessionStorage.setItem('slit_chat_prefill', el.value);
+  const text = _sanitizedText();
+  if (!text.trim()) return;
+  sessionStorage.setItem('slit_chat_prefill', text);
   sessionStorage.setItem('slit_chat_prefill_rag', '0');
   window.location.href = '/chat';
 }
 function downloadSanitized() {
-  const el = document.getElementById('sanitized-output');
-  if (!el) return;
+  const text = _sanitizedText();
+  if (!text) return;
   const name = {{ (input_label or 'sanitized')|tojson }} || 'sanitized';
   const base = String(name).replace(/\.[^.]+$/, '') || 'sanitized';
-  const blob = new Blob([el.value], { type: 'text/plain;charset=utf-8' });
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = base + '.txt';

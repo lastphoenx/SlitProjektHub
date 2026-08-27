@@ -383,14 +383,20 @@ def sanitize_structured_field(text: str) -> str:
 
 def sanitize_for_cloud_text(text: str) -> str:
     """Stufe 1: Regex-Heuristiken. Stufe 2: swiss-pii-anonymizer (falls installiert)."""
+    sanitized, _ = sanitize_for_cloud_with_meta(text)
+    return sanitized
+
+
+def sanitize_for_cloud_with_meta(text: str) -> tuple[str, list[dict[str, str | float]]]:
+    """Wie sanitize_for_cloud_text, zusätzlich Presidio-Findings aus einem anonymize-Lauf."""
     if not text:
-        return ""
+        return "", []
     t = sanitize_structured_field(text)
     t = _NAME_PAIR_RE.sub("[Name entfernt]", t)
     t = re.sub(r"\s+", " ", t).strip()
-    from .m18_cloud_pii import apply_swiss_pii_sanitize
+    from .m18_cloud_pii import apply_swiss_pii_anonymize_details
 
-    return apply_swiss_pii_sanitize(t)
+    return apply_swiss_pii_anonymize_details(t)
 
 
 def idea_images_dir() -> Path:
