@@ -57,7 +57,9 @@
     <h2 style="font-size:.95rem;font-weight:700">Bewertungsmatrix</h2>
     <a class="btn btn-secondary btn-sm" href="/evaluation/price?project_key={{ project_key }}">Preisblatt</a>
   </div>
-  <p class="text-muted" style="font-size:.78rem;margin-bottom:.5rem">Zelle anklicken für KI-Vorschlag, Einzelbewertungen und eigene Bewertung.</p>
+  <p class="text-muted" style="font-size:.78rem;margin-bottom:.5rem">
+    In den <strong>Bieter-Spalten</strong> (nicht auf den Kriteriennamen) klicken → Dialog mit KI-Vorschlag und Bewertung.
+  </p>
   {% if matrix_rows %}
   <div style="overflow-x:auto">
     <div class="table-wrap">
@@ -75,7 +77,8 @@
           <td>{{ row.kind }}</td>
           <td>{{ row.weight or '' }}</td>
           {% for cell in row.cells %}
-          <td style="cursor:pointer" title="Details anzeigen"
+          <td class="eval-matrix-cell" style="cursor:pointer" title="Details anzeigen — KI & Bewertung"
+              data-cell-url="/evaluation/cell?bidder_id={{ cell.bidder_id }}&criterion_id={{ cell.criterion_id }}&project_key={{ project_key }}"
               hx-get="/evaluation/cell?bidder_id={{ cell.bidder_id }}&criterion_id={{ cell.criterion_id }}&project_key={{ project_key }}"
               hx-target="#modal-slot" hx-swap="innerHTML">
             <strong>{{ cell.display }}</strong>
@@ -250,6 +253,29 @@
 
 {% block extra_scripts %}
 <script>
+function openEvaluationCell(td) {
+  const url = td && td.dataset ? td.dataset.cellUrl : '';
+  if (!url) return;
+  const slot = document.getElementById('modal-slot');
+  if (window.htmx) {
+    htmx.ajax('GET', url, { target: '#modal-slot', swap: 'innerHTML' });
+    return;
+  }
+  fetch(url, { credentials: 'same-origin', headers: { 'HX-Request': 'true' } })
+    .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
+    .then(html => { slot.innerHTML = html; })
+    .catch(() => {
+      slot.innerHTML = '<div class="card" style="margin-top:1rem;border-color:var(--color-danger)"><p style="margin:0;font-size:.85rem">Zelle konnte nicht geladen werden. Seite neu laden oder Administrator kontaktieren (HTMX/CDN).</p></div>';
+    });
+}
+
+window.addEventListener('load', () => {
+  if (typeof htmx !== 'undefined') return;
+  document.querySelectorAll('.eval-matrix-cell').forEach(td => {
+    td.addEventListener('click', () => openEvaluationCell(td));
+  });
+});
+
 document.getElementById('modal-slot').addEventListener('click', e => {
   if (e.target.classList.contains('modal-backdrop')) document.getElementById('modal-slot').innerHTML = '';
 });
