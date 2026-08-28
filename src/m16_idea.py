@@ -83,6 +83,17 @@ class ProjectIdea(SQLModel, table=True):
     ai_raw_json: Optional[str] = None
     ai_assessed_at: Optional[datetime] = None
 
+    # -- Fachliche Overlay-Einschätzung (User, nie mit ai_* vermischt) --
+    user_summary: Optional[str] = None
+    user_internal_pt: Optional[float] = Field(default=None, sa_column=Column(Float))
+    user_internal_pt_reasoning: Optional[str] = None
+    user_external_cost: Optional[float] = Field(default=None, sa_column=Column(Float))
+    user_external_cost_reasoning: Optional[str] = None
+    user_challenges_json: Optional[str] = None
+    user_phases_json: Optional[str] = None
+    user_recommendation: Optional[str] = None
+    user_assessed_at: Optional[datetime] = None
+
     @property
     def challenges(self) -> list[dict[str, Any]]:
         return _safe_json_list(self.ai_challenges_json)
@@ -90,6 +101,10 @@ class ProjectIdea(SQLModel, table=True):
     @property
     def phases(self) -> list[dict[str, Any]]:
         return _safe_json_list(self.ai_phases_json)
+
+    @property
+    def has_user_assessment(self) -> bool:
+        return self.user_assessed_at is not None
 
 
 def _safe_json_list(raw: Optional[str]) -> list[dict[str, Any]]:
@@ -100,6 +115,215 @@ def _safe_json_list(raw: Optional[str]) -> list[dict[str, Any]]:
     except json.JSONDecodeError:
         return []
     return data if isinstance(data, list) else []
+
+
+_LEVELS = ("niedrig", "mittel", "hoch")
+_DURATION_RE = re.compile(
+    r"(?P<a>\d+(?:[.,]\d+)?)(?:\s*(?:[-–—]|bis)\s*(?P<b>\d+(?:[.,]\d+)?))?\s*"
+    r"(?P<u>jahre?|monate?|wochen?|tage?)",
+    re.IGNORECASE,
+)
+
+
+def _parse_level(val: Any, default: str = "mittel") -> str:
+    s = str(val or "").strip().lower()
+    if s in _LEVELS:
+        return s
+    aliases = {"high": "hoch", "medium": "mittel", "low": "niedrig", "hoch": "hoch"}
+    return aliases.get(s, default)
+
+
+def _parse_opt_float(val: Any) -> Optional[float]:
+    if val is None or val == "":
+        return None
+    try:
+        return float(str(val).replace("'", "").replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_duration_weeks(text: str) -> Optional[float]:
+    """Grobe Dauer in Kalenderwochen. '2-3 Monate' → 10.75, '4 Wochen' → 4."""
+    raw = (text or "").strip().lower()
+    if not raw:
+        return None
+    m = _DURATION_RE.search(raw)
+    if not m:
+        return None
+
+    def _n(s: str) -> float:
+        return float(s.replace(",", "."))
+
+    a = _n(m.group("a"))
+    b = _n(m.group("b")) if m.group("b") else a
+    avg = (a + b) / 2.0
+    unit = m.group("u")
+    if unit.startswith("jahr"):
+        return round(avg * 52, 2)
+    if unit.startswith("monat"):
+        return round(avg * 4.3, 2)
+    if unit.startswith("woche"):
+        return round(avg, 2)
+    if unit.startswith("tag"):
+        return round(avg / 7.0, 2)
+    return None
+
+
+def normalize_challenge(item: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(item, dict):
+        return None
+    title = str(item.get("title") or "").strip()
+    if not title:
+        return None
+    sev = _parse_level(item.get("severity"))
+    like = _parse_level(item.get("likelihood") or item.get("probability") or sev)
+    return {
+        "title": title[:160],
+        "description": str(item.get("description") or "").strip()[:800],
+        "severity": sev,
+        "likelihood": like,
+    }
+
+
+def normalize_phase(item: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(item, dict):
+        return None
+    name = str(item.get("name") or item.get("title") or "").strip()
+    if not name:
+        return None
+    dur = str(item.get("duration_estimate") or item.get("duration") or "").strip()[:80]
+    pt = _parse_opt_float(item.get("internal_pt"))
+    weeks = parse_duration_weeks(dur)
+    return {
+        "name": name[:160],
+        "description": str(item.get("description") or "").strip()[:800],
+        "duration_estimate": dur,
+        "duration_weeks": weeks,
+        "internal_pt": pt,
+    }
+
+
+def _normalize_list(raw: list[Any], fn) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        n = fn(item)
+        if n:
+            out.append(n)
+    return out
+
+
+def _pick_text(user_val: Optional[str], ai_val: Optional[str], saved: bool) -> Optional[str]:
+    if saved and (user_val or "").strip():
+        return user_val.strip()
+    return (ai_val or "").strip() or None
+
+
+def _pick_num(user_val: Optional[float], ai_val: Optional[float], saved: bool) -> Optional[float]:
+    if saved and user_val is not None:
+        return user_val
+    return ai_val
+
+
+def _pick_list(user_json: Optional[str], ai_json: Optional[str], saved: bool, fn) -> list[dict[str, Any]]:
+    if saved and user_json is not None:
+        return _normalize_list(_safe_json_list(user_json), fn)
+    return _normalize_list(_safe_json_list(ai_json), fn)
+
+
+def effective_assessment(idea: ProjectIdea) -> dict[str, Any]:
+    """Report-/Visual-Werte: User, sobald gespeichert und Feld gesetzt, sonst KI."""
+    saved = bool(idea.user_assessed_at)
+    challenges = _pick_list(idea.user_challenges_json, idea.ai_challenges_json, saved, normalize_challenge)
+    phases = _pick_list(idea.user_phases_json, idea.ai_phases_json, saved, normalize_phase)
+    internal_pt = _pick_num(idea.user_internal_pt, idea.ai_internal_pt, saved)
+    if internal_pt is not None and phases:
+        known = [p["internal_pt"] for p in phases if p.get("internal_pt") is not None]
+        if not known:
+            share = round(internal_pt / len(phases), 1)
+            for p in phases:
+                p["internal_pt"] = share
+    return {
+        "saved": saved,
+        "summary": _pick_text(idea.user_summary, idea.ai_summary, saved),
+        "internal_pt": internal_pt,
+        "internal_pt_reasoning": _pick_text(
+            idea.user_internal_pt_reasoning, idea.ai_internal_pt_reasoning, saved
+        ),
+        "external_cost": _pick_num(idea.user_external_cost, idea.ai_external_cost, saved),
+        "external_cost_reasoning": _pick_text(
+            idea.user_external_cost_reasoning, idea.ai_external_cost_reasoning, saved
+        ),
+        "challenges": challenges,
+        "phases": phases,
+        "recommendation": _pick_text(idea.user_recommendation, idea.ai_recommendation, saved),
+    }
+
+
+def ai_defaults_from_idea(idea: ProjectIdea) -> dict[str, Any]:
+    return {
+        "summary": idea.ai_summary or "",
+        "internal_pt": idea.ai_internal_pt,
+        "internal_pt_reasoning": idea.ai_internal_pt_reasoning or "",
+        "external_cost": idea.ai_external_cost,
+        "external_cost_reasoning": idea.ai_external_cost_reasoning or "",
+        "challenges": _normalize_list(idea.challenges, normalize_challenge),
+        "phases": _normalize_list(idea.phases, normalize_phase),
+        "recommendation": idea.ai_recommendation or "",
+    }
+
+
+def form_defaults_from_idea(idea: ProjectIdea) -> dict[str, Any]:
+    """Vorbelegung der User-Felder: gespeicherte User-Werte, sonst 1:1 KI."""
+    saved = bool(idea.user_assessed_at)
+    if saved:
+        ch = _normalize_list(_safe_json_list(idea.user_challenges_json), normalize_challenge)
+        ph = _normalize_list(_safe_json_list(idea.user_phases_json), normalize_phase)
+        return {
+            "summary": idea.user_summary or "",
+            "internal_pt": idea.user_internal_pt,
+            "internal_pt_reasoning": idea.user_internal_pt_reasoning or "",
+            "external_cost": idea.user_external_cost,
+            "external_cost_reasoning": idea.user_external_cost_reasoning or "",
+            "challenges": ch,
+            "phases": ph,
+            "recommendation": idea.user_recommendation or "",
+        }
+    return ai_defaults_from_idea(idea)
+
+
+def save_user_assessment(
+    idea_id: int,
+    *,
+    summary: str,
+    internal_pt: Optional[float],
+    internal_pt_reasoning: str,
+    external_cost: Optional[float],
+    external_cost_reasoning: str,
+    challenges: list[Any],
+    phases: list[Any],
+    recommendation: str,
+) -> Optional[ProjectIdea]:
+    ch = _normalize_list(challenges, normalize_challenge)
+    ph = _normalize_list(phases, normalize_phase)
+    with get_session() as ses:
+        obj = ses.get(ProjectIdea, idea_id)
+        if not obj:
+            return None
+        obj.user_summary = (summary or "").strip() or None
+        obj.user_internal_pt = internal_pt
+        obj.user_internal_pt_reasoning = (internal_pt_reasoning or "").strip() or None
+        obj.user_external_cost = external_cost
+        obj.user_external_cost_reasoning = (external_cost_reasoning or "").strip() or None
+        obj.user_challenges_json = json.dumps(ch, ensure_ascii=False)
+        obj.user_phases_json = json.dumps(ph, ensure_ascii=False)
+        obj.user_recommendation = (recommendation or "").strip() or None
+        obj.user_assessed_at = datetime.now(timezone.utc)
+        obj.updated_at = datetime.now(timezone.utc)
+        ses.add(obj)
+        ses.commit()
+        ses.refresh(obj)
+        ses.expunge(obj)
+        return obj
 
 
 def migrate_idea_db() -> None:
@@ -123,6 +347,15 @@ def migrate_idea_db() -> None:
             ("html_generated_at", "ALTER TABLE project_idea ADD COLUMN html_generated_at DATETIME"),
             ("source_attachments_json", "ALTER TABLE project_idea ADD COLUMN source_attachments_json TEXT"),
             ("source_reference_text", "ALTER TABLE project_idea ADD COLUMN source_reference_text TEXT"),
+            ("user_summary", "ALTER TABLE project_idea ADD COLUMN user_summary TEXT"),
+            ("user_internal_pt", "ALTER TABLE project_idea ADD COLUMN user_internal_pt FLOAT"),
+            ("user_internal_pt_reasoning", "ALTER TABLE project_idea ADD COLUMN user_internal_pt_reasoning TEXT"),
+            ("user_external_cost", "ALTER TABLE project_idea ADD COLUMN user_external_cost FLOAT"),
+            ("user_external_cost_reasoning", "ALTER TABLE project_idea ADD COLUMN user_external_cost_reasoning TEXT"),
+            ("user_challenges_json", "ALTER TABLE project_idea ADD COLUMN user_challenges_json TEXT"),
+            ("user_phases_json", "ALTER TABLE project_idea ADD COLUMN user_phases_json TEXT"),
+            ("user_recommendation", "ALTER TABLE project_idea ADD COLUMN user_recommendation TEXT"),
+            ("user_assessed_at", "ALTER TABLE project_idea ADD COLUMN user_assessed_at DATETIME"),
         ]
         for col, stmt in migrations:
             if col not in cols:
@@ -255,14 +488,17 @@ def _build_assess_system_prompt(tasks: set[str]) -> str:
     if "challenges" in tasks:
         fields.append(
             '  "challenges": [\n'
-            '    {"title": "kurzer Titel", "description": "1-2 Sätze", "severity": "niedrig|mittel|hoch"}\n'
+            '    {"title": "kurzer Titel", "description": "1-2 Sätze", '
+            '"severity": "niedrig|mittel|hoch", '
+            '"likelihood": "niedrig|mittel|hoch"}\n'
             "  ],"
         )
     if "phases" in tasks:
         fields.append(
             '  "phases": [\n'
-            '    {"name": "Phasenname", "description": "1-2 Sätze", "duration_estimate": "grobe Dauer, '
-            'z.B. \'2-3 Wochen\' oder \'1-2 Monate\' — NIEMALS ein Kalenderdatum"}\n'
+            '    {"name": "Phasenname", "description": "1-2 Sätze", '
+            '"duration_estimate": "grobe Dauer, z.B. \'2-3 Wochen\' oder \'1-2 Monate\' — NIEMALS ein Kalenderdatum", '
+            '"internal_pt": Zahl}\n'
             "  ],"
         )
     if "recommendation" in tasks:
@@ -275,8 +511,9 @@ def _build_assess_system_prompt(tasks: set[str]) -> str:
     body = "{\n" + "\n".join(fields) + "\n}"
     rules = [
         "Regeln:",
-        "- challenges: 2 bis 5 Einträge, die grössten Risiken/Unsicherheiten zuerst.",
+        "- challenges: 2 bis 5 Einträge, die grössten Risiken zuerst; severity = Auswirkung, likelihood = Eintrittswahrscheinlichkeit.",
         "- Phasen: 3 bis 6 grobe Phasen — keine Datumsangaben, nur Durchlaufzeiten pro Phase.",
+        "- internal_pt je Phase: grobe interne Personentage; Summe ungefähr gleich dem Feld internal_pt.",
         "- Zahlen sind reine Zahlen ohne Einheiten/Tausendertrennzeichen im JSON.",
     ]
     if "challenges" not in tasks:
@@ -541,12 +778,8 @@ def assess_project_idea_with_ai(
         log.warning("Idea-Assessment fuer idea_id=%s ohne verwertbares JSON.", idea_id)
         return None
 
-    challenges = parsed.get("challenges")
-    if not isinstance(challenges, list):
-        challenges = []
-    phases = parsed.get("phases")
-    if not isinstance(phases, list):
-        phases = []
+    challenges = _normalize_list(parsed.get("challenges") if isinstance(parsed.get("challenges"), list) else [], normalize_challenge)
+    phases = _normalize_list(parsed.get("phases") if isinstance(parsed.get("phases"), list) else [], normalize_phase)
 
     with get_session() as ses:
         obj = ses.get(ProjectIdea, idea_id)

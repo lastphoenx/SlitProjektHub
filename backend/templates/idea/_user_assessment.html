@@ -1,0 +1,224 @@
+{# Dual: KI (read-only) + User (editable, prefilled). ud = user_defaults, ad = ai_defaults #}
+{% set ud = user_defaults %}
+{% set ad = ai_defaults %}
+{% set ch_user = ud.challenges if ud.challenges else [{}] %}
+{% set ph_user = ud.phases if ud.phases else [{}] %}
+
+<div id="idea-assessment" class="assess-dual">
+  {% if user_ok %}
+  <p class="text-muted" style="color:#86efac;font-size:.82rem;margin:0 0 .75rem">✓ Fachliche Einschätzung gespeichert — gilt für den nächsten HTML-/PPTX-Report.</p>
+  {% elif idea.user_assessed_at %}
+  <p class="text-muted" style="font-size:.78rem;margin:0 0 .75rem">
+    Report nutzt Ihre Einschätzung ({{ idea.user_assessed_at.strftime('%d.%m.%Y %H:%M') }}). KI-Werte bleiben unverändert sichtbar.
+  </p>
+  {% else %}
+  <p class="text-muted" style="font-size:.78rem;margin:0 0 .75rem">
+    Rechts können Sie die KI-Werte 1:1 übernehmen, anpassen und speichern. Der Report verwendet Ihre Werte erst nach dem Speichern, sonst die KI-Defaults.
+  </p>
+  {% endif %}
+
+  <form method="post" action="/idea/{{ idea.id }}/save-user-assessment" id="idea-user-assess-form">
+    <div class="assess-split">
+      <div class="assess-col assess-col-ai">
+        <h3 class="assess-col-title">KI-Vorbewertung <span class="badge badge-neutral">unveränderbar</span></h3>
+        <p class="text-muted" style="font-size:.7rem;margin:0 0 .6rem">
+          {{ idea.ai_assessed_at.strftime('%d.%m.%Y %H:%M') if idea.ai_assessed_at else "—" }}
+          · {{ idea.ai_provider }} / {{ idea.ai_model }}
+        </p>
+        <label class="form-label">Zusammenfassung</label>
+        <p class="assess-readonly">{{ idea.ai_summary or "—" }}</p>
+        <div class="assess-nums">
+          <div>
+            <label class="form-label">Ressourcen intern</label>
+            <p class="assess-readonly">
+              <strong>{{ idea.ai_internal_pt if idea.ai_internal_pt is not none else "—" }} PT</strong>
+              {% if idea.internal_pt_human is not none %}<span class="text-muted"> (Fachabteilung: {{ idea.internal_pt_human }} PT)</span>{% endif %}
+            </p>
+            <p class="text-muted" style="font-size:.75rem">{{ idea.ai_internal_pt_reasoning or "" }}</p>
+          </div>
+          <div>
+            <label class="form-label">Kosten extern</label>
+            <p class="assess-readonly">
+              <strong>{{ "CHF %.0f"|format(idea.ai_external_cost) if idea.ai_external_cost is not none else "—" }}</strong>
+              {% if idea.external_cost_human is not none %}<span class="text-muted"> (Fachabteilung: CHF {{ "%.0f"|format(idea.external_cost_human) }})</span>{% endif %}
+            </p>
+            <p class="text-muted" style="font-size:.75rem">{{ idea.ai_external_cost_reasoning or "" }}</p>
+          </div>
+        </div>
+        <label class="form-label">Herausforderungen</label>
+        {% if challenges %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Titel</th><th>Beschreibung</th><th>Wahrsch.</th><th>Schwere</th></tr></thead>
+            <tbody>
+              {% for c in challenges %}
+              <tr>
+                <td>{{ c.title }}</td>
+                <td style="font-size:.85rem">{{ c.description }}</td>
+                <td>
+                  {% set lv = c.likelihood or c.severity or 'mittel' %}
+                  {% if lv == 'hoch' %}<span class="badge" style="background:rgba(239,68,68,.15);color:#fca5a5;border-color:rgba(239,68,68,.3)">hoch</span>
+                  {% elif lv == 'mittel' %}<span class="badge" style="background:rgba(234,179,8,.15);color:#fde047;border-color:rgba(234,179,8,.3)">mittel</span>
+                  {% else %}<span class="badge badge-neutral">niedrig</span>{% endif %}
+                </td>
+                <td>
+                  {% if c.severity == 'hoch' %}<span class="badge" style="background:rgba(239,68,68,.15);color:#fca5a5;border-color:rgba(239,68,68,.3)">hoch</span>
+                  {% elif c.severity == 'mittel' %}<span class="badge" style="background:rgba(234,179,8,.15);color:#fde047;border-color:rgba(234,179,8,.3)">mittel</span>
+                  {% else %}<span class="badge badge-neutral">niedrig</span>{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="text-muted">—</p>
+        {% endif %}
+        <label class="form-label" style="margin-top:.75rem">Phasen</label>
+        {% if phases %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Phase</th><th>Beschreibung</th><th>Dauer</th><th>PT intern</th></tr></thead>
+            <tbody>
+              {% for p in phases %}
+              <tr>
+                <td>{{ p.name }}</td>
+                <td style="font-size:.85rem">{{ p.description }}</td>
+                <td>{{ p.duration_estimate }}</td>
+                <td>{{ p.internal_pt if p.internal_pt is not none else "—" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="text-muted">—</p>
+        {% endif %}
+        <label class="form-label" style="margin-top:.75rem">Empfehlung</label>
+        <p class="assess-readonly">{{ idea.ai_recommendation or "—" }}</p>
+      </div>
+
+      <div class="assess-col assess-col-user">
+        <h3 class="assess-col-title">Ihre Einschätzung
+          {% if idea.user_assessed_at %}<span class="badge">gespeichert</span>{% else %}<span class="badge badge-neutral">noch nicht gespeichert</span>{% endif %}
+        </h3>
+        {% if may_edit %}
+        <p style="margin:0 0 .6rem">
+          <button type="button" class="btn btn-secondary btn-sm" id="idea-copy-ai">KI-Werte 1:1 übernehmen</button>
+        </p>
+        {% endif %}
+
+        <label class="form-label">Zusammenfassung</label>
+        <textarea class="form-input" name="user_summary" rows="5" {% if not may_edit %}disabled{% endif %}>{{ ud.summary }}</textarea>
+
+        <div class="assess-nums">
+          <div>
+            <label class="form-label">Ressourcen intern (PT)</label>
+            <input class="form-input" name="user_internal_pt" type="number" step="0.5" min="0"
+              value="{{ ud.internal_pt if ud.internal_pt is not none else '' }}" {% if not may_edit %}disabled{% endif %} />
+            <textarea class="form-input" name="user_internal_pt_reasoning" rows="2" placeholder="Begründung"
+              {% if not may_edit %}disabled{% endif %}>{{ ud.internal_pt_reasoning }}</textarea>
+          </div>
+          <div>
+            <label class="form-label">Kosten extern (CHF)</label>
+            <input class="form-input" name="user_external_cost" type="number" step="100" min="0"
+              value="{{ ud.external_cost if ud.external_cost is not none else '' }}" {% if not may_edit %}disabled{% endif %} />
+            <textarea class="form-input" name="user_external_cost_reasoning" rows="2" placeholder="Begründung"
+              {% if not may_edit %}disabled{% endif %}>{{ ud.external_cost_reasoning }}</textarea>
+          </div>
+        </div>
+
+        <label class="form-label">Herausforderungen</label>
+        <div class="table-wrap">
+          <table class="assess-edit-table">
+            <thead><tr><th>Titel</th><th>Beschreibung</th><th>Wahrsch.</th><th>Schwere</th><th></th></tr></thead>
+            <tbody id="idea-ch-body">
+              {% for c in ch_user %}
+              <tr class="idea-ch-row">
+                <td><input class="form-input" name="ch_title_{{ loop.index0 }}" value="{{ c.title or '' }}" {% if not may_edit %}disabled{% endif %} /></td>
+                <td><input class="form-input" name="ch_desc_{{ loop.index0 }}" value="{{ c.description or '' }}" {% if not may_edit %}disabled{% endif %} /></td>
+                <td>
+                  <select class="form-select" name="ch_likelihood_{{ loop.index0 }}" {% if not may_edit %}disabled{% endif %}>
+                    {% for lv in ['niedrig','mittel','hoch'] %}
+                    <option value="{{ lv }}" {% if (c.likelihood or 'mittel') == lv %}selected{% endif %}>{{ lv }}</option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td>
+                  <select class="form-select" name="ch_severity_{{ loop.index0 }}" {% if not may_edit %}disabled{% endif %}>
+                    {% for lv in ['niedrig','mittel','hoch'] %}
+                    <option value="{{ lv }}" {% if (c.severity or 'mittel') == lv %}selected{% endif %}>{{ lv }}</option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td>{% if may_edit %}<button type="button" class="btn btn-ghost btn-sm idea-row-del">×</button>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if may_edit %}<button type="button" class="btn btn-ghost btn-sm" id="idea-ch-add" style="margin:.35rem 0 .75rem">+ Risiko</button>{% endif %}
+
+        <label class="form-label">Phasen (Dauer + interne PT)</label>
+        <div class="table-wrap">
+          <table class="assess-edit-table">
+            <thead><tr><th>Phase</th><th>Beschreibung</th><th>Dauer</th><th>PT intern</th><th></th></tr></thead>
+            <tbody id="idea-ph-body">
+              {% for p in ph_user %}
+              <tr class="idea-ph-row">
+                <td><input class="form-input" name="ph_name_{{ loop.index0 }}" value="{{ p.name or '' }}" {% if not may_edit %}disabled{% endif %} /></td>
+                <td><input class="form-input" name="ph_desc_{{ loop.index0 }}" value="{{ p.description or '' }}" {% if not may_edit %}disabled{% endif %} /></td>
+                <td><input class="form-input" name="ph_duration_{{ loop.index0 }}" value="{{ p.duration_estimate or '' }}" placeholder="z.B. 2-3 Monate" {% if not may_edit %}disabled{% endif %} /></td>
+                <td><input class="form-input" name="ph_pt_{{ loop.index0 }}" type="number" step="0.5" min="0" value="{{ p.internal_pt if p.internal_pt is not none else '' }}" {% if not may_edit %}disabled{% endif %} /></td>
+                <td>{% if may_edit %}<button type="button" class="btn btn-ghost btn-sm idea-row-del">×</button>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if may_edit %}<button type="button" class="btn btn-ghost btn-sm" id="idea-ph-add" style="margin:.35rem 0 .75rem">+ Phase</button>{% endif %}
+
+        <label class="form-label">Empfehlung</label>
+        <textarea class="form-input" name="user_recommendation" rows="3" {% if not may_edit %}disabled{% endif %}>{{ ud.recommendation }}</textarea>
+
+        {% if may_edit %}
+        <div style="margin-top:.85rem">
+          <button type="submit" class="btn btn-primary">Einschätzung speichern</button>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </form>
+</div>
+
+<script type="application/json" id="idea-ai-json">{{ ai_defaults_json | safe }}</script>
+<template id="idea-ch-tpl">
+  <tr class="idea-ch-row">
+    <td><input class="form-input" data-name="ch_title_" /></td>
+    <td><input class="form-input" data-name="ch_desc_" /></td>
+    <td>
+      <select class="form-select" data-name="ch_likelihood_">
+        <option value="niedrig">niedrig</option>
+        <option value="mittel" selected>mittel</option>
+        <option value="hoch">hoch</option>
+      </select>
+    </td>
+    <td>
+      <select class="form-select" data-name="ch_severity_">
+        <option value="niedrig">niedrig</option>
+        <option value="mittel" selected>mittel</option>
+        <option value="hoch">hoch</option>
+      </select>
+    </td>
+    <td><button type="button" class="btn btn-ghost btn-sm idea-row-del">×</button></td>
+  </tr>
+</template>
+<template id="idea-ph-tpl">
+  <tr class="idea-ph-row">
+    <td><input class="form-input" data-name="ph_name_" /></td>
+    <td><input class="form-input" data-name="ph_desc_" /></td>
+    <td><input class="form-input" data-name="ph_duration_" placeholder="z.B. 2-3 Monate" /></td>
+    <td><input class="form-input" data-name="ph_pt_" type="number" step="0.5" min="0" /></td>
+    <td><button type="button" class="btn btn-ghost btn-sm idea-row-del">×</button></td>
+  </tr>
+</template>
