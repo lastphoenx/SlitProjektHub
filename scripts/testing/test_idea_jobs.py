@@ -92,6 +92,16 @@ def test_reset_payload_matches_ai_defaults():
     assert after["internal_pt"] == 40
 
 
+def test_resolve_sqlite_url_ignores_cwd():
+    from src.m01_config import resolve_sqlite_url
+
+    base = Path("/opt/slitprojekthub")
+    got = resolve_sqlite_url("sqlite:///data/db/slitproj.db", base)
+    assert got.replace("\\", "/").endswith("data/db/slitproj.db")
+    assert got.startswith("sqlite:///")
+    assert resolve_sqlite_url("sqlite:///:memory:", base) == "sqlite:///:memory:"
+
+
 if __name__ == "__main__":
     test_ollama_runtime_other_model_loaded()
     test_ollama_runtime_same_model_loaded()
@@ -99,4 +109,5 @@ if __name__ == "__main__":
     test_job_public_and_parse()
     test_friendly_timeout()
     test_reset_payload_matches_ai_defaults()
+    test_resolve_sqlite_url_ignores_cwd()
     print("ok")
