@@ -243,7 +243,14 @@ def _run_item(item: dict[str, Any]) -> None:
         error="",
     )
     try:
-        result = item["run"]()
+        from .ollama_lock import ollama_lock_holder, ollama_wait_callback
+
+        def _on_ollama_wait(message: str) -> None:
+            update_job(idea_id, status="running", message=message, ollama=ollama)
+
+        with ollama_wait_callback(_on_ollama_wait):
+            with ollama_lock_holder(f"slitprojekthub:idea:{idea_id}"):
+                result = item["run"]()
     except Exception as exc:
         log.exception("KI-Job %s idea_id=%s fehlgeschlagen", kind, idea_id)
         err = _friendly_err(exc)
