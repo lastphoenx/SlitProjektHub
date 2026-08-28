@@ -104,6 +104,81 @@ def _fetch_ollama_model_names(timeout: float = 4.0) -> list[str]:
         return []
 
 
+def _fetch_ollama_ps(timeout: float = 3.0) -> list[dict]:
+    """Geladene/laufende Ollama-Modelle via GET /api/ps."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    root = _ollama_root_url()
+    if not root:
+        return []
+    try:
+        with urllib.request.urlopen(f"{root}/api/ps", timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+        models = data.get("models") or []
+        return [m for m in models if isinstance(m, dict)]
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, TypeError):
+        return []
+
+
+def _ollama_model_key(name: str) -> str:
+    return (name or "").strip().lower().split("@", 1)[0]
+
+
+def _ollama_same_model(a: str, b: str) -> bool:
+    ka, kb = _ollama_model_key(a), _ollama_model_key(b)
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    return ka.split(":")[0] == kb.split(":")[0] and (ka.startswith(kb) or kb.startswith(ka))
+
+
+def ollama_runtime_status(wanted_model: str | None = None) -> dict:
+    """Belegt Ollama gerade ein anderes Modell? Für Meldung + Queue-UI."""
+    root = _ollama_root_url()
+    if not root:
+        return {
+            "ok": False,
+            "loaded": [],
+            "other_loaded": [],
+            "switching": False,
+            "message": "Ollama ist nicht konfiguriert (OLLAMA_BASE_URL).",
+        }
+    rows = _fetch_ollama_ps()
+    loaded = []
+    for m in rows:
+        n = (m.get("name") or m.get("model") or "").strip()
+        if n:
+            loaded.append(n)
+    want = (wanted_model or "").strip()
+    others = [n for n in loaded if want and not _ollama_same_model(n, want)]
+    switching = bool(others)
+    if not loaded:
+        msg = "Ollama ist frei."
+        if want:
+            msg = f"Ollama ist frei — lädt bei Bedarf «{want}»."
+    elif switching:
+        shown = ", ".join(f"«{n}»" for n in others[:3])
+        msg = (
+            f"Ollama hat derzeit {shown} geladen"
+            + (f" — wechselt auf «{want}»" if want else "")
+            + ". Ihre Anfrage wartet in der Warteschlange; Modellwechsel kann 1–3 Minuten dauern."
+        )
+    else:
+        msg = f"Ollama hat «{loaded[0]}» im Speicher."
+        if want:
+            msg = f"Ollama hat «{want}» bereits geladen."
+    return {
+        "ok": True,
+        "loaded": loaded,
+        "other_loaded": others,
+        "switching": switching,
+        "message": msg,
+    }
+
+
 def _resolve_ollama_model(model_name: str | None) -> str:
     names = _fetch_ollama_model_names()
     want = (model_name or "").strip() or DEFAULT_MODELS.get("ollama", "llama3.2")
@@ -395,7 +470,7 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
             )
 
     if provider == "ollama" and have_key("ollama"):
-        client = _openai_client("ollama")
+        client = _openai_client("ollama", timeout=600)
         model_id = get_model_id("ollama", model)
         all_messages = [{"role": "system", "content": system}] + msgs
         try:

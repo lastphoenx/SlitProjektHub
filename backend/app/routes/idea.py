@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from backend.app.jinja_env import templates
 
 from src.m01_config import get_settings, load_user_settings
@@ -28,8 +28,14 @@ from src.m16_idea import (
     remove_source_attachment,
     soft_delete_idea,
     save_user_assessment,
+    reset_user_assessment_from_ai,
     form_defaults_from_idea,
     ai_defaults_from_idea,
+)
+from src.m16_idea_jobs import (
+    consume_done_job,
+    enqueue as enqueue_idea_job,
+    idea_job_status,
 )
 from src.m17_visual_lab_refs import (
     MAX_ATTACHMENTS,
@@ -221,6 +227,15 @@ async def idea_detail(request: Request, idea_id: int):
     source_attachments: list = list_source_attachment_views(idea)
     assess_defaults = idea_assess_provider_defaults(settings)
     ai_def = ai_defaults_from_idea(idea)
+    ki_job = consume_done_job(idea_id)
+    just_done = (ki_job or {}).get("status") if ki_job else None
+    if just_done == "done":
+        idea = get_idea(idea_id) or idea
+        ai_def = ai_defaults_from_idea(idea)
+        done_kind = (ki_job or {}).get("kind")
+        ki_job = None
+    else:
+        done_kind = None
     return templates.TemplateResponse(
         "idea/detail.html",
         {
@@ -239,7 +254,8 @@ async def idea_detail(request: Request, idea_id: int):
             "deck_error": qp.get("deck_error"),
             "illustration_error": qp.get("illustration_error"),
             "visual_error": qp.get("visual_error"),
-            "visual_ok": qp.get("visual_ok"),
+            "visual_ok": qp.get("visual_ok") or ("1" if done_kind == "visual" else None),
+            "assess_ok": qp.get("assess_ok") or ("1" if done_kind == "assess" else None),
             "llm_provider": settings.get("provider", "openai"),
             "llm_model": settings.get("model", ""),
             "default_assess_provider": assess_defaults[0],
@@ -258,6 +274,8 @@ async def idea_detail(request: Request, idea_id: int):
             "attach_error": qp.get("attach_error"),
             "max_attachments": MAX_ATTACHMENTS,
             "html_path": getattr(idea, "html_path", None),
+            "ki_job": ki_job,
+            "user_reset_ok": qp.get("user_reset_ok"),
         },
     )
 
@@ -276,6 +294,7 @@ async def idea_assess(
     assess_tasks: list[str] = Form(default=[]),
     cloud_confirm: str = Form(""),
     vision_cloud_confirm: str = Form(""),
+    overwrite_user: str = Form(""),
     attachments: list[UploadFile] = File(default=[]),
 ):
     idea = get_idea(idea_id)
@@ -303,9 +322,30 @@ async def idea_assess(
     )
     if gate_err:
         return RedirectResponse(url=f"/idea/{idea_id}?assess_error={gate_err}", status_code=303)
-    if not result or result.status != "bewertet":
-        return RedirectResponse(url=f"/idea/{idea_id}?assess_error=1", status_code=303)
-    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+    replace_user = overwrite_user == "1" and bool(idea.user_assessed_at)
+
+    def _run():
+        return assess_project_idea_with_ai(
+            idea_id,
+            provider=ap,
+            model=am,
+            assess_tasks=at,
+            source_tasks=src,
+            input_provider=ip,
+            input_model=im,
+        )
+
+    job = enqueue_idea_job(
+        kind="assess",
+        idea_id=idea_id,
+        run=_run,
+        provider=ap,
+        model=am,
+        overwrite_user=replace_user,
+    )
+    if job.get("already_running"):
+        return RedirectResponse(url=f"/idea/{idea_id}?assess_error=already_running", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}?job=1#idea-assessment", status_code=303)
 
 
 def _opt_float_field(v: str | None) -> float | None:
@@ -369,6 +409,27 @@ async def idea_save_user_assessment(request: Request, idea_id: int):
         recommendation=str(form.get("user_recommendation") or ""),
     )
     return RedirectResponse(url=f"/idea/{idea_id}?user_ok=1#idea-assessment", status_code=303)
+
+
+@router.post("/idea/{idea_id}/reset-user-assessment", response_class=HTMLResponse)
+async def idea_reset_user_assessment(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    _require_may_edit(request, idea)
+    if not idea.ai_assessed_at:
+        return RedirectResponse(url=f"/idea/{idea_id}?assess_error=not_assessed#idea-assessment", status_code=303)
+    if not reset_user_assessment_from_ai(idea_id):
+        return RedirectResponse(url=f"/idea/{idea_id}?assess_error=1#idea-assessment", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}?user_reset_ok=1#idea-assessment", status_code=303)
+
+
+@router.get("/idea/{idea_id}/job-status")
+async def idea_job_status_endpoint(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    return JSONResponse(idea_job_status(idea_id))
 
 
 @router.post("/idea/{idea_id}/add-source-attachments", response_class=HTMLResponse)
@@ -449,20 +510,30 @@ async def idea_generate_visual(
         return RedirectResponse(url=f"/idea/{idea_id}?visual_error={gate_err}", status_code=303)
     if image_model not in OPENAI_IMAGE_MODELS:
         image_model = DEFAULT_OPENAI_IMAGE_MODEL
-    obj, err = generate_idea_visual(
-        idea_id,
-        output_format=output_format,
-        refinement_notes=refinement_notes,
-        llm_provider=vp,
-        llm_model=vm,
-        image_model=image_model,
-        input_llm_provider=ip,
-        input_llm_model=im,
-        source_tasks=src,
+
+    def _run():
+        return generate_idea_visual(
+            idea_id,
+            output_format=output_format,
+            refinement_notes=refinement_notes,
+            llm_provider=vp,
+            llm_model=vm,
+            image_model=image_model,
+            input_llm_provider=ip,
+            input_llm_model=im,
+            source_tasks=src,
+        )
+
+    job = enqueue_idea_job(
+        kind="visual",
+        idea_id=idea_id,
+        run=_run,
+        provider=vp,
+        model=vm,
     )
-    if not obj:
-        return RedirectResponse(url=f"/idea/{idea_id}?visual_error={err or 'failed'}", status_code=303)
-    return RedirectResponse(url=f"/idea/{idea_id}?visual_ok=1#visual-results", status_code=303)
+    if job.get("already_running"):
+        return RedirectResponse(url=f"/idea/{idea_id}?visual_error=already_running", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}?job=1#visual-results", status_code=303)
 
 
 @router.post("/idea/{idea_id}/generate-deck", response_class=HTMLResponse)

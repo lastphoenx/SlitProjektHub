@@ -94,6 +94,12 @@ def _startup_init_db() -> None:
         name="pii-warmup",
         daemon=True,
     ).start()
+    try:
+        from src.m16_idea_jobs import ensure_worker
+
+        ensure_worker()
+    except Exception:
+        logging.exception("KI-Job-Worker Start fehlgeschlagen")
 
 # ── Auth Middleware: alle nicht-auth Routen absichern ─────────────────────
 _AUTH_EXEMPT = {"/auth/login", "/auth/logout", "/auth/setup", "/auth/totp", "/static", "/health"}
