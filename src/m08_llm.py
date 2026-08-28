@@ -470,22 +470,25 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
             )
 
     if provider == "ollama" and have_key("ollama"):
+        from .ollama_lock import ollama_inference_lock, resolve_lock_holder
+
         client = _openai_client("ollama", timeout=600)
         model_id = get_model_id("ollama", model)
         all_messages = [{"role": "system", "content": system}] + msgs
-        try:
-            resp = client.chat.completions.create(
-                model=model_id,
-                messages=all_messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            if _used_model is not None:
-                _used_model.clear()
-                _used_model += [model_id, ""]
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            raise LLMError(f"Ollama ({model_id}): {e}") from e
+        with ollama_inference_lock(resolve_lock_holder(), model=model_id):
+            try:
+                resp = client.chat.completions.create(
+                    model=model_id,
+                    messages=all_messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+                if _used_model is not None:
+                    _used_model.clear()
+                    _used_model += [model_id, ""]
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                raise LLMError(f"Ollama ({model_id}): {e}") from e
 
     if provider == "openai" and have_key("openai"):
         from openai import OpenAI
