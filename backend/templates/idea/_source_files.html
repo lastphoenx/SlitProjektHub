@@ -1,0 +1,37 @@
+{# Gespeicherte Unterlagen: ansehen, Vollansicht, Download, löschen #}
+{% if source_attachments %}
+<ul class="source-file-list" style="list-style:none;margin:.4rem 0 0;padding:0">
+  {% for a in source_attachments %}
+  <li class="source-file-row" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;padding:.45rem .55rem;margin-bottom:.35rem;border:1px solid var(--color-border);border-radius:.45rem;background:var(--color-surface-2)">
+    <span class="badge badge-neutral" style="font-size:.68rem">{{ a.kind_label }}</span>
+    <span style="flex:1;min-width:8rem;font-size:.82rem;font-weight:500">{{ a.original_name }}</span>
+    <span class="text-muted" style="font-size:.72rem">
+      {% if a.bytes %}{{ (a.bytes / 1024) | round(0) | int }} KB{% endif %}
+      {% if not a.exists %}<span style="color:#fca5a5"> · Datei fehlt auf dem Server</span>{% endif %}
+    </span>
+    <div class="flex items-center gap-1">
+      {% if a.previewable %}
+      {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-source/' ~ a.path %}
+      {% set inline_url = '/idea/' ~ idea.id ~ '/source-file/' ~ a.path ~ '?disposition=inline' %}
+      {% else %}
+      {% set preview_hx_get = None %}
+      {% set inline_url = None %}
+      {% endif %}
+      {% set download_url = '/idea/' ~ idea.id ~ '/source-file/' ~ a.path %}
+      {% include 'partials/_media_actions.html' %}
+      {% if may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/delete-source-attachment" style="display:inline"
+        onsubmit="return confirm('Unterlage «{{ a.original_name }}» löschen?')">
+        <input type="hidden" name="att_path" value="{{ a.path }}" />
+        <button type="submit" class="btn btn-ghost btn-sm btn-icon" title="Löschen" style="color:var(--color-danger)">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="text-muted" style="font-size:.78rem;margin:.35rem 0 0">Keine gespeicherten Unterlagen. Dateien erst nach «Unterlagen hinzufügen» — sonst gehen sie beim Bewerten verloren.</p>
+{% endif %}

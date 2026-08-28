@@ -158,6 +158,47 @@ def test_vertical_diagram_does_not_truncate_long_bullet():
     assert _clean_phase_title(details[0]["title"]).startswith("Anforderungsdefinition")
 
 
+def test_list_source_attachment_views_keeps_saved_files():
+    import json
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from src.m16_idea import list_source_attachment_views, source_preview_kind
+
+    assert source_preview_kind("a.pdf", "pdf") == "pdf"
+    assert source_preview_kind("foto.png", "image") == "image"
+    assert source_preview_kind("note.txt", "text") == "text"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        (base / "att_abc_brief.pdf").write_bytes(b"%PDF-1.4 mock")
+        idea = ProjectIdea(
+            id=9,
+            idea_text="x",
+            source_attachments_json=json.dumps([
+                {
+                    "path": "att_abc_brief.pdf",
+                    "original_name": "Brief.pdf",
+                    "kind": "pdf",
+                    "bytes": 13,
+                },
+                {
+                    "path": "att_missing.docx",
+                    "original_name": "Alt.docx",
+                    "kind": "docx",
+                },
+            ]),
+        )
+        with patch("src.m16_idea.idea_source_attachments_dir", return_value=base):
+            views = list_source_attachment_views(idea)
+        assert [v["original_name"] for v in views] == ["Brief.pdf", "Alt.docx"]
+        assert views[0]["exists"] is True
+        assert views[0]["previewable"] is True
+        assert views[1]["exists"] is False
+        assert views[1]["kind_label"] == "Word"
+
+
 if __name__ == "__main__":
     test_sanitize_removes_email()
     test_nfc_normalizes_decomposed_umlaut()
@@ -173,4 +214,5 @@ if __name__ == "__main__":
     test_clean_phase_title_strips_numbering()
     test_html_report_has_nav_and_escapes()
     test_vertical_diagram_does_not_truncate_long_bullet()
+    test_list_source_attachment_views_keeps_saved_files()
     print("ok")

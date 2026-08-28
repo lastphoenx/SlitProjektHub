@@ -111,7 +111,8 @@ body {
   border-color: var(--color-primary);
   outline: 1px solid rgba(59,130,246,.35);
 }
-.result-card img.result-thumb {
+.result-card img.result-thumb,
+.result-card iframe.result-thumb {
   display: block;
   width: 100%;
   max-height: 320px;
@@ -121,6 +122,10 @@ body {
   border-radius: 8px;
   border: 1px solid var(--color-border);
   background: #fff;
+}
+.result-card iframe.result-thumb {
+  height: 320px;
+  pointer-events: none;
 }
 
 /* ── Card ── */

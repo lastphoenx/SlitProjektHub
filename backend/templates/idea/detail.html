@@ -57,27 +57,9 @@
   </p>
   {% endif %}
 
-  <div style="margin-top:.75rem">
+  <div id="idea-attachments" style="margin-top:.75rem">
     <label class="form-label" style="font-size:.72rem">Unterlagen für KI-Bewertung / Visualisierung</label>
-    {% if source_attachments %}
-    <ul style="font-size:.75rem;margin:.25rem 0;padding:0;list-style:none">
-      {% for a in source_attachments %}
-      <li style="margin-bottom:.35rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-        <a href="/idea/{{ idea.id }}/source-file/{{ a.path }}" target="_blank" rel="noopener">{{ a.original_name }}</a>
-        <span class="text-muted">({{ a.kind }})</span>
-        {% if may_edit %}
-        <form method="post" action="/idea/{{ idea.id }}/delete-source-attachment" style="display:inline"
-          onsubmit="return confirm('Unterlage löschen?')">
-          <input type="hidden" name="att_path" value="{{ a.path }}" />
-          <button type="submit" class="btn btn-ghost btn-sm" style="font-size:.65rem;color:var(--color-danger)">Löschen</button>
-        </form>
-        {% endif %}
-      </li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="text-muted" style="font-size:.72rem;margin:.25rem 0">Noch keine Unterlagen — optional PDF, Word, Bilder.</p>
-    {% endif %}
+    {% include 'idea/_source_files.html' %}
     {% if idea.source_reference_text %}
     <details style="font-size:.7rem;margin-top:.35rem">
       <summary class="text-muted" style="cursor:pointer">Extrahierter Text (lokal)</summary>
@@ -89,8 +71,10 @@
       {% set zone_id = 'idea-src' %}
       {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
       {% set max_files = max_attachments or 10 %}
-      {% set hint = 'Weitere Dateien — max. ' ~ (max_attachments or 10) ~ ' gesamt, 10 MB je Datei' %}
+      {% set hint = 'Dateien werden beim Ablegen gespeichert. Max. ' ~ (max_attachments or 10) ~ ' gesamt, 10 MB je Datei' %}
+      {% set autosubmit = true %}
       {% include 'partials/_file_upload_zone.html' %}
+      {% set autosubmit = false %}
       <button type="submit" class="btn btn-secondary btn-sm" style="margin-top:.35rem">Unterlagen hinzufügen</button>
     </form>
     {% endif %}
@@ -162,100 +146,47 @@
   {% if idea.status != 'bewertet' %}
   <p class="text-muted">Nach der KI-Vorbewertung können Berichte, Folien und Bilder erzeugt werden.</p>
   {% else %}
-  <form method="post" action="/idea/{{ idea.id }}/generate-visual" class="idea-gen-form idea-form-grid" style="margin-bottom:1rem">
-    <div class="span-2">
-      <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
-      <input type="hidden" name="llm_model" value="{{ llm_model }}" />
-      <label class="form-label">Ausgabe-Format</label>
-      <select class="form-select" name="output_format" id="idea-output-format">
-        {% for key, label in idea_visual_formats.items() %}
-        <option value="{{ key }}">{{ label }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    {% set form_id = 'idea-visual' %}
-    {% set llm_role = 'input' %}
-    {% set form_input_provider = '' %}
-    {% set form_input_model = '' %}
-    {% include 'partials/_llm_picker.html' %}
-    {% set llm_role = 'output' %}
-    {% set picker_title = 'KI für Ausgabe-Struktur (HTML / PPTX / Word)' %}
-    {% set form_visual_provider = '' %}
-    {% set form_visual_model = '' %}
-    {% include 'partials/_llm_picker.html' %}
-    <div class="span-2">
-    {% set prefix = 'source_tasks' %}
-    {% set title = 'Unterlagen-Verarbeitung (optional)' %}
-    {% set hint = 'Nur relevant wenn Unterlagen vorhanden — gleiche Optionen wie bei der Bewertung.' %}
-    {% set tasks = source_process_tasks %}
-    {% include 'partials/_ki_tasks_checkboxes.html' %}
-    </div>
-    {% if source_attachments or idea.source_reference_text %}
-    <div class="span-2 idea-visual-cloud-wrap" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
-      <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
-        Bei Cloud-Provider (OpenAI/Anthropic) mit Unterlagen — Text wird vor Übertragung gefiltert.
-      </p>
-      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer;margin-bottom:.35rem">
-        <input type="checkbox" name="cloud_confirm" value="1" id="idea-visual-cloud-confirm" style="margin-top:.15rem" />
-        <span>Unterlagen/Text wurden gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an die Cloud gehen.</span>
-      </label>
-      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
-        <input type="checkbox" name="vision_cloud_confirm" value="1" id="idea-visual-vision-cloud" style="margin-top:.15rem" />
-        <span>Referenzbilder an Cloud-Vision — ich habe geprüft, dass keine sensiblen Inhalte sichtbar sind.</span>
-      </label>
-    </div>
+  {% set has_html = html_path or idea.html_path %}
+  <div id="visual-results" style="display:grid;gap:.75rem;margin-bottom:1.25rem">
+    <h3 style="font-size:.82rem;font-weight:700;margin:0">Erzeugte Visualisierung</h3>
+    {% if visual_ok and not has_html and not idea.deck_path and not idea.docx_path %}
+    <p class="text-muted" style="font-size:.78rem;margin:0">Erzeugt — falls die Karte fehlt, Seite neu laden.</p>
     {% endif %}
-    <div id="idea-cloud-image-wrap" class="span-2" style="display:none">
-      <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell (nur Cloud-PNG)</label>
-      <select class="form-select" name="image_model">
-        {% for key in openai_image_models %}
-        <option value="{{ key }}" {% if key == default_image_model %}selected{% endif %}>{{ key }}</option>
-        {% endfor %}
-      </select>
-      <label style="display:flex;align-items:flex-start;gap:.4rem;margin-top:.5rem;font-size:.72rem;cursor:pointer">
-        <input type="checkbox" name="cloud_confirm" value="1" id="idea-cloud-confirm" style="margin-top:.15rem" />
-        <span>Prompt wurde automatisch gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an OpenAI gehen.</span>
-      </label>
-    </div>
-    <div class="span-2">
-      <label class="form-label" style="font-size:.72rem">Optionale Anpassung</label>
-      <textarea class="form-input" name="refinement_notes" rows="2"
-        placeholder="z.B. Phasen hervorheben, weniger Text, mehr Blau …"></textarea>
-    </div>
-    <div class="span-2">
-    <button type="submit" class="btn btn-primary idea-gen-btn">Visualisierung generieren</button>
-    <p class="idea-gen-status text-muted" style="font-size:.78rem;display:none;margin:.4rem 0 0">Generiere … bitte warten (30s–2min).</p>
-    </div>
-  </form>
-
-  <div style="display:grid;gap:.75rem">
-    {% if idea.deck_path or idea.html_path %}
-    <div class="result-card{% if idea.html_path or idea.deck_preview_path %} result-card-clickable{% endif %}"
-         {% if idea.html_path %}data-open="/idea/report/{{ idea.id }}"
-         {% elif idea.deck_path %}data-hx-preview="/idea/{{ idea.id }}/preview-deck"{% endif %}
+    {% if has_html %}
+    <div class="result-card result-card-clickable"
+         data-hx-preview="/idea/{{ idea.id }}/preview-html"
          onclick="ideaOpenResult(this, event)"
-         title="{% if idea.html_path %}Bericht im neuen Tab öffnen{% else %}Vorschau öffnen{% endif %}">
+         title="Vorschau öffnen">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
-        <strong style="font-size:.95rem">{% if idea.html_path %}Bericht{% if idea.deck_path %} / PowerPoint{% endif %}{% else %}PowerPoint{% endif %}</strong>
+        <strong style="font-size:.95rem">HTML-Bericht</strong>
         <div class="flex items-center gap-1" onclick="event.stopPropagation()">
-          {% if idea.html_path %}
-          <a class="btn btn-ghost btn-sm btn-icon" title="HTML-Bericht (neuer Tab)" href="/idea/report/{{ idea.id }}" target="_blank" rel="noopener">
-            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-            </svg>
-          </a>
-          {% endif %}
-          {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-deck' if idea.deck_path or idea.deck_preview_path else None %}
-          {% set inline_url = '/idea/deck-preview/' ~ idea.id ~ '?disposition=inline' if idea.deck_preview_path else None %}
-          {% set download_url = '/idea/deck/' ~ idea.id if idea.deck_path else None %}
+          {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-html' %}
+          {% set inline_url = '/idea/report/' ~ idea.id %}
+          {% set download_url = '/idea/report/' ~ idea.id ~ '?disposition=attachment' %}
           {% include 'partials/_media_actions.html' %}
         </div>
       </div>
-      <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">
-        {% if idea.html_path %}Klick öffnet den interaktiven Bericht.{% else %}Klick öffnet die Folien-Vorschau.{% endif %}
-      </p>
+      <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">Vorschau · Vollansicht (neuer Tab) · HTML-Download</p>
+      <iframe class="result-thumb" src="/idea/report/{{ idea.id }}" title="HTML-Bericht Vorschau" tabindex="-1"></iframe>
+    </div>
+    {% endif %}
+
+    {% if idea.deck_path %}
+    <div class="result-card result-card-clickable"
+         data-hx-preview="/idea/{{ idea.id }}/preview-deck"
+         onclick="ideaOpenResult(this, event)"
+         title="Vorschau öffnen">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
+        <strong style="font-size:.95rem">PowerPoint</strong>
+        <div class="flex items-center gap-1" onclick="event.stopPropagation()">
+          {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-deck' %}
+          {% set inline_url = '/idea/deck-preview/' ~ idea.id ~ '?disposition=inline' if idea.deck_preview_path else None %}
+          {% set download_url = '/idea/deck/' ~ idea.id %}
+          {% include 'partials/_media_actions.html' %}
+        </div>
+      </div>
       {% if idea.deck_preview_path %}
-      <img class="result-thumb" src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="Bericht-Vorschau" />
+      <img class="result-thumb" src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="PPTX" />
       {% endif %}
       {% if may_edit %}
       <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="margin-top:.35rem" onsubmit="return confirm('Bericht/PPTX löschen?')" onclick="event.stopPropagation()">
@@ -263,6 +194,10 @@
       </form>
       {% endif %}
     </div>
+    {% elif has_html and may_edit %}
+    <form method="post" action="/idea/{{ idea.id }}/clear-deck" onsubmit="return confirm('HTML-Bericht löschen?')">
+      <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">HTML-Bericht löschen</button>
+    </form>
     {% endif %}
 
     {% if idea.docx_path %}
@@ -309,6 +244,82 @@
     </div>
     {% endif %}
   </div>
+
+  <form method="post" action="/idea/{{ idea.id }}/generate-visual" class="idea-gen-form idea-form-grid" style="margin-bottom:1rem" enctype="multipart/form-data">
+    <div class="span-2">
+      <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
+      <input type="hidden" name="llm_model" value="{{ llm_model }}" />
+      <label class="form-label">Ausgabe-Format</label>
+      <select class="form-select" name="output_format" id="idea-output-format">
+        {% for key, label in idea_visual_formats.items() %}
+        <option value="{{ key }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% set form_id = 'idea-visual' %}
+    {% set llm_role = 'input' %}
+    {% set form_input_provider = '' %}
+    {% set form_input_model = '' %}
+    {% include 'partials/_llm_picker.html' %}
+    {% set llm_role = 'output' %}
+    {% set picker_title = 'KI für Ausgabe-Struktur (HTML / PPTX / Word)' %}
+    {% set form_visual_provider = '' %}
+    {% set form_visual_model = '' %}
+    {% include 'partials/_llm_picker.html' %}
+    <div class="span-2">
+    {% set prefix = 'source_tasks' %}
+    {% set title = 'Unterlagen-Verarbeitung (optional)' %}
+    {% set hint = 'Nur relevant wenn Unterlagen vorhanden — gleiche Optionen wie bei der Bewertung.' %}
+    {% set tasks = source_process_tasks %}
+    {% include 'partials/_ki_tasks_checkboxes.html' %}
+    <p class="form-label" style="margin:.6rem 0 .2rem">Gespeicherte Unterlagen ({{ source_attachments|length }})</p>
+    {% include 'idea/_source_files.html' %}
+    {% if may_edit %}
+    {% set zone_id = 'idea-visual-src' %}
+    {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
+    {% set max_files = max_attachments or 10 %}
+    {% set hint = 'Weitere Dateien hier werden vor dem Generieren gespeichert' %}
+    {% set autosubmit = false %}
+    {% include 'partials/_file_upload_zone.html' %}
+    {% endif %}
+    </div>
+    {% if may_edit %}
+    <div class="span-2 idea-visual-cloud-wrap" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+      <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
+        Bei Cloud-Provider (OpenAI/Anthropic) mit Unterlagen — Text wird vor Übertragung gefiltert.
+      </p>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer;margin-bottom:.35rem">
+        <input type="checkbox" name="cloud_confirm" value="1" id="idea-visual-cloud-confirm" style="margin-top:.15rem" />
+        <span>Unterlagen/Text wurden gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an die Cloud gehen.</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="vision_cloud_confirm" value="1" id="idea-visual-vision-cloud" style="margin-top:.15rem" />
+        <span>Referenzbilder an Cloud-Vision — ich habe geprüft, dass keine sensiblen Inhalte sichtbar sind.</span>
+      </label>
+    </div>
+    {% endif %}
+    <div id="idea-cloud-image-wrap" class="span-2" style="display:none">
+      <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell (nur Cloud-PNG)</label>
+      <select class="form-select" name="image_model">
+        {% for key in openai_image_models %}
+        <option value="{{ key }}" {% if key == default_image_model %}selected{% endif %}>{{ key }}</option>
+        {% endfor %}
+      </select>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;margin-top:.5rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="cloud_confirm" value="1" id="idea-cloud-confirm" style="margin-top:.15rem" />
+        <span>Prompt wurde automatisch gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an OpenAI gehen.</span>
+      </label>
+    </div>
+    <div class="span-2">
+      <label class="form-label" style="font-size:.72rem">Optionale Anpassung</label>
+      <textarea class="form-input" name="refinement_notes" rows="2"
+        placeholder="z.B. Phasen hervorheben, weniger Text, mehr Blau …"></textarea>
+    </div>
+    <div class="span-2">
+    <button type="submit" class="btn btn-primary idea-gen-btn">Visualisierung generieren</button>
+    <p class="idea-gen-status text-muted" style="font-size:.78rem;display:none;margin:.4rem 0 0">Generiere … bitte warten (30s–2min).</p>
+    </div>
+  </form>
   {% endif %}
 </div>
 
@@ -328,7 +339,7 @@
     <h2 style="font-size:.95rem;font-weight:700;margin:0">🤖 KI-Vorbewertung</h2>
   </div>
 
-  <form method="post" action="/idea/{{ idea.id }}/assess" class="idea-assess-form idea-form-grid" style="margin-bottom:1rem;padding:.85rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)">
+  <form method="post" action="/idea/{{ idea.id }}/assess" class="idea-assess-form idea-form-grid" style="margin-bottom:1rem;padding:.85rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)" enctype="multipart/form-data">
     {% set form_id = 'idea-assess' %}
     {% if ollama_ok %}
     <p class="text-muted span-2" style="font-size:.68rem;margin:0 0 .45rem">
@@ -345,6 +356,16 @@
     {% set hint = 'Lokal: Textextraktion. KI: Vision-Bilder oder Bildbeschreibung für den Bewertungs-Prompt.' %}
     {% set tasks = source_process_tasks %}
     {% include 'partials/_ki_tasks_checkboxes.html' %}
+    <p class="form-label" style="margin:.6rem 0 .2rem">Gespeicherte Unterlagen ({{ source_attachments|length }})</p>
+    {% include 'idea/_source_files.html' %}
+    {% if may_edit %}
+    {% set zone_id = 'idea-assess-src' %}
+    {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
+    {% set max_files = max_attachments or 10 %}
+    {% set hint = 'Weitere Dateien hier werden vor der Bewertung gespeichert' %}
+    {% set autosubmit = false %}
+    {% include 'partials/_file_upload_zone.html' %}
+    {% endif %}
     </div>
     {% set llm_role = 'output' %}
     {% set picker_title = 'KI für Bewertung (JSON-Ergebnis)' %}
@@ -358,7 +379,7 @@
     {% set tasks = assess_tasks %}
     {% include 'partials/_ki_tasks_checkboxes.html' %}
     </div>
-    {% if source_attachments or idea.source_reference_text %}
+    {% if may_edit %}
     <div id="idea-assess-cloud-wrap" class="span-2" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
       <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
         Nur bei Cloud-Provider (OpenAI/Anthropic) mit Unterlagen — Text wird vor Übertragung gefiltert.
