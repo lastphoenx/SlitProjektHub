@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 
 _JOB_Q: queue.Queue = queue.Queue()
 _START_LOCK = threading.Lock()
+_ENQUEUE_LOCK = threading.Lock()
 _WORKER_STARTED = False
 ACTIVE = ("queued", "running")
 
@@ -159,48 +160,49 @@ def enqueue(
     ensure_worker()
     from .m16_idea import get_idea
 
-    idea = get_idea(idea_id)
-    existing = parse_job(idea.ki_job_json) if idea else None
-    if existing and existing.get("status") in ACTIVE:
-        existing["already_running"] = True
-        return existing
+    with _ENQUEUE_LOCK:
+        idea = get_idea(idea_id)
+        existing = parse_job(idea.ki_job_json) if idea else None
+        if existing and existing.get("status") in ACTIVE:
+            existing["already_running"] = True
+            return existing
 
-    from .m08_llm import ollama_runtime_status
+        from .m08_llm import ollama_runtime_status
 
-    ollama = {}
-    if (provider or "").strip().lower() == "ollama":
-        st = ollama_runtime_status(model)
-        ollama = {k: st.get(k) for k in ("loaded", "other_loaded", "switching", "ok")}
+        ollama = {}
+        if (provider or "").strip().lower() == "ollama":
+            st = ollama_runtime_status(model)
+            ollama = {k: st.get(k) for k in ("loaded", "other_loaded", "switching", "ok")}
 
-    waiting = _JOB_Q.qsize()
-    pos = waiting + 1
-    msg = _queue_message(provider, model)
-    if pos > 1:
-        msg = f"In der Warteschlange (Position {pos}). {msg}"
+        waiting = _JOB_Q.qsize()
+        pos = waiting + 1
+        msg = _queue_message(provider, model)
+        if pos > 1:
+            msg = f"In der Warteschlange (Position {pos}). {msg}"
 
-    job = {
-        "id": uuid4().hex[:12],
-        "kind": kind,
-        "status": "queued",
-        "message": msg,
-        "error": "",
-        "overwrite_user": overwrite_user,
-        "queued_at": _now(),
-        "provider": provider,
-        "model": model,
-        "ollama": ollama,
-    }
-    _write(idea_id, job)
-    _JOB_Q.put({
-        "idea_id": idea_id,
-        "job_id": job["id"],
-        "kind": kind,
-        "run": run,
-        "overwrite_user": overwrite_user,
-        "provider": provider,
-        "model": model,
-    })
-    return job
+        job = {
+            "id": uuid4().hex[:12],
+            "kind": kind,
+            "status": "queued",
+            "message": msg,
+            "error": "",
+            "overwrite_user": overwrite_user,
+            "queued_at": _now(),
+            "provider": provider,
+            "model": model,
+            "ollama": ollama,
+        }
+        _write(idea_id, job)
+        _JOB_Q.put({
+            "idea_id": idea_id,
+            "job_id": job["id"],
+            "kind": kind,
+            "run": run,
+            "overwrite_user": overwrite_user,
+            "provider": provider,
+            "model": model,
+        })
+        return job
 
 
 def _worker() -> None:
