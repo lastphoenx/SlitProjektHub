@@ -1,6 +1,7 @@
 """FastAPI routes — Projektideen (autonome KI-Vorbewertung, kein Projektbezug)."""
 from __future__ import annotations
 
+import json
 import mimetypes
 import uuid
 from pathlib import Path
@@ -26,7 +27,9 @@ from src.m16_idea import (
     list_source_attachment_views,
     remove_source_attachment,
     soft_delete_idea,
-    update_idea_intake,
+    save_user_assessment,
+    form_defaults_from_idea,
+    ai_defaults_from_idea,
 )
 from src.m17_visual_lab_refs import (
     MAX_ATTACHMENTS,
@@ -217,6 +220,7 @@ async def idea_detail(request: Request, idea_id: int):
     qp = request.query_params
     source_attachments: list = list_source_attachment_views(idea)
     assess_defaults = idea_assess_provider_defaults(settings)
+    ai_def = ai_defaults_from_idea(idea)
     return templates.TemplateResponse(
         "idea/detail.html",
         {
@@ -225,6 +229,10 @@ async def idea_detail(request: Request, idea_id: int):
             "idea": idea,
             "challenges": idea.challenges,
             "phases": idea.phases,
+            "user_defaults": form_defaults_from_idea(idea),
+            "ai_defaults": ai_def,
+            "ai_defaults_json": json.dumps(ai_def, ensure_ascii=False).replace("<", "\\u003c"),
+            "user_ok": qp.get("user_ok"),
             "submitter": get_username_by_id(idea.submitted_by) if idea.submitted_by else None,
             "may_edit": may_edit,
             "assess_error": qp.get("assess_error"),
@@ -295,18 +303,72 @@ async def idea_assess(
     )
     if gate_err:
         return RedirectResponse(url=f"/idea/{idea_id}?assess_error={gate_err}", status_code=303)
-    result = assess_project_idea_with_ai(
-        idea_id,
-        provider=ap,
-        model=am,
-        assess_tasks=at,
-        source_tasks=src,
-        input_provider=ip,
-        input_model=im,
-    )
     if not result or result.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?assess_error=1", status_code=303)
     return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+
+
+def _opt_float_field(v: str | None) -> float | None:
+    v = (v or "").strip()
+    if not v:
+        return None
+    try:
+        return float(v.replace("'", "").replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _indexed_challenges(form) -> list[dict]:
+    out = []
+    for i in range(12):
+        title = str(form.get(f"ch_title_{i}") or "").strip()
+        desc = str(form.get(f"ch_desc_{i}") or "").strip()
+        if not title and not desc:
+            continue
+        out.append({
+            "title": title or f"Risiko {len(out) + 1}",
+            "description": desc,
+            "severity": str(form.get(f"ch_severity_{i}") or "mittel"),
+            "likelihood": str(form.get(f"ch_likelihood_{i}") or "mittel"),
+        })
+    return out
+
+
+def _indexed_phases(form) -> list[dict]:
+    out = []
+    for i in range(12):
+        name = str(form.get(f"ph_name_{i}") or "").strip()
+        desc = str(form.get(f"ph_desc_{i}") or "").strip()
+        if not name and not desc:
+            continue
+        out.append({
+            "name": name or f"Phase {len(out) + 1}",
+            "description": desc,
+            "duration_estimate": str(form.get(f"ph_duration_{i}") or "").strip(),
+            "internal_pt": _opt_float_field(str(form.get(f"ph_pt_{i}") or "")),
+        })
+    return out
+
+
+@router.post("/idea/{idea_id}/save-user-assessment", response_class=HTMLResponse)
+async def idea_save_user_assessment(request: Request, idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or idea.is_deleted:
+        raise HTTPException(404, "Idee nicht gefunden")
+    _require_may_edit(request, idea)
+    form = await request.form()
+    save_user_assessment(
+        idea_id,
+        summary=str(form.get("user_summary") or ""),
+        internal_pt=_opt_float_field(str(form.get("user_internal_pt") or "")),
+        internal_pt_reasoning=str(form.get("user_internal_pt_reasoning") or ""),
+        external_cost=_opt_float_field(str(form.get("user_external_cost") or "")),
+        external_cost_reasoning=str(form.get("user_external_cost_reasoning") or ""),
+        challenges=_indexed_challenges(form),
+        phases=_indexed_phases(form),
+        recommendation=str(form.get("user_recommendation") or ""),
+    )
+    return RedirectResponse(url=f"/idea/{idea_id}?user_ok=1#idea-assessment", status_code=303)
 
 
 @router.post("/idea/{idea_id}/add-source-attachments", response_class=HTMLResponse)

@@ -142,6 +142,9 @@ class DeckContent:
     phase_lines: list[str] = field(default_factory=list)
     phase_details: list[dict[str, Any]] = field(default_factory=list)
     recommendation_lines: list[str] = field(default_factory=list)
+    challenges: list[dict[str, Any]] = field(default_factory=list)
+    phases_struct: list[dict[str, Any]] = field(default_factory=list)
+    source_label: str = ""
 
 
 def visual_text_providers_available() -> list[str]:
@@ -532,34 +535,46 @@ def deck_content_from_idea(
     llm_provider: str = "openai",
     llm_model: str = "",
 ) -> DeckContent:
+    from .m16_idea import effective_assessment
+
+    eff = effective_assessment(idea)
+    challenges = list(eff["challenges"] or [])
+    phases = list(eff["phases"] or [])
+    source_label = "Fachliche Einschätzung" if eff["saved"] else "KI-Vorbewertung"
+    summary = eff.get("summary") or ""
     base = DeckContent(
         title=idea.ai_project_name or idea.title or f"Projektidee #{idea.id}",
         subtitle=" · ".join(
             [x for x in [
                 idea.fachabteilung,
-                "Projektportfolio — Ersteinschätzung",
+                source_label,
                 idea.created_at.strftime("%d.%m.%Y"),
             ] if x]
         ),
-        summary_lines=[s.strip() for s in re.split(r"(?<=[.!?])\s+", idea.ai_summary or "") if s.strip()][:6],
-        resource_lines=_resource_lines_from_idea(idea),
+        summary_lines=[s.strip() for s in re.split(r"(?<=[.!?])\s+", summary) if s.strip()][:6],
+        resource_lines=_resource_lines_from_effective(eff),
         challenge_lines=[
             f"{c.get('title', '')}: {c.get('description', '')} [{c.get('severity', '')}]"
-            for c in idea.challenges[:5]
+            for c in challenges[:5]
         ],
         phase_lines=[
             f"{p.get('name', '')} ({p.get('duration_estimate', '')}): {p.get('description', '')}"
-            for p in idea.phases[:6]
+            for p in phases[:6]
         ],
         phase_details=[
             {
                 "title": _clean_phase_title(p.get("name") or f"Phase {i+1}")[:80],
                 "bullets": [str(p.get("description") or "")[:200]] if p.get("description") else [],
                 "parallel_note": str(p.get("duration_estimate") or ""),
+                "internal_pt": p.get("internal_pt"),
+                "duration_weeks": p.get("duration_weeks"),
             }
-            for i, p in enumerate(idea.phases[:6])
+            for i, p in enumerate(phases[:6])
         ],
-        recommendation_lines=[idea.ai_recommendation] if idea.ai_recommendation else [],
+        recommendation_lines=[eff["recommendation"]] if eff.get("recommendation") else [],
+        challenges=challenges[:8],
+        phases_struct=phases[:8],
+        source_label=source_label,
     )
     ref = (refinement_notes or "").strip()
     if not ref:
@@ -596,6 +611,9 @@ def deck_content_from_idea(
         phase_lines=_as_str_list(parsed.get("phase_lines")) or base.phase_lines,
         phase_details=_deck_content_from_parsed(parsed).phase_details or base.phase_details,
         recommendation_lines=_as_str_list(parsed.get("recommendation_lines")) or base.recommendation_lines,
+        challenges=base.challenges,
+        phases_struct=base.phases_struct,
+        source_label=base.source_label,
     )
 
 
@@ -605,17 +623,25 @@ def _as_str_list(val: Any) -> list[str]:
     return [str(x).strip() for x in val if str(x).strip()]
 
 
-def _resource_lines_from_idea(idea: ProjectIdea) -> list[str]:
+def _resource_lines_from_effective(eff: dict[str, Any]) -> list[str]:
     lines: list[str] = []
-    if idea.ai_internal_pt is not None:
-        lines.append(f"Intern: {idea.ai_internal_pt:.0f} Personentage")
-        if idea.ai_internal_pt_reasoning:
-            lines.append(idea.ai_internal_pt_reasoning)
-    if idea.ai_external_cost is not None:
-        lines.append(f"Extern: CHF {idea.ai_external_cost:,.0f}".replace(",", "'"))
-        if idea.ai_external_cost_reasoning:
-            lines.append(idea.ai_external_cost_reasoning)
+    pt = eff.get("internal_pt")
+    if pt is not None:
+        lines.append(f"Intern: {pt:.0f} Personentage")
+        if eff.get("internal_pt_reasoning"):
+            lines.append(str(eff["internal_pt_reasoning"]))
+    cost = eff.get("external_cost")
+    if cost is not None:
+        lines.append(f"Extern: CHF {cost:,.0f}".replace(",", "'"))
+        if eff.get("external_cost_reasoning"):
+            lines.append(str(eff["external_cost_reasoning"]))
     return lines
+
+
+def _resource_lines_from_idea(idea: ProjectIdea) -> list[str]:
+    from .m16_idea import effective_assessment
+
+    return _resource_lines_from_effective(effective_assessment(idea))
 
 
 _LAB_DECK_SYSTEM = (
@@ -1106,18 +1132,121 @@ def _html_list(items: list[str]) -> str:
     return f"<ul>{lis}</ul>"
 
 
+def _sev_badge(level: str, kind: str = "severity") -> str:
+    lv = (level or "mittel").lower()
+    label = {"hoch": "hoch", "mittel": "mittel", "niedrig": "niedrig"}.get(lv, lv)
+    return f'<span class="badge {kind}-{_html_esc(lv)}">{_html_esc(label)}</span>'
+
+
+def _risk_matrix_html(challenges: list[dict[str, Any]]) -> str:
+    if not challenges:
+        return ""
+    order = ("hoch", "mittel", "niedrig")
+    cells: dict[tuple[str, str], list[str]] = {(y, x): [] for y in order for x in order}
+    for i, c in enumerate(challenges):
+        y = (c.get("likelihood") or "mittel").lower()
+        x = (c.get("severity") or "mittel").lower()
+        if y not in order:
+            y = "mittel"
+        if x not in order:
+            x = "mittel"
+        title = str(c.get("title") or f"Risiko {i+1}")
+        cells[(y, x)].append(title)
+    heat = {
+        ("hoch", "hoch"): "heat-hh",
+        ("hoch", "mittel"): "heat-hm",
+        ("hoch", "niedrig"): "heat-hl",
+        ("mittel", "hoch"): "heat-mh",
+        ("mittel", "mittel"): "heat-mm",
+        ("mittel", "niedrig"): "heat-ml",
+        ("niedrig", "hoch"): "heat-lh",
+        ("niedrig", "mittel"): "heat-lm",
+        ("niedrig", "niedrig"): "heat-ll",
+    }
+    rows = []
+    for y in order:
+        tds = [f'<th scope="row">{_html_esc(y)}</th>']
+        for x in order:
+            chips = "".join(
+                f'<span class="chip" title="{_html_esc(t)}">{_html_esc(t)}</span>'
+                for t in cells[(y, x)]
+            )
+            tds.append(f'<td class="{heat[(y, x)]}">{chips or "&nbsp;"}</td>')
+        rows.append(f"<tr>{''.join(tds)}</tr>")
+    return (
+        '<div class="risk-wrap" id="risk">'
+        "<h3>Risiko-Matrix</h3>"
+        '<p class="muted">Eintrittswahrscheinlichkeit × Auswirkung (Schweregrad)</p>'
+        '<table class="risk-matrix">'
+        "<thead><tr><th></th><th>niedrig</th><th>mittel</th><th>hoch</th></tr>"
+        '<tr class="axis"><th></th><th colspan="3">Auswirkung →</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody></table>"
+        '<p class="muted axis-y">↑ Wahrscheinlichkeit</p>'
+        "</div>"
+    )
+
+
+def _timeline_html(phases: list[dict[str, Any]]) -> str:
+    if not phases:
+        return ""
+    weeks = []
+    for p in phases:
+        w = p.get("duration_weeks")
+        if w is None:
+            from .m16_idea import parse_duration_weeks
+
+            w = parse_duration_weeks(str(p.get("duration_estimate") or ""))
+        weeks.append(float(w) if w else 4.0)
+    total = sum(weeks) or 1.0
+    bars = []
+    acc = 0.0
+    colors = ["#6d4cb4", "#2e7d50", "#2563a8", "#c4783a", "#b4486e", "#5a7896"]
+    for i, p in enumerate(phases):
+        w = weeks[i]
+        pct = max(8.0, 100.0 * w / total)
+        left = 100.0 * acc / total
+        acc += w
+        pt = p.get("internal_pt")
+        pt_s = f" · {pt:.0f} PT intern" if isinstance(pt, (int, float)) else ""
+        dur = p.get("duration_estimate") or f"{w:.1f} Wo."
+        name = p.get("name") or p.get("title") or f"Phase {i+1}"
+        bars.append(
+            f'<div class="tl-bar" style="left:{left:.2f}%;width:{pct:.2f}%;background:{colors[i % len(colors)]}">'
+            f'<span class="tl-label">{_html_esc(str(name))}</span>'
+            f'<span class="tl-meta">{_html_esc(str(dur))}{pt_s}</span></div>'
+        )
+    ticks = []
+    acc = 0.0
+    for i, w in enumerate(weeks):
+        acc += w
+        ticks.append(f'<span>{acc:.0f} Wo.</span>')
+    return (
+        '<div class="timeline-wrap">'
+        "<h3>Zeitachse (grobe Durchlaufzeit)</h3>"
+        f'<div class="timeline">{"".join(bars)}</div>'
+        f'<div class="tl-ticks">{"".join(ticks)}</div>'
+        f'<p class="muted">Summe ca. {total:.0f} Kalenderwochen — sequentiell, ohne Kalenderdaten.</p>'
+        "</div>"
+    )
+
+
 def build_html_report(content: DeckContent) -> str:
     """Selbstständige HTML-Datei: Inhaltsverzeichnis, Sprungmarken, volle Textbreite."""
     details = content.phase_details or _phase_details_from_lines(content.phase_lines)
+    challenges = list(content.challenges or [])
+    phases_struct = list(content.phases_struct or [])
     nav_items: list[tuple[str, str]] = [("top", content.title or "Bericht")]
     if content.summary_lines:
         nav_items.append(("summary", "Zusammenfassung"))
     if content.resource_lines:
         nav_items.append(("resources", "Ressourcen & Kosten"))
-    if content.challenge_lines:
+    if challenges or content.challenge_lines:
         nav_items.append(("challenges", "Herausforderungen"))
-    if details:
+        if challenges:
+            nav_items.append(("risk", "Risiko-Matrix"))
+    if details or phases_struct:
         nav_items.append(("phases", "Phasen"))
+        nav_items.append(("timeline", "Zeitachse"))
         for i, pd in enumerate(details):
             nav_items.append((f"phase-{i+1}", f"Phase {i+1}"))
     if content.recommendation_lines:
@@ -1135,7 +1264,13 @@ def build_html_report(content: DeckContent) -> str:
         bg = bgs[i % len(bgs)]
         bullets = "".join(f"<li>{_html_esc(b)}</li>" for b in (pd.get("bullets") or []) if b)
         par = (pd.get("parallel_note") or "").strip()
-        par_html = f'<p class="parallel">Parallel / Dauer: {_html_esc(par)}</p>' if par else ""
+        pt = pd.get("internal_pt")
+        meta_bits = []
+        if par:
+            meta_bits.append(f"Dauer: {_html_esc(par)}")
+        if isinstance(pt, (int, float)):
+            meta_bits.append(f"{pt:.0f} PT intern")
+        par_html = f'<p class="parallel">{" · ".join(meta_bits)}</p>' if meta_bits else ""
         phase_html_parts.append(
             f'<article class="phase" id="phase-{i+1}" style="--accent:{col};--bg:{bg}">'
             f"<h3>Phase {i + 1}: {_html_esc(_clean_phase_title(str(pd.get('title') or '')))}</h3>"
@@ -1143,22 +1278,54 @@ def build_html_report(content: DeckContent) -> str:
             f"{par_html}</article>"
         )
 
+    challenge_block = ""
+    if challenges:
+        rows = []
+        for c in challenges:
+            rows.append(
+                "<tr>"
+                f"<td>{_html_esc(str(c.get('title') or ''))}</td>"
+                f"<td>{_html_esc(str(c.get('description') or ''))}</td>"
+                f"<td>{_sev_badge(str(c.get('likelihood') or 'mittel'), 'like')}</td>"
+                f"<td>{_sev_badge(str(c.get('severity') or 'mittel'))}</td>"
+                "</tr>"
+            )
+        challenge_block = (
+            '<table class="ch-table"><thead><tr>'
+            "<th>Titel</th><th>Beschreibung</th><th>Wahrscheinlichkeit</th><th>Schweregrad</th>"
+            f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+            + _risk_matrix_html(challenges)
+        )
+    elif content.challenge_lines:
+        challenge_block = _html_list(content.challenge_lines)
+
     sections: list[str] = []
     if content.summary_lines:
+        src = f'<p class="muted source">{_html_esc(content.source_label)}</p>' if content.source_label else ""
         sections.append(
-            f'<section id="summary"><h2>Zusammenfassung</h2>{_html_list(content.summary_lines)}</section>'
+            f'<section id="summary"><h2>Zusammenfassung</h2>{src}{_html_list(content.summary_lines)}</section>'
         )
     if content.resource_lines:
         sections.append(
             f'<section id="resources"><h2>Ressourcen &amp; Kosten</h2>{_html_list(content.resource_lines)}</section>'
         )
-    if content.challenge_lines:
+    if challenge_block:
         sections.append(
-            f'<section id="challenges"><h2>Herausforderungen</h2>{_html_list(content.challenge_lines)}</section>'
+            f'<section id="challenges"><h2>Herausforderungen</h2>{challenge_block}</section>'
         )
-    if phase_html_parts:
+    if phase_html_parts or phases_struct:
+        tl = _timeline_html(phases_struct or [
+            {
+                "name": d.get("title"),
+                "duration_estimate": d.get("parallel_note"),
+                "internal_pt": d.get("internal_pt"),
+                "duration_weeks": d.get("duration_weeks"),
+            }
+            for d in details
+        ])
         sections.append(
-            '<section id="phases"><h2>Phasenplanung</h2>'
+            f'<section id="phases"><h2>Phasenplanung</h2>'
+            f'<div id="timeline">{tl}</div>'
             f'<div class="phases">{"".join(phase_html_parts)}</div></section>'
         )
     if content.recommendation_lines:
@@ -1210,6 +1377,43 @@ li {{ margin:.25rem 0; }}
   padding:1rem 1.15rem; box-shadow:0 1px 2px rgba(15,23,42,.06);
 }}
 .phase .parallel {{ color:var(--muted); font-size:.9rem; margin:.5rem 0 0; }}
+.badge {{
+  display:inline-block; font-size:.72rem; font-weight:700; letter-spacing:.02em;
+  padding:.15rem .5rem; border-radius:999px; border:1px solid transparent;
+}}
+.severity-hoch, .like-hoch {{ background:#fee2e2; color:#b91c1c; border-color:#fecaca; }}
+.severity-mittel, .like-mittel {{ background:#fef3c7; color:#b45309; border-color:#fde68a; }}
+.severity-niedrig, .like-niedrig {{ background:#e2e8f0; color:#475569; border-color:#cbd5e1; }}
+.ch-table {{ width:100%; border-collapse:collapse; font-size:.92rem; margin:.5rem 0 1.25rem; }}
+.ch-table th, .ch-table td {{ text-align:left; padding:.5rem .6rem; border-bottom:1px solid var(--line); vertical-align:top; }}
+.ch-table th {{ font-size:.75rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }}
+.risk-wrap {{ margin:1.25rem 0 1.5rem; }}
+.risk-wrap h3, .timeline-wrap h3 {{ font-size:1rem; margin:0 0 .35rem; color:var(--accent); }}
+.risk-matrix {{ border-collapse:collapse; width:100%; table-layout:fixed; }}
+.risk-matrix th, .risk-matrix td {{
+  border:1px solid var(--line); padding:.45rem; min-height:4.2rem; vertical-align:top; font-size:.8rem;
+}}
+.risk-matrix thead th {{ text-align:center; font-size:.75rem; color:var(--muted); }}
+.risk-matrix .axis th {{ font-weight:500; }}
+.chip {{
+  display:inline-block; background:#fff; border:1px solid rgba(15,23,42,.12);
+  border-radius:6px; padding:.15rem .4rem; margin:.15rem .15rem 0 0; max-width:100%;
+}}
+.heat-hh {{ background:#fecaca; }} .heat-hm {{ background:#fed7aa; }} .heat-hl {{ background:#fde68a; }}
+.heat-mh {{ background:#fed7aa; }} .heat-mm {{ background:#fef3c7; }} .heat-ml {{ background:#ecfccb; }}
+.heat-lh {{ background:#fde68a; }} .heat-lm {{ background:#ecfccb; }} .heat-ll {{ background:#dcfce7; }}
+.timeline-wrap {{ margin:0 0 1.5rem; }}
+.timeline {{
+  position:relative; height:4.2rem; background:#e2e8f0; border-radius:10px; overflow:hidden;
+}}
+.tl-bar {{
+  position:absolute; top:.35rem; bottom:.35rem; border-radius:8px; color:#fff;
+  padding:.35rem .5rem; overflow:hidden; box-shadow:inset 0 0 0 1px rgba(255,255,255,.15);
+}}
+.tl-label {{ display:block; font-size:.78rem; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.tl-meta {{ display:block; font-size:.68rem; opacity:.9; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.tl-ticks {{ display:flex; justify-content:space-between; font-size:.72rem; color:var(--muted); margin-top:.35rem; }}
+.source {{ font-size:.78rem; margin:0 0 .5rem; }}
 footer {{ margin-top:2.5rem; color:var(--muted); font-size:.8rem; border-top:1px solid var(--line); padding-top:.75rem; }}
 @media (max-width: 880px) {{
   .layout {{ grid-template-columns: 1fr; }}
@@ -1235,7 +1439,7 @@ footer {{ margin-top:2.5rem; color:var(--muted); font-size:.8rem; border-top:1px
       {f'<p class="subtitle">{subtitle}</p>' if subtitle else ''}
     </header>
     {''.join(sections)}
-    <footer>KI-Vorbewertung — ersetzt keine fachliche Prüfung · SlitProjektHub</footer>
+    <footer>{_html_esc(content.source_label or "KI-Vorbewertung")} — ersetzt keine fachliche Prüfung · SlitProjektHub</footer>
   </main>
 </div>
 </body>

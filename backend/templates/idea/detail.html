@@ -123,6 +123,8 @@
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Visualisierung erstellen</h2>
   <p class="text-muted" style="font-size:.78rem;margin-bottom:.75rem">
     Input-KI liest Unterlagen; Ausgabe-KI strukturiert Folien/Berichte. Cloud-PNG nutzt OpenAI Bildmodell (gefiltert).
+    {% if idea.user_assessed_at %} Der Report verwendet <strong>Ihre gespeicherte Einschätzung</strong>.
+    {% else %} Der Report verwendet die <strong>KI-Defaults</strong>, solange Sie keine Einschätzung speichern.{% endif %}
   </p>
 
   {% if visual_ok %}
@@ -403,90 +405,11 @@
   {% if idea.status != 'bewertet' %}
   <p class="text-muted">Noch nicht bewertet. Klicke oben auf «KI bewerten».</p>
   {% else %}
-  <div style="display:grid;gap:1rem">
-    <div>
-      <strong style="font-size:.8rem">Zusammenfassung</strong>
-      <p style="margin-top:.25rem;white-space:pre-wrap">{{ idea.ai_summary or "—" }}</p>
-    </div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
-      <div class="card" style="background:var(--color-surface-2)">
-        <strong style="font-size:.8rem">Ressourcen intern</strong>
-        <p style="margin:.35rem 0;font-size:1.1rem;font-weight:700">
-          {{ idea.ai_internal_pt if idea.ai_internal_pt is not none else "—" }} PT
-          {% if idea.internal_pt_human is not none %}<span class="text-muted" style="font-size:.72rem;font-weight:400"> (Fachabteilung: {{ idea.internal_pt_human }} PT)</span>{% endif %}
-        </p>
-        <p class="text-muted" style="font-size:.78rem">{{ idea.ai_internal_pt_reasoning or "" }}</p>
-      </div>
-      <div class="card" style="background:var(--color-surface-2)">
-        <strong style="font-size:.8rem">Kosten extern</strong>
-        <p style="margin:.35rem 0;font-size:1.1rem;font-weight:700">
-          {{ "CHF %.0f"|format(idea.ai_external_cost) if idea.ai_external_cost is not none else "—" }}
-          {% if idea.external_cost_human is not none %}<span class="text-muted" style="font-size:.72rem;font-weight:400"> (Fachabteilung: CHF {{ "%.0f"|format(idea.external_cost_human) }})</span>{% endif %}
-        </p>
-        <p class="text-muted" style="font-size:.78rem">{{ idea.ai_external_cost_reasoning or "" }}</p>
-      </div>
-    </div>
-
-    <div>
-      <strong style="font-size:.8rem">Herausforderungen</strong>
-      {% if challenges %}
-      <div class="table-wrap" style="margin-top:.35rem">
-        <table>
-          <thead><tr><th>Titel</th><th>Beschreibung</th><th>Schweregrad</th></tr></thead>
-          <tbody>
-            {% for c in challenges %}
-            <tr>
-              <td>{{ c.title }}</td>
-              <td style="font-size:.85rem">{{ c.description }}</td>
-              <td>
-                {% if c.severity == 'hoch' %}<span class="badge" style="background:rgba(239,68,68,.15);color:#fca5a5;border-color:rgba(239,68,68,.3)">hoch</span>
-                {% elif c.severity == 'mittel' %}<span class="badge" style="background:rgba(234,179,8,.15);color:#fde047;border-color:rgba(234,179,8,.3)">mittel</span>
-                {% else %}<span class="badge badge-neutral">niedrig</span>{% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}
-      <p class="text-muted">—</p>
-      {% endif %}
-    </div>
-
-    <div>
-      <strong style="font-size:.8rem">Grobe Phasenplanung</strong>
-      {% if phases %}
-      <div class="table-wrap" style="margin-top:.35rem">
-        <table>
-          <thead><tr><th>Phase</th><th>Beschreibung</th><th>Durchlaufzeit (Schätzung)</th></tr></thead>
-          <tbody>
-            {% for p in phases %}
-            <tr>
-              <td>{{ p.name }}</td>
-              <td style="font-size:.85rem">{{ p.description }}</td>
-              <td>{{ p.duration_estimate }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <p class="text-muted" style="font-size:.72rem;margin-top:.3rem">Reine Durchlaufzeiten je Phase, keine Kalenderdaten.</p>
-      {% else %}
-      <p class="text-muted">—</p>
-      {% endif %}
-    </div>
-
-    <div>
-      <strong style="font-size:.8rem">Empfehlung</strong>
-      <p style="margin-top:.25rem;white-space:pre-wrap">{{ idea.ai_recommendation or "—" }}</p>
-    </div>
-
-    <p class="text-muted" style="font-size:.7rem;border-top:1px solid var(--color-border);padding-top:.5rem">
-      KI-Vorbewertung von {{ idea.ai_assessed_at.strftime('%d.%m.%Y %H:%M') if idea.ai_assessed_at else "—" }}
-      · {{ idea.ai_provider }} / {{ idea.ai_model }} · ersetzt keine fachliche Prüfung.
-    </p>
-  </div>
+  {% include 'idea/_user_assessment.html' %}
+  <p class="text-muted" style="font-size:.7rem;border-top:1px solid var(--color-border);padding-top:.5rem;margin-top:1rem">
+    KI-Vorbewertung von {{ idea.ai_assessed_at.strftime('%d.%m.%Y %H:%M') if idea.ai_assessed_at else "—" }}
+    · {{ idea.ai_provider }} / {{ idea.ai_model }} · ersetzt keine fachliche Prüfung.
+  </p>
   {% endif %}
 </div>
 
@@ -528,6 +451,76 @@ document.querySelectorAll('.idea-assess-form').forEach(form => {
     if (st) st.style.display = 'block';
   });
 });
+(function() {
+  function reindex(tbody) {
+    tbody.querySelectorAll('tr').forEach((tr, i) => {
+      tr.querySelectorAll('input, select').forEach(el => {
+        const stem = el.getAttribute('data-name');
+        if (stem) el.name = stem + i;
+        else if (el.name) el.name = el.name.replace(/\d+$/, '') + i;
+      });
+    });
+  }
+  function addRow(tbody, tplId) {
+    const tpl = document.getElementById(tplId);
+    if (!tpl || !tbody) return;
+    tbody.appendChild(tpl.content.cloneNode(true));
+    reindex(tbody);
+  }
+  function fillRows(tbody, tplId, items, apply) {
+    tbody.innerHTML = '';
+    (items && items.length ? items : [{}]).forEach(item => {
+      addRow(tbody, tplId);
+      apply(tbody.lastElementChild, item || {});
+    });
+    reindex(tbody);
+  }
+  const chBody = document.getElementById('idea-ch-body');
+  const phBody = document.getElementById('idea-ph-body');
+  if (chBody) {
+    document.getElementById('idea-ch-add')?.addEventListener('click', () => addRow(chBody, 'idea-ch-tpl'));
+    chBody.addEventListener('click', e => {
+      if (!e.target.closest('.idea-row-del')) return;
+      if (chBody.querySelectorAll('tr').length > 1) e.target.closest('tr').remove();
+      reindex(chBody);
+    });
+  }
+  if (phBody) {
+    document.getElementById('idea-ph-add')?.addEventListener('click', () => addRow(phBody, 'idea-ph-tpl'));
+    phBody.addEventListener('click', e => {
+      if (!e.target.closest('.idea-row-del')) return;
+      if (phBody.querySelectorAll('tr').length > 1) e.target.closest('tr').remove();
+      reindex(phBody);
+    });
+  }
+  document.getElementById('idea-copy-ai')?.addEventListener('click', () => {
+    const el = document.getElementById('idea-ai-json');
+    if (!el) return;
+    const data = JSON.parse(el.textContent || '{}');
+    const set = (name, val) => {
+      const n = document.querySelector('[name="' + name + '"]');
+      if (n) n.value = val == null ? '' : val;
+    };
+    set('user_summary', data.summary);
+    set('user_internal_pt', data.internal_pt);
+    set('user_internal_pt_reasoning', data.internal_pt_reasoning);
+    set('user_external_cost', data.external_cost);
+    set('user_external_cost_reasoning', data.external_cost_reasoning);
+    set('user_recommendation', data.recommendation);
+    fillRows(chBody, 'idea-ch-tpl', data.challenges, (tr, c) => {
+      tr.querySelector('[data-name="ch_title_"]').value = c.title || '';
+      tr.querySelector('[data-name="ch_desc_"]').value = c.description || '';
+      tr.querySelector('[data-name="ch_likelihood_"]').value = c.likelihood || 'mittel';
+      tr.querySelector('[data-name="ch_severity_"]').value = c.severity || 'mittel';
+    });
+    fillRows(phBody, 'idea-ph-tpl', data.phases, (tr, p) => {
+      tr.querySelector('[data-name="ph_name_"]').value = p.name || '';
+      tr.querySelector('[data-name="ph_desc_"]').value = p.description || '';
+      tr.querySelector('[data-name="ph_duration_"]').value = p.duration_estimate || '';
+      tr.querySelector('[data-name="ph_pt_"]').value = p.internal_pt == null ? '' : p.internal_pt;
+    });
+  });
+})();
 (function() {
   const fmt = document.getElementById('idea-output-format');
   const wrap = document.getElementById('idea-cloud-image-wrap');

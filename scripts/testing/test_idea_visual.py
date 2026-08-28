@@ -199,6 +199,80 @@ def test_list_source_attachment_views_keeps_saved_files():
         assert views[1]["kind_label"] == "Word"
 
 
+def test_parse_duration_weeks():
+    from src.m16_idea import parse_duration_weeks
+
+    assert parse_duration_weeks("4 Wochen") == 4
+    assert parse_duration_weeks("2-3 Monate") == round(2.5 * 4.3, 2)
+    assert parse_duration_weeks("1 Monat") == round(4.3, 2)
+    assert parse_duration_weeks("") is None
+
+
+def test_effective_assessment_prefers_saved_user_fields():
+    from datetime import datetime, timezone
+    from src.m16_idea import effective_assessment, normalize_challenge
+
+    idea = ProjectIdea(
+        id=3,
+        idea_text="x",
+        ai_summary="KI-Text",
+        ai_internal_pt=100,
+        ai_challenges_json='[{"title":"Alt","description":"d","severity":"hoch"}]',
+        user_summary="User-Text",
+        user_internal_pt=80,
+        user_challenges_json='[{"title":"Neu","description":"angepasst","severity":"mittel","likelihood":"hoch"}]',
+        user_assessed_at=datetime.now(timezone.utc),
+    )
+    eff = effective_assessment(idea)
+    assert eff["saved"] is True
+    assert eff["summary"] == "User-Text"
+    assert eff["internal_pt"] == 80
+    assert eff["challenges"][0]["title"] == "Neu"
+    assert eff["challenges"][0]["likelihood"] == "hoch"
+
+    idea2 = ProjectIdea(id=4, idea_text="x", ai_summary="Nur KI", ai_internal_pt=10)
+    eff2 = effective_assessment(idea2)
+    assert eff2["saved"] is False
+    assert eff2["summary"] == "Nur KI"
+    assert normalize_challenge({"title": "R", "severity": "hoch"})["likelihood"] == "hoch"
+
+
+def test_html_report_risk_matrix_and_badges():
+    from src.m16_idea_visual import DeckContent, build_html_report
+
+    html = build_html_report(DeckContent(
+        title="Kreditoren",
+        summary_lines=["Kurz"],
+        challenges=[{
+            "title": "Schnittstellen",
+            "description": "SAP-MM Anbindung unsicher",
+            "severity": "hoch",
+            "likelihood": "mittel",
+        }],
+        phases_struct=[{
+            "name": "Analyse",
+            "description": "Ist-Prozess",
+            "duration_estimate": "2-3 Monate",
+            "duration_weeks": 10.75,
+            "internal_pt": 40,
+        }],
+        phase_details=[{
+            "title": "Analyse",
+            "bullets": ["Ist-Prozess"],
+            "parallel_note": "2-3 Monate",
+            "internal_pt": 40,
+        }],
+        source_label="Fachliche Einschätzung",
+    ))
+    assert "badge severity-hoch" in html
+    assert "badge like-mittel" in html
+    assert "risk-matrix" in html
+    assert "Schnittstellen" in html
+    assert "timeline" in html
+    assert "40 PT intern" in html
+    assert "Fachliche Einschätzung" in html
+
+
 if __name__ == "__main__":
     test_sanitize_removes_email()
     test_nfc_normalizes_decomposed_umlaut()
@@ -215,4 +289,7 @@ if __name__ == "__main__":
     test_html_report_has_nav_and_escapes()
     test_vertical_diagram_does_not_truncate_long_bullet()
     test_list_source_attachment_views_keeps_saved_files()
+    test_parse_duration_weeks()
+    test_effective_assessment_prefers_saved_user_fields()
+    test_html_report_risk_matrix_and_badges()
     print("ok")
