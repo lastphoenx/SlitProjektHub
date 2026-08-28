@@ -149,70 +149,86 @@
   <p class="text-muted">Nach der KI-Vorbewertung können Berichte, Folien und Bilder erzeugt werden.</p>
   {% else %}
   {% set has_html = html_path or idea.html_path %}
-  <div id="visual-results" style="display:grid;gap:.75rem;margin-bottom:1.25rem">
+  <div id="visual-results" class="visual-results-grid">
     <h3 style="font-size:.82rem;font-weight:700;margin:0">Erzeugte Visualisierung</h3>
     {% if visual_ok and not has_html and not idea.deck_path and not idea.docx_path %}
-    <p class="text-muted" style="font-size:.78rem;margin:0">Erzeugt — falls die Karte fehlt, Seite neu laden.</p>
+    <p class="text-muted" style="font-size:.78rem;margin:0;grid-column:1/-1">Erzeugt — falls die Karte fehlt, Seite neu laden.</p>
     {% endif %}
+
     {% if has_html %}
-    <div class="result-card result-card-clickable"
-         data-hx-preview="/idea/{{ idea.id }}/preview-html"
-         onclick="ideaOpenResult(this, event)"
-         title="Vorschau öffnen">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
+    <div class="result-card visual-pane">
+      <div class="visual-pane-head">
         <strong style="font-size:.95rem">HTML-Bericht</strong>
-        <div class="flex items-center gap-1" onclick="event.stopPropagation()">
+        <div class="flex items-center gap-1">
           {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-html' %}
           {% set inline_url = '/idea/report/' ~ idea.id %}
           {% set download_url = '/idea/report/' ~ idea.id ~ '?disposition=attachment' %}
           {% include 'partials/_media_actions.html' %}
         </div>
       </div>
-      <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">Vorschau · Vollansicht (neuer Tab) · HTML-Download</p>
-      <iframe class="result-thumb" src="/idea/report/{{ idea.id }}" title="HTML-Bericht Vorschau" tabindex="-1"></iframe>
+      <div class="visual-pane-body">
+        <iframe src="/idea/report/{{ idea.id }}" title="HTML-Bericht Vorschau"></iframe>
+      </div>
     </div>
     {% endif %}
 
     {% if idea.deck_path %}
-    <div class="result-card result-card-clickable"
+    <div class="result-card result-card-clickable visual-pane"
          data-hx-preview="/idea/{{ idea.id }}/preview-deck"
          onclick="ideaOpenResult(this, event)"
          title="Vorschau öffnen">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
+      <div class="visual-pane-head" onclick="event.stopPropagation()">
         <strong style="font-size:.95rem">PowerPoint</strong>
-        <div class="flex items-center gap-1" onclick="event.stopPropagation()">
+        <div class="flex items-center gap-1">
           {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-deck' %}
           {% set inline_url = '/idea/deck-preview/' ~ idea.id ~ '?disposition=inline' if idea.deck_preview_path else None %}
           {% set download_url = '/idea/deck/' ~ idea.id %}
           {% include 'partials/_media_actions.html' %}
         </div>
       </div>
-      {% if idea.deck_preview_path %}
-      <img class="result-thumb" src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="PPTX" />
-      {% endif %}
+      <div class="visual-pane-body">
+        {% if idea.deck_preview_path %}
+        <img src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="PPTX" />
+        {% else %}
+        <p class="text-muted" style="padding:1rem">Keine Folien-Vorschau — PPTX herunterladen.</p>
+        {% endif %}
+      </div>
       {% if may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="margin-top:.35rem" onsubmit="return confirm('Bericht/PPTX löschen?')" onclick="event.stopPropagation()">
+      <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="margin-top:.4rem;flex-shrink:0" onsubmit="return confirm('Bericht/PPTX löschen?')" onclick="event.stopPropagation()">
         <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
       </form>
       {% endif %}
     </div>
-    {% elif has_html and may_edit %}
-    <form method="post" action="/idea/{{ idea.id }}/clear-deck" onsubmit="return confirm('HTML-Bericht löschen?')">
-      <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">HTML-Bericht löschen</button>
-    </form>
     {% endif %}
 
     {% if idea.docx_path %}
-    <div style="padding:.85rem 1rem;border:1px solid var(--color-border);border-radius:.6rem">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
+    <div class="result-card visual-pane">
+      <div class="visual-pane-head">
         <strong style="font-size:.95rem">Word-Bericht</strong>
-        {% set preview_hx_get = None %}
-        {% set inline_url = None %}
-        {% set download_url = '/idea/docx/' ~ idea.id %}
-        {% include 'partials/_media_actions.html' %}
+        <div class="flex items-center gap-1">
+          {% set preview_hx_get = None %}
+          {% set inline_url = None %}
+          {% set download_url = '/idea/docx/' ~ idea.id %}
+          {% include 'partials/_media_actions.html' %}
+        </div>
+      </div>
+      <div class="visual-pane-body">
+        <div class="docx-sheet">
+          <h4>{{ idea.ai_project_name or idea.title or "Word-Bericht" }}</h4>
+          <p>{{ (user_defaults.summary if user_defaults and user_defaults.summary else idea.ai_summary) or "Kein Fliesstext — Datei herunterladen." }}</p>
+          {% if phases %}
+          <p style="font-weight:700;margin:.8rem 0 .3rem">Phasen</p>
+          <ul>
+            {% for p in phases[:6] %}
+            <li>{{ p.name }}{% if p.duration_estimate %} <span style="color:#64748b">({{ p.duration_estimate }})</span>{% endif %}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          <p style="color:#64748b;margin-top:1rem">Kein natives Word-Preview im Browser — Download für die .docx-Datei.</p>
+        </div>
       </div>
       {% if may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/clear-docx" style="margin-top:.35rem" onsubmit="return confirm('Word-Bericht löschen?')">
+      <form method="post" action="/idea/{{ idea.id }}/clear-docx" style="margin-top:.4rem;flex-shrink:0" onsubmit="return confirm('Word-Bericht löschen?')">
         <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
       </form>
       {% endif %}
@@ -220,30 +236,34 @@
     {% endif %}
 
     {% if idea.image_path and idea.image_source in ['dalle', 'diagram'] %}
-    <div class="result-card result-card-clickable"
+    <div class="result-card result-card-clickable visual-pane"
          data-hx-preview="/idea/{{ idea.id }}/preview-image"
          onclick="ideaOpenResult(this, event)"
          title="Vorschau öffnen">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
+      <div class="visual-pane-head" onclick="event.stopPropagation()">
         <strong style="font-size:.95rem">PNG {% if idea.image_source == 'dalle' %}(Cloud){% else %}(lokal){% endif %}</strong>
-        <div class="flex items-center gap-1" onclick="event.stopPropagation()">
+        <div class="flex items-center gap-1">
         {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-image' %}
         {% set inline_url = '/idea/image/' ~ idea.id ~ '?disposition=inline' %}
         {% set download_url = '/idea/image/' ~ idea.id %}
         {% include 'partials/_media_actions.html' %}
         </div>
       </div>
-      <img class="result-thumb" src="/idea/image/{{ idea.id }}?disposition=inline" alt="PNG" />
-      {% if idea.image_source == 'dalle' and may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Illustration löschen?')" onclick="event.stopPropagation()">
-        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
-      </form>
-      {% elif idea.image_source == 'diagram' and may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Diagramm löschen?')" onclick="event.stopPropagation()">
+      <div class="visual-pane-body">
+        <img src="/idea/image/{{ idea.id }}?disposition=inline" alt="PNG" />
+      </div>
+      {% if may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.4rem;flex-shrink:0" onsubmit="return confirm('Illustration löschen?')" onclick="event.stopPropagation()">
         <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
       </form>
       {% endif %}
     </div>
+    {% endif %}
+
+    {% if has_html and not idea.deck_path and may_edit %}
+    <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="grid-column:1/-1" onsubmit="return confirm('HTML-Bericht löschen?')">
+      <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">HTML-Bericht löschen</button>
+    </form>
     {% endif %}
   </div>
 
