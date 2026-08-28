@@ -15,18 +15,18 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, FileResp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from backend.app.jinja_env import BACKEND_DIR, templates
+# ── Paths (vor jinja_env / src — WorkingDirectory kann /backend sein) ──
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+os.chdir(ROOT)
+
+from backend.app.jinja_env import BACKEND_DIR, templates  # noqa: E402
 
 # ── Logging ────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s [%(name)s] %(message)s",
 )
-
-# ── Paths ──────────────────────────────────────────────────────────────────
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-os.chdir(ROOT)  # DB-Pfad Referenz
 
 # ── Src imports ────────────────────────────────────────────────────────────
 from src.m07_roles import list_roles_df, load_role, upsert_role, soft_delete_role, function_suggestions
