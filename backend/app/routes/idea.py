@@ -345,7 +345,7 @@ async def idea_assess(
     )
     if job.get("already_running"):
         return RedirectResponse(url=f"/idea/{idea_id}?assess_error=already_running", status_code=303)
-    return RedirectResponse(url=f"/idea/{idea_id}?job=1#idea-assessment", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}?job=1#idea-job-banner", status_code=303)
 
 
 def _opt_float_field(v: str | None) -> float | None:
@@ -533,7 +533,7 @@ async def idea_generate_visual(
     )
     if job.get("already_running"):
         return RedirectResponse(url=f"/idea/{idea_id}?visual_error=already_running", status_code=303)
-    return RedirectResponse(url=f"/idea/{idea_id}?job=1#visual-results", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}?job=1#idea-job-banner", status_code=303)
 
 
 @router.post("/idea/{idea_id}/generate-deck", response_class=HTMLResponse)

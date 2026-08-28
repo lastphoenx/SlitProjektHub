@@ -461,6 +461,12 @@
     </div>
     {% endif %}
     <div class="span-2">
+    {% if idea.user_assessed_at %}
+    <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.78rem;cursor:pointer;margin-bottom:.6rem">
+      <input type="checkbox" id="idea-overwrite-user" style="margin-top:.15rem" />
+      <span>Nach dieser Bewertung <strong>meine gespeicherte Einschätzung</strong> durch die neuen KI-Werte ersetzen (sonst bleibt sie unverändert).</span>
+    </label>
+    {% endif %}
     <button type="submit" class="btn btn-primary idea-assess-btn">
       <span class="idea-btn-idle">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</span>
       <span class="idea-btn-busy" hidden>
@@ -530,37 +536,26 @@ function ideaSubmitAssess(form, overwrite) {
   if (typeof form.requestSubmit === 'function') form.requestSubmit();
   else form.submit();
 }
-function ideaShowAssessOverwriteModal(form) {
-  ideaShowModal(ideaModal(
-    'Erneut bewerten',
-    '<p style="color:var(--color-text-muted);margin:0 0 .75rem">Ihre Einschätzung ist gespeichert und gilt für Reports. Die neue KI-Vorbewertung ändert nur die linke Spalte — es sei denn, Sie setzen die Einschätzung bewusst zurück.</p>' +
-    '<p style="color:#fca5a5;font-size:.82rem;margin:0">Zurücksetzen überschreibt Ihre gespeicherten Werte mit den <strong>neuen</strong> KI-Werten. Das lässt sich nicht rückgängig machen.</p>',
-    '<button type="button" class="btn btn-secondary" data-idea-modal-cancel>Abbrechen</button>' +
-    '<button type="button" class="btn btn-primary" id="idea-assess-keep">Nur KI neu bewerten</button>' +
-    '<button type="button" class="btn btn-danger" id="idea-assess-replace">KI neu bewerten und Einschätzung ersetzen</button>'
-  ));
-  document.getElementById('idea-assess-keep').addEventListener('click', function () {
-    ideaSubmitAssess(form, false);
-  });
-  document.getElementById('idea-assess-replace').addEventListener('click', function () {
-    ideaShowModal(ideaModal(
-      'Einschätzung wirklich ersetzen?',
-      '<p style="color:#fca5a5;margin:0">Nach der KI-Bewertung wird Ihre gespeicherte Einschätzung durch die neuen KI-Werte überschrieben. Die bisherigen Angaben gehen verloren. Abbrechen hält alles wie bisher.</p>',
-      '<button type="button" class="btn btn-secondary" data-idea-modal-cancel>Abbrechen</button>' +
-      '<button type="button" class="btn btn-danger" id="idea-assess-replace-go">Ja, ersetzen und bewerten</button>'
-    ));
-    document.getElementById('idea-assess-replace-go').addEventListener('click', function () {
-      ideaSubmitAssess(form, true);
-    });
-  });
-}
 document.querySelectorAll('.idea-assess-form').forEach(form => {
   form.addEventListener('submit', function (e) {
     if (form.getAttribute('data-user-confirm-done') === '1') return;
-    if (form.getAttribute('data-has-user') !== '1') return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    ideaShowAssessOverwriteModal(form);
+    const box = document.getElementById('idea-overwrite-user');
+    const hid = form.querySelector('[name="overwrite_user"]');
+    if (box && box.checked) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      ideaShowModal(ideaModal(
+        'Einschätzung wirklich ersetzen?',
+        '<p style="color:#fca5a5;margin:0">Nach der KI-Bewertung wird Ihre gespeicherte Einschätzung durch die neuen KI-Werte überschrieben. Die bisherigen Angaben gehen verloren. Abbrechen hält alles wie bisher — die KI läuft dann nicht.</p>',
+        '<button type="button" class="btn btn-secondary" data-idea-modal-cancel>Abbrechen</button>' +
+        '<button type="button" class="btn btn-danger" id="idea-assess-replace-go">Ja, ersetzen und bewerten</button>'
+      ));
+      document.getElementById('idea-assess-replace-go').addEventListener('click', function () {
+        ideaSubmitAssess(form, true);
+      });
+      return;
+    }
+    if (hid) hid.value = '0';
   }, true);
 });
 document.getElementById('idea-reset-ai')?.addEventListener('click', function () {
@@ -648,9 +643,6 @@ function ideaBindBusyForm(form, opts) {
   if (!form) return;
   form.addEventListener('invalid', function () { ideaSetAllKiBusy(false); }, true);
   form.addEventListener('submit', function (e) {
-    if (form.getAttribute('data-user-confirm-done') !== '1' && form.getAttribute('data-has-user') === '1') {
-      return;
-    }
     if (ideaKiBusy() && form.getAttribute('data-busy') !== '1') {
       e.preventDefault();
       return;
