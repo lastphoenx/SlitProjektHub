@@ -141,8 +141,15 @@
   </h2>
   <p class="text-muted" style="font-size:.78rem;margin-bottom:.75rem">
     Input-KI liest Unterlagen; Ausgabe-KI strukturiert Folien/Berichte. Cloud-PNG nutzt OpenAI Bildmodell (gefiltert).
-    {% if idea.user_assessed_at %} Der Report verwendet <strong>Ihre gespeicherte Einschätzung</strong>.
-    {% else %} Der Report verwendet die <strong>KI-Defaults</strong>, solange Sie keine Einschätzung speichern.{% endif %}
+    {% if idea.user_assessed_at and not visual_meta.prefer_ai_default %}
+      Der Report verwendet <strong>Ihre Einschätzung</strong> ({{ visual_meta.user_at }}), nicht die KI-Vorbewertung
+      {% if visual_meta.ai_at %}({{ visual_meta.ai_at }}){% endif %}.
+    {% elif idea.user_assessed_at and visual_meta.user_older_than_ai %}
+      Die KI-Vorbewertung ({{ visual_meta.ai_at }}) ist neuer als Ihre Einschätzung ({{ visual_meta.user_at }}).
+      Beim nächsten Generieren ist «Aktuelle KI verwenden» vorausgewählt.
+    {% else %}
+      Der Report verwendet die <strong>KI-Vorbewertung</strong>{% if visual_meta.ai_at %} ({{ visual_meta.ai_at }}){% endif %}, solange Sie keine Einschätzung speichern.
+    {% endif %}
   </p>
 
   {% if visual_ok %}
@@ -181,13 +188,21 @@
         <strong style="font-size:.95rem">HTML-Bericht</strong>
         <div class="flex items-center gap-1">
           {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-html' %}
-          {% set inline_url = '/idea/report/' ~ idea.id %}
-          {% set download_url = '/idea/report/' ~ idea.id ~ '?disposition=attachment' %}
+          {% set inline_url = report_urls.inline %}
+          {% set download_url = report_urls.download %}
           {% include 'partials/_media_actions.html' %}
         </div>
       </div>
+      <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 .15rem">
+        Erzeugt {{ visual_meta.html_at or "—" }}
+        {% if visual_meta.html_older_than_ai %}
+        · <span style="color:#fcd34d">älter als KI-Vorbewertung ({{ visual_meta.ai_at }})</span>
+        {% elif visual_meta.html_older_than_user %}
+        · <span style="color:#fcd34d">älter als Ihre Einschätzung ({{ visual_meta.user_at }})</span>
+        {% endif %}
+      </p>
       <div class="visual-pane-body">
-        <iframe src="/idea/report/{{ idea.id }}" title="HTML-Bericht Vorschau"></iframe>
+        <iframe src="{{ report_urls.inline }}" title="HTML-Bericht Vorschau"></iframe>
       </div>
     </div>
     {% endif %}
@@ -206,6 +221,9 @@
           {% include 'partials/_media_actions.html' %}
         </div>
       </div>
+      {% if visual_meta.deck_at %}
+      <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0">Erzeugt {{ visual_meta.deck_at }}</p>
+      {% endif %}
       <div class="visual-pane-body">
         {% if idea.deck_preview_path %}
         <img src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="PPTX" />
@@ -232,6 +250,9 @@
           {% include 'partials/_media_actions.html' %}
         </div>
       </div>
+      {% if visual_meta.docx_at %}
+      <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0">Erzeugt {{ visual_meta.docx_at }}</p>
+      {% endif %}
       <div class="visual-pane-body">
         <div class="docx-sheet">
           <h4>{{ idea.ai_project_name or idea.title or "Word-Bericht" }}</h4>
@@ -301,6 +322,19 @@
         <option value="{{ key }}">{{ label }}</option>
         {% endfor %}
       </select>
+    </div>
+    <div class="span-2" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.78rem;cursor:pointer">
+        <input type="checkbox" name="prefer_ai" value="1" style="margin-top:.15rem"
+          {% if visual_meta.prefer_ai_default %}checked{% endif %} />
+        <span>
+          <strong>Aktuelle KI-Vorbewertung verwenden</strong>
+          {% if visual_meta.ai_at %}({{ visual_meta.ai_at }}){% endif %}
+          statt der gespeicherten Einschätzung
+          {% if visual_meta.user_at %}({{ visual_meta.user_at }}){% endif %}.
+          Sonst bleibt der Bericht auf den alten User-Texten.
+        </span>
+      </label>
     </div>
     {% set form_id = 'idea-visual' %}
     {% set llm_role = 'input' %}
@@ -482,7 +516,7 @@
   {% else %}
   {% include 'idea/_user_assessment.html' %}
   <p class="text-muted" style="font-size:.7rem;border-top:1px solid var(--color-border);padding-top:.5rem;margin-top:1rem">
-    KI-Vorbewertung von {{ idea.ai_assessed_at.strftime('%d.%m.%Y %H:%M') if idea.ai_assessed_at else "—" }}
+    KI-Vorbewertung von {{ idea.ai_assessed_at|idea_dt if idea.ai_assessed_at else "—" }}
     · {{ idea.ai_provider }} / {{ idea.ai_model }} · ersetzt keine fachliche Prüfung.
   </p>
   {% endif %}

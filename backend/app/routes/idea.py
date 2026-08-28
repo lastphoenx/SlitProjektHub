@@ -31,6 +31,7 @@ from src.m16_idea import (
     reset_user_assessment_from_ai,
     form_defaults_from_idea,
     ai_defaults_from_idea,
+    visual_source_meta,
 )
 from src.m16_idea_jobs import (
     consume_done_job,
@@ -74,6 +75,26 @@ def _username(request: Request) -> str:
     if validate_session_token(token, max_age_seconds=s.auth_session_timeout_minutes * 60):
         return session_username(token) or ""
     return ""
+
+
+def _visual_meta(idea) -> dict:
+    return visual_source_meta(idea)
+
+
+def _report_urls(idea) -> dict[str, str]:
+    v = _visual_meta(idea).get("report_v") or 0
+    base = f"/idea/report/{idea.id}"
+    return {
+        "inline": f"{base}?v={v}",
+        "download": f"{base}?disposition=attachment&v={v}",
+    }
+
+
+def _no_store(resp):
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
 
 
 def _may_edit_idea(idea, user_id: int | None, who: str) -> bool:
@@ -276,6 +297,8 @@ async def idea_detail(request: Request, idea_id: int):
             "html_path": getattr(idea, "html_path", None),
             "ki_job": ki_job,
             "user_reset_ok": qp.get("user_reset_ok"),
+            "visual_meta": _visual_meta(idea),
+            "report_urls": _report_urls(idea),
         },
     )
 
@@ -479,6 +502,7 @@ async def idea_generate_visual(
     image_model: str = Form(DEFAULT_OPENAI_IMAGE_MODEL),
     cloud_confirm: str = Form(""),
     vision_cloud_confirm: str = Form(""),
+    prefer_ai: str = Form(""),
     attachments: list[UploadFile] = File(default=[]),
 ):
     idea = get_idea(idea_id)
@@ -522,6 +546,7 @@ async def idea_generate_visual(
             input_llm_provider=ip,
             input_llm_model=im,
             source_tasks=src,
+            prefer_user=prefer_ai != "1",
         )
 
     job = enqueue_idea_job(
@@ -734,7 +759,12 @@ async def idea_preview_deck(request: Request, idea_id: int):
         raise HTTPException(404)
     return templates.TemplateResponse(
         "idea/_preview_deck.html",
-        {"request": request, "idea": idea},
+        {
+            "request": request,
+            "idea": idea,
+            "visual_meta": _visual_meta(idea),
+            "report_urls": _report_urls(idea),
+        },
     )
 
 
@@ -745,7 +775,12 @@ async def idea_preview_html(request: Request, idea_id: int):
         raise HTTPException(404, "Kein HTML-Bericht")
     return templates.TemplateResponse(
         "idea/_preview_html.html",
-        {"request": request, "idea": idea},
+        {
+            "request": request,
+            "idea": idea,
+            "visual_meta": _visual_meta(idea),
+            "report_urls": _report_urls(idea),
+        },
     )
 
 
@@ -840,7 +875,7 @@ async def idea_deck_download(idea_id: int):
 
 
 @router.get("/idea/report/{idea_id}")
-async def idea_html_report(idea_id: int, disposition: str = "inline"):
+async def idea_html_report(idea_id: int, disposition: str = "inline", v: str = ""):
     idea = get_idea(idea_id)
     html_name = getattr(idea, "html_path", None) if idea else None
     if not idea or not html_name:
@@ -850,14 +885,16 @@ async def idea_html_report(idea_id: int, disposition: str = "inline"):
         raise HTTPException(404, "Kein HTML-Bericht")
     title = (idea.ai_project_name or idea.title or f"Projektidee_{idea_id}").replace("/", "-")
     disp = "inline" if disposition == "inline" else "attachment"
+    generated = getattr(idea, "html_generated_at", None)
+    stamp = generated.strftime("%Y%m%d_%H%M") if generated else ""
+    fname = f"{title[:50]}_{stamp}.html" if stamp else f"{title[:60]}.html"
     resp = FileResponse(
         path,
         media_type="text/html",
-        filename=f"{title[:60]}.html",
+        filename=fname,
         content_disposition_type=disp,
     )
-    resp.headers["X-Content-Type-Options"] = "nosniff"
-    return resp
+    return _no_store(resp)
 
 
 @router.get("/idea/docx/{idea_id}")

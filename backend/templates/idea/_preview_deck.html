@@ -3,11 +3,14 @@
     <div class="modal-header" style="flex-shrink:0">
       <div>
         <h2 class="modal-title" style="font-size:.95rem">Portfolio-Folie — {{ idea.ai_project_name or idea.title or 'Idee' }}</h2>
-        <p class="text-muted" style="font-size:.72rem">Vorschau Titelfolie · PPTX editierbar</p>
+        <p class="text-muted" style="font-size:.72rem">
+          Vorschau Titelfolie · PPTX editierbar
+          {% if visual_meta.deck_at %} · erzeugt {{ visual_meta.deck_at }}{% endif %}
+        </p>
       </div>
       <div style="display:flex;gap:.35rem">
         {% if idea.html_path %}
-        <a class="btn btn-secondary btn-sm" href="/idea/report/{{ idea.id }}" target="_blank" rel="noopener">HTML-Bericht</a>
+        <a class="btn btn-secondary btn-sm" href="{{ report_urls.inline }}" target="_blank" rel="noopener">HTML-Bericht</a>
         {% endif %}
         {% if idea.deck_preview_path %}
         <a class="btn btn-secondary btn-sm" href="/idea/deck-preview/{{ idea.id }}?disposition=inline" target="_blank" rel="noopener">Vollansicht</a>

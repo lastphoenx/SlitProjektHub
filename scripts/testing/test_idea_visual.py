@@ -236,6 +236,61 @@ def test_effective_assessment_prefers_saved_user_fields():
     assert eff2["summary"] == "Nur KI"
     assert normalize_challenge({"title": "R", "severity": "hoch"})["likelihood"] == "hoch"
 
+    ki_only = effective_assessment(idea, prefer_user=False)
+    assert ki_only["saved"] is False
+    assert ki_only["summary"] == "KI-Text"
+    assert ki_only["challenges"][0]["title"] == "Alt"
+
+
+def test_visual_source_meta_flags_stale_html():
+    from datetime import datetime, timedelta, timezone
+    from src.m16_idea import visual_source_meta
+
+    t0 = datetime(2026, 8, 28, 14, 28, tzinfo=timezone.utc)
+    t1 = datetime(2026, 8, 28, 15, 28, tzinfo=timezone.utc)
+    idea = ProjectIdea(
+        id=5,
+        idea_text="x",
+        user_assessed_at=t0,
+        ai_assessed_at=t1,
+        html_generated_at=t0 + timedelta(minutes=4),
+    )
+    meta = visual_source_meta(idea)
+    assert meta["user_at"] == "28.08.2026 14:28"
+    assert meta["ai_at"] == "28.08.2026 15:28"
+    assert meta["html_at"] == "28.08.2026 14:32"
+    assert meta["user_older_than_ai"] is True
+    assert meta["html_older_than_ai"] is True
+    assert meta["prefer_ai_default"] is True
+
+
+def test_deck_content_subtitle_has_generation_time():
+    from datetime import datetime, timezone
+    from src.m16_idea_visual import deck_content_from_idea
+
+    idea = ProjectIdea(
+        id=6,
+        idea_text="x",
+        status="bewertet",
+        title="Kreditoren",
+        fachabteilung="Team Kreditoren",
+        ai_project_name="Digitalisierung Kreditorenworkflow",
+        ai_summary="Neuer KI-Text zur SAP-Integration-Komplexität.",
+        ai_assessed_at=datetime(2026, 8, 28, 15, 28, tzinfo=timezone.utc),
+        user_summary="Alter User-Text zur SAP-MM-Integration.",
+        user_assessed_at=datetime(2026, 8, 28, 14, 28, tzinfo=timezone.utc),
+    )
+    user_deck = deck_content_from_idea(idea, prefer_user=True)
+    assert "SAP-MM-Integration" in user_deck.summary_lines[0] or "Alter User-Text" in user_deck.summary_lines[0]
+    assert "14:28" in user_deck.subtitle
+    assert "Bericht " in user_deck.subtitle
+    assert ":" in user_deck.subtitle.split("Bericht ")[-1]
+
+    ki_deck = deck_content_from_idea(idea, prefer_user=False)
+    assert "Neuer KI-Text" in ki_deck.summary_lines[0]
+    assert "15:28" in ki_deck.subtitle
+    assert "KI-Vorbewertung" in ki_deck.source_label
+
 
 def test_html_report_risk_matrix_and_badges():
     from src.m16_idea_visual import DeckContent, build_html_report
@@ -291,5 +346,7 @@ if __name__ == "__main__":
     test_list_source_attachment_views_keeps_saved_files()
     test_parse_duration_weeks()
     test_effective_assessment_prefers_saved_user_fields()
+    test_visual_source_meta_flags_stale_html()
+    test_deck_content_subtitle_has_generation_time()
     test_html_report_risk_matrix_and_badges()
     print("ok")
