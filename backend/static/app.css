@@ -81,12 +81,77 @@ body {
 
 .content { padding: 1.5rem 2rem; overflow-y: auto; flex: 1; }
 
-.page-wide { width: 100%; max-width: 1680px; }
+.page-wide { width: 100%; max-width: none; }
 .page-wide .page-title { font-size: 1.5rem; }
 .page-wide .form-input,
 .page-wide .form-select,
 .page-wide .form-textarea { font-size: 0.95rem; }
 .page-wide .form-label { font-size: 0.78rem; }
+
+.visual-results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 1rem;
+  align-items: stretch;
+  margin-bottom: 1.25rem;
+}
+.visual-results-grid > h3 {
+  grid-column: 1 / -1;
+}
+.visual-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: min(78vh, 900px);
+  height: min(78vh, 900px);
+  padding: 0.7rem 0.75rem 0.75rem;
+}
+.visual-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.visual-pane-body {
+  flex: 1;
+  min-height: 0;
+  margin-top: 0.55rem;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+}
+.visual-pane-body iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+  pointer-events: auto;
+}
+.visual-pane-body img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  object-position: top;
+  background: #fff;
+}
+.docx-sheet {
+  color: #1e293b;
+  padding: 1.25rem 1.35rem 1.75rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.docx-sheet h4 {
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+  color: #1e3a5f;
+}
+.docx-sheet p { margin: 0 0 0.65rem; }
+.docx-sheet ul { margin: 0; padding-left: 1.1rem; }
+.docx-sheet li { margin: 0.2rem 0; }
 
 .idea-form-grid {
   display: grid;
