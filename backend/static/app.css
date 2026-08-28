@@ -241,7 +241,7 @@ body {
   animation: idea-pulse 1.2s ease-in-out infinite;
 }
 .idea-busy-banner {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 0.5rem;
   padding: 0.55rem 0.7rem;
@@ -251,10 +251,17 @@ body {
   color: #fde047;
   font-size: 0.82rem;
 }
+.idea-busy-banner:not([hidden]) {
+  display: flex;
+}
 .idea-busy-banner.is-error {
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.4);
   color: #fca5a5;
+}
+.badge[hidden],
+.idea-run-badge[hidden] {
+  display: none !important;
 }
 .idea-confirm-actions {
   display: flex;

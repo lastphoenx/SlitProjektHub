@@ -9,7 +9,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
   <link rel="shortcut icon" href="/static/favicon.ico" />
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css?v={{ static_v }}" />
   <!-- Inject KI settings before Alpine loads -->
   <script>window.KI = {{ _ki_global_json() | safe }};</script>
   <!-- HTMX: Server-driven partial updates -->
