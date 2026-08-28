@@ -23,6 +23,7 @@ from src.m16_idea import (
     get_idea,
     idea_source_attachments_dir,
     list_ideas,
+    list_source_attachment_views,
     remove_source_attachment,
     soft_delete_idea,
     update_idea_intake,
@@ -83,6 +84,25 @@ def _require_may_edit(request: Request, idea) -> None:
 
 def _idea_images_dir() -> Path:
     return idea_images_dir()
+
+
+async def _ingest_attachment_uploads(idea_id: int, attachments: list[UploadFile]) -> str | None:
+    """Speichert neue Unterlagen. Gibt Fehlercode oder None zurück."""
+    named = [f for f in attachments if f and f.filename]
+    if not named:
+        return None
+    att_dir = idea_source_attachments_dir()
+    bundles = []
+    for f in named:
+        data = await f.read()
+        err, bundle = process_upload_bytes(f.filename, data, att_dir)
+        if err:
+            return err
+        if bundle:
+            bundles.append(bundle)
+    if bundles:
+        return append_source_attachments(idea_id, bundles)
+    return None
 
 
 @router.get("/idea", response_class=HTMLResponse)
@@ -195,16 +215,7 @@ async def idea_detail(request: Request, idea_id: int):
     settings = load_user_settings()
     may_edit = _may_edit_idea(idea, user_id, who)
     qp = request.query_params
-    import json
-
-    source_attachments: list = []
-    if idea.source_attachments_json:
-        try:
-            raw_att = json.loads(idea.source_attachments_json)
-            if isinstance(raw_att, list):
-                source_attachments = raw_att
-        except json.JSONDecodeError:
-            pass
+    source_attachments: list = list_source_attachment_views(idea)
     assess_defaults = idea_assess_provider_defaults(settings)
     return templates.TemplateResponse(
         "idea/detail.html",
@@ -238,6 +249,7 @@ async def idea_detail(request: Request, idea_id: int):
             "assess_tasks": IDEA_ASSESS_TASKS,
             "attach_error": qp.get("attach_error"),
             "max_attachments": MAX_ATTACHMENTS,
+            "html_path": getattr(idea, "html_path", None),
         },
     )
 
@@ -256,10 +268,16 @@ async def idea_assess(
     assess_tasks: list[str] = Form(default=[]),
     cloud_confirm: str = Form(""),
     vision_cloud_confirm: str = Form(""),
+    attachments: list[UploadFile] = File(default=[]),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
+    _require_may_edit(request, idea)
+    ingest_err = await _ingest_attachment_uploads(idea_id, attachments)
+    if ingest_err:
+        return RedirectResponse(url=f"/idea/{idea_id}?attach_error={ingest_err}#idea-attachments", status_code=303)
+    idea = get_idea(idea_id) or idea
     settings = load_user_settings()
     dp, dm = idea_assess_provider_defaults(settings)
     ip, im = resolve_visual_llm(input_llm_provider, input_llm_model, dp, dm)
@@ -301,22 +319,10 @@ async def idea_add_source_attachments(
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
     _require_may_edit(request, idea)
-    att_dir = idea_source_attachments_dir()
-    bundles = []
-    for f in attachments:
-        if not f.filename:
-            continue
-        data = await f.read()
-        err, bundle = process_upload_bytes(f.filename, data, att_dir)
-        if err:
-            return RedirectResponse(url=f"/idea/{idea_id}?attach_error={err}", status_code=303)
-        if bundle:
-            bundles.append(bundle)
-    if bundles:
-        err = append_source_attachments(idea_id, bundles)
-        if err:
-            return RedirectResponse(url=f"/idea/{idea_id}?attach_error={err}", status_code=303)
-    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+    ingest_err = await _ingest_attachment_uploads(idea_id, attachments)
+    if ingest_err:
+        return RedirectResponse(url=f"/idea/{idea_id}?attach_error={ingest_err}#idea-attachments", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}#idea-attachments", status_code=303)
 
 
 @router.post("/idea/{idea_id}/delete-source-attachment", response_class=HTMLResponse)
@@ -330,8 +336,8 @@ async def idea_delete_source_attachment(
         raise HTTPException(404, "Idee nicht gefunden")
     _require_may_edit(request, idea)
     if not remove_source_attachment(idea_id, att_path):
-        return RedirectResponse(url=f"/idea/{idea_id}?attach_error=not_found", status_code=303)
-    return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
+        return RedirectResponse(url=f"/idea/{idea_id}?attach_error=not_found#idea-attachments", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}#idea-attachments", status_code=303)
 
 
 @router.post("/idea/{idea_id}/generate-visual", response_class=HTMLResponse)
@@ -350,11 +356,16 @@ async def idea_generate_visual(
     image_model: str = Form(DEFAULT_OPENAI_IMAGE_MODEL),
     cloud_confirm: str = Form(""),
     vision_cloud_confirm: str = Form(""),
+    attachments: list[UploadFile] = File(default=[]),
 ):
     idea = get_idea(idea_id)
     if not idea or idea.is_deleted:
         raise HTTPException(404, "Idee nicht gefunden")
     _require_may_edit(request, idea)
+    ingest_err = await _ingest_attachment_uploads(idea_id, attachments)
+    if ingest_err:
+        return RedirectResponse(url=f"/idea/{idea_id}?attach_error={ingest_err}#idea-attachments", status_code=303)
+    idea = get_idea(idea_id) or idea
     if idea.status != "bewertet":
         return RedirectResponse(url=f"/idea/{idea_id}?visual_error=not_assessed", status_code=303)
     fmt = (output_format or "").strip().lower()
@@ -389,7 +400,7 @@ async def idea_generate_visual(
     )
     if not obj:
         return RedirectResponse(url=f"/idea/{idea_id}?visual_error={err or 'failed'}", status_code=303)
-    return RedirectResponse(url=f"/idea/{idea_id}?visual_ok=1", status_code=303)
+    return RedirectResponse(url=f"/idea/{idea_id}?visual_ok=1#visual-results", status_code=303)
 
 
 @router.post("/idea/{idea_id}/generate-deck", response_class=HTMLResponse)
@@ -594,17 +605,55 @@ async def idea_preview_deck(request: Request, idea_id: int):
     )
 
 
-@router.get("/idea/{idea_id}/source-file/{att_name}")
-async def idea_source_file(idea_id: int, att_name: str):
+@router.get("/idea/{idea_id}/preview-html", response_class=HTMLResponse)
+async def idea_preview_html(request: Request, idea_id: int):
     idea = get_idea(idea_id)
-    if not idea or not idea.source_attachments_json:
+    if not idea or not getattr(idea, "html_path", None):
+        raise HTTPException(404, "Kein HTML-Bericht")
+    return templates.TemplateResponse(
+        "idea/_preview_html.html",
+        {"request": request, "idea": idea},
+    )
+
+
+@router.get("/idea/{idea_id}/preview-source/{att_name}", response_class=HTMLResponse)
+async def idea_preview_source(request: Request, idea_id: int, att_name: str):
+    idea = get_idea(idea_id)
+    if not idea:
         raise HTTPException(404)
     safe = Path(att_name).name
+    views = [a for a in list_source_attachment_views(idea) if a["path"] == safe]
+    if not views:
+        raise HTTPException(404)
+    att = views[0]
+    preview_text = ""
+    if att["preview_kind"] in {"text", "docx"}:
+        from src.m17_visual_lab_refs import load_bundle_from_stored
+
+        bundle = load_bundle_from_stored([{"path": att["path"], "kind": att["kind"], "original_name": att["original_name"]}], idea_source_attachments_dir())
+        preview_text = (bundle.merged_text() if bundle else "")[:12000]
+    return templates.TemplateResponse(
+        "idea/_preview_source.html",
+        {"request": request, "idea": idea, "att": att, "preview_text": preview_text},
+    )
+
+
+@router.get("/idea/{idea_id}/source-file/{att_name}")
+async def idea_source_file(idea_id: int, att_name: str, disposition: str = "attachment"):
+    idea = get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404)
+    safe = Path(att_name).name
+    views = [a for a in list_source_attachment_views(idea) if a["path"] == safe]
+    if not views or not views[0]["exists"]:
+        raise HTTPException(404)
     path = idea_source_attachments_dir() / safe
     if not path.exists():
         raise HTTPException(404)
     ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-    resp = FileResponse(path, media_type=ctype, content_disposition_type="attachment")
+    disp = "inline" if disposition == "inline" else "attachment"
+    extra = {"filename": views[0]["original_name"]} if disp == "attachment" else {}
+    resp = FileResponse(path, media_type=ctype, content_disposition_type=disp, **extra)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp
 
@@ -658,17 +707,21 @@ async def idea_deck_download(idea_id: int):
 
 
 @router.get("/idea/report/{idea_id}")
-async def idea_html_report(idea_id: int):
+async def idea_html_report(idea_id: int, disposition: str = "inline"):
     idea = get_idea(idea_id)
-    if not idea or not idea.html_path:
+    html_name = getattr(idea, "html_path", None) if idea else None
+    if not idea or not html_name:
         raise HTTPException(404, "Kein HTML-Bericht")
-    path = idea_html_dir() / Path(idea.html_path).name
+    path = idea_html_dir() / Path(html_name).name
     if not path.exists():
         raise HTTPException(404, "Kein HTML-Bericht")
+    title = (idea.ai_project_name or idea.title or f"Projektidee_{idea_id}").replace("/", "-")
+    disp = "inline" if disposition == "inline" else "attachment"
     resp = FileResponse(
         path,
-        media_type="text/html; charset=utf-8",
-        content_disposition_type="inline",
+        media_type="text/html",
+        filename=f"{title[:60]}.html",
+        content_disposition_type=disp,
     )
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp

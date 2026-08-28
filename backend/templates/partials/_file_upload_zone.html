@@ -85,6 +85,12 @@
     }
     syncInput();
     render();
+    {% if autosubmit | default(false) %}
+    if (files.length) {
+      const form = input.closest('form');
+      if (form) form.requestSubmit();
+    }
+    {% endif %}
   }
   drop.addEventListener('click', () => input.click());
   input.addEventListener('change', () => addFiles(Array.from(input.files || [])));

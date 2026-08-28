@@ -181,7 +181,10 @@ def list_ideas(include_deleted: bool = False) -> list[ProjectIdea]:
 
 def get_idea(idea_id: int) -> Optional[ProjectIdea]:
     with get_session() as ses:
-        return ses.get(ProjectIdea, idea_id)
+        obj = ses.get(ProjectIdea, idea_id)
+        if obj is not None:
+            ses.expunge(obj)
+        return obj
 
 
 def update_idea_intake(idea_id: int, **fields: Any) -> Optional[ProjectIdea]:
@@ -305,6 +308,58 @@ def _load_stored_attachments(idea: ProjectIdea) -> list[dict[str, Any]]:
         return raw if isinstance(raw, list) else []
     except json.JSONDecodeError:
         return []
+
+
+_KIND_LABELS = {
+    "pdf": "PDF",
+    "docx": "Word",
+    "image": "Bild",
+    "text": "Text",
+    "other": "Datei",
+}
+
+
+def source_preview_kind(name: str, kind: str) -> str:
+    ext = Path(name or "").suffix.lower()
+    k = (kind or "").lower()
+    if k == "image" or ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+        return "image"
+    if k == "pdf" or ext == ".pdf":
+        return "pdf"
+    if k == "text" or ext in {".txt", ".md"}:
+        return "text"
+    if k == "docx" or ext == ".docx":
+        return "docx"
+    return "other"
+
+
+def list_source_attachment_views(idea: ProjectIdea) -> list[dict[str, Any]]:
+    """Anzeige-Metadaten für gespeicherte Unterlagen (existiert, Grösse, Vorschau)."""
+    base = idea_source_attachments_dir()
+    out: list[dict[str, Any]] = []
+    for item in _load_stored_attachments(idea):
+        rel = Path(str(item.get("path") or "")).name
+        if not rel:
+            continue
+        fp = base / rel
+        name = str(item.get("original_name") or rel)
+        kind = str(item.get("kind") or "other")
+        exists = fp.is_file()
+        size = item.get("bytes")
+        if not isinstance(size, int) or size <= 0:
+            size = fp.stat().st_size if exists else 0
+        prev = source_preview_kind(name, kind)
+        out.append({
+            "path": rel,
+            "original_name": name,
+            "kind": kind,
+            "kind_label": _KIND_LABELS.get(kind, kind or "Datei"),
+            "bytes": size,
+            "exists": exists,
+            "preview_kind": prev,
+            "previewable": exists and prev in {"image", "pdf", "text", "docx"},
+        })
+    return out
 
 
 def _sync_source_metadata(idea_id: int, stored: list[dict[str, Any]]) -> None:
