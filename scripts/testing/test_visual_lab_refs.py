@@ -66,6 +66,11 @@ def test_parse_task_selection_defaults():
     assert parse_task_selection(["extract_text"], SOURCE_PROCESS_TASKS) == {"extract_text"}
 
 
+def test_max_attachments_ten():
+    from src.m17_visual_lab_refs import MAX_ATTACHMENTS
+    assert MAX_ATTACHMENTS == 10
+
+
 if __name__ == "__main__":
     test_model_supports_vision_ollama_vl()
     test_model_supports_vision_not_false_positive()
@@ -73,4 +78,5 @@ if __name__ == "__main__":
     test_build_prompt_with_reference_text()
     test_filter_bundle_source_tasks()
     test_parse_task_selection_defaults()
+    test_max_attachments_ten()
     print("ok")

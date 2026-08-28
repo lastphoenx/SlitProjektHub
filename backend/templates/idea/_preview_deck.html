@@ -6,10 +6,15 @@
         <p class="text-muted" style="font-size:.72rem">Vorschau Titelfolie · PPTX editierbar</p>
       </div>
       <div style="display:flex;gap:.35rem">
+        {% if idea.html_path %}
+        <a class="btn btn-secondary btn-sm" href="/idea/report/{{ idea.id }}" target="_blank" rel="noopener">HTML-Bericht</a>
+        {% endif %}
         {% if idea.deck_preview_path %}
         <a class="btn btn-secondary btn-sm" href="/idea/deck-preview/{{ idea.id }}?disposition=inline" target="_blank" rel="noopener">Vollansicht</a>
         {% endif %}
+        {% if idea.deck_path %}
         <a class="btn btn-secondary btn-sm" href="/idea/deck/{{ idea.id }}">PPTX Download</a>
+        {% endif %}
         <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''">
           <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>

@@ -3,7 +3,7 @@
 {% block topbar_title %}Projektidee{% endblock %}
 
 {% block content %}
-<div style="max-width:1100px">
+<div class="page-wide">
 
 <div class="page-header">
   <div>
@@ -49,7 +49,7 @@
 
   {% if attach_error %}
   <p class="text-muted" style="color:#fca5a5;font-size:.78rem;margin-bottom:.5rem">
-    {% if attach_error == 'too_many' %}Maximal 5 Unterlagen.
+    {% if attach_error == 'too_many' %}Maximal {{ max_attachments or 10 }} Unterlagen.
     {% elif attach_error == 'too_large' %}Datei zu gross (max. 10 MB).
     {% elif attach_error == 'invalid_type' %}Dateityp nicht erlaubt.
     {% elif attach_error == 'empty' %}Leere Datei.
@@ -85,10 +85,11 @@
     </details>
     {% endif %}
     {% if may_edit %}
-    <form method="post" action="/idea/{{ idea.id }}/add-source-attachments" enctype="multipart/form-data" style="margin-top:.5rem;max-width:520px">
+    <form method="post" action="/idea/{{ idea.id }}/add-source-attachments" enctype="multipart/form-data" style="margin-top:.5rem">
       {% set zone_id = 'idea-src' %}
       {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
-      {% set hint = 'Weitere Dateien — max. 5 gesamt, 10 MB je Datei' %}
+      {% set max_files = max_attachments or 10 %}
+      {% set hint = 'Weitere Dateien — max. ' ~ (max_attachments or 10) ~ ' gesamt, 10 MB je Datei' %}
       {% include 'partials/_file_upload_zone.html' %}
       <button type="submit" class="btn btn-secondary btn-sm" style="margin-top:.35rem">Unterlagen hinzufügen</button>
     </form>
@@ -110,7 +111,7 @@
       {% set download_url = '/idea/image/' ~ idea.id %}
       {% include 'partials/_media_actions.html' %}
     </div>
-    <img src="/idea/image/{{ idea.id }}?disposition=inline" alt="Visualisierung der Projektidee" style="max-width:100%;max-height:220px;border-radius:8px;border:1px solid var(--color-border)" />
+    <img src="/idea/image/{{ idea.id }}?disposition=inline" alt="Visualisierung der Projektidee" class="result-thumb" style="max-height:280px" />
     {% if idea.image_source == 'dalle' and idea.illustration_model %}
     <p class="text-muted" style="font-size:.7rem;margin-top:.35rem">
       Modell: {{ idea.illustration_model }}
@@ -161,10 +162,10 @@
   {% if idea.status != 'bewertet' %}
   <p class="text-muted">Nach der KI-Vorbewertung können Berichte, Folien und Bilder erzeugt werden.</p>
   {% else %}
-  <form method="post" action="/idea/{{ idea.id }}/generate-visual" class="idea-gen-form" style="display:grid;gap:.6rem;max-width:560px;margin-bottom:1rem">
-    <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
-    <input type="hidden" name="llm_model" value="{{ llm_model }}" />
-    <div>
+  <form method="post" action="/idea/{{ idea.id }}/generate-visual" class="idea-gen-form idea-form-grid" style="margin-bottom:1rem">
+    <div class="span-2">
+      <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
+      <input type="hidden" name="llm_model" value="{{ llm_model }}" />
       <label class="form-label">Ausgabe-Format</label>
       <select class="form-select" name="output_format" id="idea-output-format">
         {% for key, label in idea_visual_formats.items() %}
@@ -177,18 +178,20 @@
     {% set form_input_provider = '' %}
     {% set form_input_model = '' %}
     {% include 'partials/_llm_picker.html' %}
+    {% set llm_role = 'output' %}
+    {% set picker_title = 'KI für Ausgabe-Struktur (HTML / PPTX / Word)' %}
+    {% set form_visual_provider = '' %}
+    {% set form_visual_model = '' %}
+    {% include 'partials/_llm_picker.html' %}
+    <div class="span-2">
     {% set prefix = 'source_tasks' %}
     {% set title = 'Unterlagen-Verarbeitung (optional)' %}
     {% set hint = 'Nur relevant wenn Unterlagen vorhanden — gleiche Optionen wie bei der Bewertung.' %}
     {% set tasks = source_process_tasks %}
     {% include 'partials/_ki_tasks_checkboxes.html' %}
-    {% set llm_role = 'output' %}
-    {% set picker_title = 'KI für Ausgabe-Struktur (PPTX / Word / Diagramm)' %}
-    {% set form_visual_provider = '' %}
-    {% set form_visual_model = '' %}
-    {% include 'partials/_llm_picker.html' %}
+    </div>
     {% if source_attachments or idea.source_reference_text %}
-    <div class="idea-visual-cloud-wrap" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+    <div class="span-2 idea-visual-cloud-wrap" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
       <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
         Bei Cloud-Provider (OpenAI/Anthropic) mit Unterlagen — Text wird vor Übertragung gefiltert.
       </p>
@@ -202,7 +205,7 @@
       </label>
     </div>
     {% endif %}
-    <div id="idea-cloud-image-wrap" style="display:none">
+    <div id="idea-cloud-image-wrap" class="span-2" style="display:none">
       <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell (nur Cloud-PNG)</label>
       <select class="form-select" name="image_model">
         {% for key in openai_image_models %}
@@ -214,30 +217,48 @@
         <span>Prompt wurde automatisch gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an OpenAI gehen.</span>
       </label>
     </div>
-    <div>
+    <div class="span-2">
       <label class="form-label" style="font-size:.72rem">Optionale Anpassung</label>
       <textarea class="form-input" name="refinement_notes" rows="2"
         placeholder="z.B. Phasen hervorheben, weniger Text, mehr Blau …"></textarea>
     </div>
-    <button type="submit" class="btn btn-primary btn-sm idea-gen-btn">Visualisierung generieren</button>
-    <p class="idea-gen-status text-muted" style="font-size:.72rem;display:none;margin:0">Generiere … bitte warten (30s–2min).</p>
+    <div class="span-2">
+    <button type="submit" class="btn btn-primary idea-gen-btn">Visualisierung generieren</button>
+    <p class="idea-gen-status text-muted" style="font-size:.78rem;display:none;margin:.4rem 0 0">Generiere … bitte warten (30s–2min).</p>
+    </div>
   </form>
 
   <div style="display:grid;gap:.75rem">
-    {% if idea.deck_path %}
-    <div style="padding:.6rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)">
+    {% if idea.deck_path or idea.html_path %}
+    <div class="result-card{% if idea.html_path or idea.deck_preview_path %} result-card-clickable{% endif %}"
+         {% if idea.html_path %}data-open="/idea/report/{{ idea.id }}"
+         {% elif idea.deck_path %}data-hx-preview="/idea/{{ idea.id }}/preview-deck"{% endif %}
+         onclick="ideaOpenResult(this, event)"
+         title="{% if idea.html_path %}Bericht im neuen Tab öffnen{% else %}Vorschau öffnen{% endif %}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
-        <strong style="font-size:.78rem">PowerPoint</strong>
-        {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-deck' %}
-        {% set inline_url = '/idea/deck-preview/' ~ idea.id ~ '?disposition=inline' if idea.deck_preview_path else None %}
-        {% set download_url = '/idea/deck/' ~ idea.id %}
-        {% include 'partials/_media_actions.html' %}
+        <strong style="font-size:.95rem">{% if idea.html_path %}Bericht{% if idea.deck_path %} / PowerPoint{% endif %}{% else %}PowerPoint{% endif %}</strong>
+        <div class="flex items-center gap-1" onclick="event.stopPropagation()">
+          {% if idea.html_path %}
+          <a class="btn btn-ghost btn-sm btn-icon" title="HTML-Bericht (neuer Tab)" href="/idea/report/{{ idea.id }}" target="_blank" rel="noopener">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+          </a>
+          {% endif %}
+          {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-deck' if idea.deck_path or idea.deck_preview_path else None %}
+          {% set inline_url = '/idea/deck-preview/' ~ idea.id ~ '?disposition=inline' if idea.deck_preview_path else None %}
+          {% set download_url = '/idea/deck/' ~ idea.id if idea.deck_path else None %}
+          {% include 'partials/_media_actions.html' %}
+        </div>
       </div>
+      <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">
+        {% if idea.html_path %}Klick öffnet den interaktiven Bericht.{% else %}Klick öffnet die Folien-Vorschau.{% endif %}
+      </p>
       {% if idea.deck_preview_path %}
-      <img src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="PPTX" style="max-width:100%;max-height:160px;margin-top:.5rem;border-radius:6px;border:1px solid var(--color-border)" />
+      <img class="result-thumb" src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="Bericht-Vorschau" />
       {% endif %}
       {% if may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="margin-top:.35rem" onsubmit="return confirm('PPTX löschen?')">
+      <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="margin-top:.35rem" onsubmit="return confirm('Bericht/PPTX löschen?')" onclick="event.stopPropagation()">
         <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
       </form>
       {% endif %}
@@ -245,9 +266,9 @@
     {% endif %}
 
     {% if idea.docx_path %}
-    <div style="padding:.6rem;border:1px solid var(--color-border);border-radius:.5rem">
+    <div style="padding:.85rem 1rem;border:1px solid var(--color-border);border-radius:.6rem">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
-        <strong style="font-size:.78rem">Word-Bericht</strong>
+        <strong style="font-size:.95rem">Word-Bericht</strong>
         {% set preview_hx_get = None %}
         {% set inline_url = None %}
         {% set download_url = '/idea/docx/' ~ idea.id %}
@@ -262,21 +283,26 @@
     {% endif %}
 
     {% if idea.image_path and idea.image_source in ['dalle', 'diagram'] %}
-    <div style="padding:.6rem;border:1px solid var(--color-border);border-radius:.5rem">
+    <div class="result-card result-card-clickable"
+         data-hx-preview="/idea/{{ idea.id }}/preview-image"
+         onclick="ideaOpenResult(this, event)"
+         title="Vorschau öffnen">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
-        <strong style="font-size:.78rem">PNG {% if idea.image_source == 'dalle' %}(Cloud){% else %}(lokal){% endif %}</strong>
+        <strong style="font-size:.95rem">PNG {% if idea.image_source == 'dalle' %}(Cloud){% else %}(lokal){% endif %}</strong>
+        <div class="flex items-center gap-1" onclick="event.stopPropagation()">
         {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-image' %}
         {% set inline_url = '/idea/image/' ~ idea.id ~ '?disposition=inline' %}
         {% set download_url = '/idea/image/' ~ idea.id %}
         {% include 'partials/_media_actions.html' %}
+        </div>
       </div>
-      <img src="/idea/image/{{ idea.id }}?disposition=inline" alt="PNG" style="max-width:100%;max-height:160px;margin-top:.5rem;border-radius:6px;border:1px solid var(--color-border)" />
+      <img class="result-thumb" src="/idea/image/{{ idea.id }}?disposition=inline" alt="PNG" />
       {% if idea.image_source == 'dalle' and may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Illustration löschen?')">
+      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Illustration löschen?')" onclick="event.stopPropagation()">
         <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
       </form>
       {% elif idea.image_source == 'diagram' and may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Diagramm löschen?')">
+      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.35rem" onsubmit="return confirm('Diagramm löschen?')" onclick="event.stopPropagation()">
         <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
       </form>
       {% endif %}
@@ -302,10 +328,10 @@
     <h2 style="font-size:.95rem;font-weight:700;margin:0">🤖 KI-Vorbewertung</h2>
   </div>
 
-  <form method="post" action="/idea/{{ idea.id }}/assess" class="idea-assess-form" style="display:grid;gap:.6rem;max-width:640px;margin-bottom:1rem;padding:.65rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)">
+  <form method="post" action="/idea/{{ idea.id }}/assess" class="idea-assess-form idea-form-grid" style="margin-bottom:1rem;padding:.85rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)">
     {% set form_id = 'idea-assess' %}
     {% if ollama_ok %}
-    <p class="text-muted" style="font-size:.68rem;margin:0 0 .45rem">
+    <p class="text-muted span-2" style="font-size:.68rem;margin:0 0 .45rem">
       Standard: <strong>Ollama (lokal)</strong> — Daten bleiben im Haus. Cloud nur bei expliziter Auswahl.
     </p>
     {% endif %}
@@ -313,23 +339,27 @@
     {% set form_input_provider = default_assess_provider %}
     {% set form_input_model = default_assess_model %}
     {% include 'partials/_llm_picker.html' %}
+    <div class="span-2">
     {% set prefix = 'source_tasks' %}
     {% set title = 'Unterlagen-Verarbeitung' %}
     {% set hint = 'Lokal: Textextraktion. KI: Vision-Bilder oder Bildbeschreibung für den Bewertungs-Prompt.' %}
     {% set tasks = source_process_tasks %}
     {% include 'partials/_ki_tasks_checkboxes.html' %}
+    </div>
     {% set llm_role = 'output' %}
     {% set picker_title = 'KI für Bewertung (JSON-Ergebnis)' %}
     {% set form_visual_provider = default_assess_provider %}
     {% set form_visual_model = default_assess_model %}
     {% include 'partials/_llm_picker.html' %}
+    <div class="span-2">
     {% set prefix = 'assess_tasks' %}
     {% set title = 'Bewertungs-Inhalte' %}
     {% set hint = 'Welche Felder die KI erzeugen soll — abgewählte bleiben bei erneuter Bewertung erhalten.' %}
     {% set tasks = assess_tasks %}
     {% include 'partials/_ki_tasks_checkboxes.html' %}
+    </div>
     {% if source_attachments or idea.source_reference_text %}
-    <div id="idea-assess-cloud-wrap" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+    <div id="idea-assess-cloud-wrap" class="span-2" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
       <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
         Nur bei Cloud-Provider (OpenAI/Anthropic) mit Unterlagen — Text wird vor Übertragung gefiltert.
       </p>
@@ -343,8 +373,10 @@
       </label>
     </div>
     {% endif %}
-    <button type="submit" class="btn btn-primary btn-sm idea-assess-btn">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</button>
-    <p class="idea-assess-status text-muted" style="font-size:.72rem;display:none;margin:0">Bewertung läuft … bitte warten (30s–2min).</p>
+    <div class="span-2">
+    <button type="submit" class="btn btn-primary idea-assess-btn">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</button>
+    <p class="idea-assess-status text-muted" style="font-size:.78rem;display:none;margin:.4rem 0 0">Bewertung läuft … bitte warten (30s–2min).</p>
+    </div>
   </form>
 
   {% if idea.status != 'bewertet' %}
@@ -441,6 +473,18 @@
 
 <div id="modal-slot"></div>
 <script>
+function ideaOpenResult(el, event) {
+  if (event.target.closest('a,button,form')) return;
+  const url = el.getAttribute('data-open');
+  const hx = el.getAttribute('data-hx-preview');
+  if (url) {
+    window.open(url, '_blank', 'noopener');
+    return;
+  }
+  if (hx && window.htmx) {
+    htmx.ajax('GET', hx, {target: '#modal-slot', swap: 'innerHTML'});
+  }
+}
 document.getElementById('modal-slot').addEventListener('click', e => {
   if (e.target.classList.contains('modal-backdrop')) document.getElementById('modal-slot').innerHTML = '';
 });

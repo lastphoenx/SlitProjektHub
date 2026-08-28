@@ -28,6 +28,7 @@ from src.m16_idea import (
     update_idea_intake,
 )
 from src.m17_visual_lab_refs import (
+    MAX_ATTACHMENTS,
     merge_bundles,
     parse_task_selection,
     process_upload_bytes,
@@ -43,6 +44,7 @@ from src.m16_idea_visual import (
     idea_assess_provider_defaults,
     idea_decks_dir,
     idea_docx_dir,
+    idea_html_dir,
     idea_images_dir,
     resolve_visual_llm,
     validate_assess_cloud_gates,
@@ -100,6 +102,7 @@ async def idea_list(request: Request):
             "form_title": qp.get("title", ""),
             "form_idea_text": qp.get("idea_text", ""),
             "form_fachabteilung": qp.get("fachabteilung", ""),
+            "max_attachments": MAX_ATTACHMENTS,
         },
     )
 
@@ -139,6 +142,10 @@ async def idea_create(
 
     if not (idea_text or "").strip():
         return _form_redirect("empty_text")
+
+    named = [f for f in attachments if f.filename]
+    if len(named) > MAX_ATTACHMENTS:
+        return _form_redirect("too_many_files")
 
     import json
 
@@ -230,6 +237,7 @@ async def idea_detail(request: Request, idea_id: int):
             "source_process_tasks": SOURCE_PROCESS_TASKS,
             "assess_tasks": IDEA_ASSESS_TASKS,
             "attach_error": qp.get("attach_error"),
+            "max_attachments": MAX_ATTACHMENTS,
         },
     )
 
@@ -466,12 +474,18 @@ async def idea_clear_deck(request: Request, idea_id: int):
         p = _idea_images_dir() / Path(idea.deck_preview_path).name
         if p.exists():
             p.unlink()
+    if idea.html_path:
+        hp = idea_html_dir() / Path(idea.html_path).name
+        if hp.exists():
+            hp.unlink()
     with get_session() as ses:
         obj = ses.get(ProjectIdea, idea_id)
         if obj:
             obj.deck_path = None
             obj.deck_preview_path = None
             obj.deck_generated_at = None
+            obj.html_path = None
+            obj.html_generated_at = None
             ses.add(obj)
             ses.commit()
     return RedirectResponse(url=f"/idea/{idea_id}", status_code=303)
@@ -572,7 +586,7 @@ async def idea_preview_image(request: Request, idea_id: int):
 @router.get("/idea/{idea_id}/preview-deck", response_class=HTMLResponse)
 async def idea_preview_deck(request: Request, idea_id: int):
     idea = get_idea(idea_id)
-    if not idea or not idea.deck_path:
+    if not idea or not (idea.deck_path or idea.deck_preview_path or idea.html_path):
         raise HTTPException(404)
     return templates.TemplateResponse(
         "idea/_preview_deck.html",
@@ -641,6 +655,23 @@ async def idea_deck_download(idea_id: int):
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         filename=f"{title[:60]}.pptx",
     )
+
+
+@router.get("/idea/report/{idea_id}")
+async def idea_html_report(idea_id: int):
+    idea = get_idea(idea_id)
+    if not idea or not idea.html_path:
+        raise HTTPException(404, "Kein HTML-Bericht")
+    path = idea_html_dir() / Path(idea.html_path).name
+    if not path.exists():
+        raise HTTPException(404, "Kein HTML-Bericht")
+    resp = FileResponse(
+        path,
+        media_type="text/html; charset=utf-8",
+        content_disposition_type="inline",
+    )
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
 
 
 @router.get("/idea/docx/{idea_id}")

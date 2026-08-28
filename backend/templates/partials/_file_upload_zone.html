@@ -21,7 +21,7 @@
   const err = document.getElementById('file-err-' + zoneId);
   if (!input || !drop) return;
   const maxBytes = {{ max_bytes or 10485760 }};
-  const maxFiles = {{ max_files or 5 }};
+  const maxFiles = {{ max_files or 10 }};
   const allowed = (input.getAttribute('accept') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
   let files = [];
 

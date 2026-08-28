@@ -2,6 +2,7 @@
 """Tests für Projektideen-Visualisierung (DSGVO-Prompt-Filter)."""
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -109,6 +110,54 @@ def test_build_user_prompt_cloud_sanitizes_email():
     assert "@" not in out
 
 
+def test_max_attachments_is_ten():
+    from src.m17_visual_lab_refs import MAX_ATTACHMENTS
+    assert MAX_ATTACHMENTS == 10
+
+
+def test_clean_phase_title_strips_numbering():
+    from src.m16_idea_visual import _clean_phase_title
+    assert _clean_phase_title("1. Anforderungsdefinition (2-3 Monate)") == "Anforderungsdefinition (2-3 Monate)"
+    assert _clean_phase_title("Phase 2: Systemdesign") == "Systemdesign"
+    assert _clean_phase_title("Monitoring") == "Monitoring"
+
+
+def test_html_report_has_nav_and_escapes():
+    from src.m16_idea_visual import DeckContent, build_html_report
+    html = build_html_report(DeckContent(
+        title='Test <script>alert(1)</script>',
+        subtitle="Team Kreditoren",
+        summary_lines=["Einführung OCR"],
+        phase_details=[{
+            "title": "1. Anforderungsdefinition",
+            "bullets": ["SAP-Szenarien klären"],
+            "parallel_note": "2-3 Monate",
+        }],
+        recommendation_lines=["Weiterverfolgen"],
+    ))
+    assert "<script>alert(1)</script>" not in html
+    assert "Test" in html
+    assert 'id="summary"' in html
+    assert 'id="phase-1"' in html
+    assert "Anforderungsdefinition" in html
+    assert "href=\"#phase-1\"" in html
+    assert "SAP-Szenarien klären" in html
+
+
+def test_vertical_diagram_does_not_truncate_long_bullet():
+    from src.m16_idea_visual import _clean_phase_title, build_vertical_process_diagram_png
+    details = [{
+        "title": "1. Anforderungsdefinition (2-3 Monate)",
+        "bullets": [
+            "Erfassung von Prozessanforderungen, SAP-Integrationsszenarien und OCR-Funktionen."
+        ],
+        "parallel_note": "",
+    }]
+    png = build_vertical_process_diagram_png(details, "Kreditoren")
+    assert len(png) > 800
+    assert _clean_phase_title(details[0]["title"]).startswith("Anforderungsdefinition")
+
+
 if __name__ == "__main__":
     test_sanitize_removes_email()
     test_nfc_normalizes_decomposed_umlaut()
@@ -120,4 +169,8 @@ if __name__ == "__main__":
     test_is_cloud_llm_provider()
     test_validate_assess_cloud_gate()
     test_build_user_prompt_cloud_sanitizes_email()
+    test_max_attachments_is_ten()
+    test_clean_phase_title_strips_numbering()
+    test_html_report_has_nav_and_escapes()
+    test_vertical_diagram_does_not_truncate_long_bullet()
     print("ok")
