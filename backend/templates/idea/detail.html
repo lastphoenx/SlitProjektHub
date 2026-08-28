@@ -287,7 +287,7 @@
     {% endif %}
   </div>
 
-  <form method="post" action="/idea/{{ idea.id }}/generate-visual" class="idea-gen-form idea-form-grid" style="margin-bottom:1rem" enctype="multipart/form-data">
+  <form method="post" action="/idea/{{ idea.id }}/generate-visual" id="idea-gen-form" class="idea-gen-form idea-form-grid" style="margin-bottom:1rem" enctype="multipart/form-data">
     <div class="span-2 idea-busy-banner" hidden>
       <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
       <span>Generiere … bitte warten (30s–2min). Nicht erneut klicken.</span>
@@ -362,7 +362,7 @@
         placeholder="z.B. Phasen hervorheben, weniger Text, mehr Blau …"></textarea>
     </div>
     <div class="span-2">
-    <button type="submit" class="btn btn-primary idea-gen-btn">
+    <button type="submit" form="idea-gen-form" class="btn btn-primary idea-gen-btn">
       <span class="idea-btn-idle">Visualisierung generieren</span>
       <span class="idea-btn-busy" hidden>
         <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
@@ -400,7 +400,7 @@
     </h2>
   </div>
 
-  <form method="post" action="/idea/{{ idea.id }}/assess" class="idea-assess-form idea-form-grid" style="margin-bottom:1rem;padding:.85rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)" enctype="multipart/form-data" data-has-user="{{ '1' if idea.user_assessed_at else '0' }}">
+  <form method="post" action="/idea/{{ idea.id }}/assess" id="idea-assess-form" class="idea-assess-form idea-form-grid" style="margin-bottom:1rem;padding:.85rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)" enctype="multipart/form-data" data-has-user="{{ '1' if idea.user_assessed_at else '0' }}">
     <input type="hidden" name="overwrite_user" value="0" />
     <div class="span-2 idea-busy-banner" hidden>
       <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
@@ -467,7 +467,7 @@
       <span>Nach dieser Bewertung <strong>meine gespeicherte Einschätzung</strong> durch die neuen KI-Werte ersetzen (sonst bleibt sie unverändert).</span>
     </label>
     {% endif %}
-    <button type="submit" class="btn btn-primary idea-assess-btn">
+    <button type="submit" form="idea-assess-form" class="btn btn-primary idea-assess-btn">
       <span class="idea-btn-idle">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</span>
       <span class="idea-btn-busy" hidden>
         <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
@@ -490,8 +490,23 @@
 
 </div>
 
+<form id="idea-delete-att-form" method="post" action="/idea/{{ idea.id }}/delete-source-attachment" hidden>
+  <input type="hidden" name="att_path" value="" />
+</form>
 <div id="modal-slot"></div>
 <script>
+document.addEventListener('click', function (e) {
+  const btn = e.target.closest('.idea-att-del');
+  if (!btn) return;
+  const path = btn.getAttribute('data-att-path');
+  const name = btn.getAttribute('data-att-name') || '';
+  if (!path) return;
+  if (!confirm('Unterlage «' + name + '» löschen?')) return;
+  const form = document.getElementById('idea-delete-att-form');
+  if (!form) return;
+  form.querySelector('[name="att_path"]').value = path;
+  form.submit();
+});
 function ideaOpenResult(el, event) {
   if (event.target.closest('a,button,form')) return;
   const url = el.getAttribute('data-open');

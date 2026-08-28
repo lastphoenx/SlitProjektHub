@@ -20,13 +20,12 @@
       {% set download_url = '/idea/' ~ idea.id ~ '/source-file/' ~ a.path %}
       {% include 'partials/_media_actions.html' %}
       {% if may_edit %}
-      <form method="post" action="/idea/{{ idea.id }}/delete-source-attachment" style="display:inline"
-        onsubmit="return confirm('Unterlage «{{ a.original_name }}» löschen?')">
-        <input type="hidden" name="att_path" value="{{ a.path }}" />
-        <button type="submit" class="btn btn-ghost btn-sm btn-icon" title="Löschen" style="color:var(--color-danger)">
-          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-        </button>
-      </form>
+      <button type="button" class="btn btn-ghost btn-sm btn-icon idea-att-del" title="Löschen"
+        style="color:var(--color-danger)"
+        data-att-path="{{ a.path }}"
+        data-att-name="{{ a.original_name | e }}">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+      </button>
       {% endif %}
     </div>
   </li>
