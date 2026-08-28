@@ -5,7 +5,9 @@
 {% set ph_user = ud.phases if ud.phases else [{}] %}
 
 <div id="idea-assessment" class="assess-dual">
-  {% if user_ok %}
+  {% if user_reset_ok %}
+  <p class="text-muted" style="color:#86efac;font-size:.82rem;margin:0 0 .75rem">✓ Einschätzung auf die aktuelle KI-Vorbewertung zurückgesetzt. Gilt für den nächsten Report.</p>
+  {% elif user_ok %}
   <p class="text-muted" style="color:#86efac;font-size:.82rem;margin:0 0 .75rem">✓ Fachliche Einschätzung gespeichert — gilt für den nächsten HTML-/PPTX-Report.</p>
   {% elif idea.user_assessed_at %}
   <p class="text-muted" style="font-size:.78rem;margin:0 0 .75rem">
@@ -103,8 +105,11 @@
           {% if idea.user_assessed_at %}<span class="badge">gespeichert</span>{% else %}<span class="badge badge-neutral">noch nicht gespeichert</span>{% endif %}
         </h3>
         {% if may_edit %}
-        <p style="margin:0 0 .6rem">
-          <button type="button" class="btn btn-secondary btn-sm" id="idea-copy-ai">KI-Werte 1:1 übernehmen</button>
+        <p style="margin:0 0 .6rem;display:flex;flex-wrap:wrap;gap:.4rem">
+          <button type="button" class="btn btn-secondary btn-sm" id="idea-copy-ai">KI-Werte in das Formular übernehmen</button>
+          {% if idea.user_assessed_at %}
+          <button type="button" class="btn btn-danger btn-sm" id="idea-reset-ai">Auf KI-Vorbewertung zurücksetzen</button>
+          {% endif %}
         </p>
         {% endif %}
 
@@ -189,6 +194,9 @@
       </div>
     </div>
   </form>
+  {% if may_edit and idea.user_assessed_at %}
+  <form method="post" action="/idea/{{ idea.id }}/reset-user-assessment" id="idea-reset-form" hidden></form>
+  {% endif %}
 </div>
 
 <script type="application/json" id="idea-ai-json">{{ ai_defaults_json | safe }}</script>

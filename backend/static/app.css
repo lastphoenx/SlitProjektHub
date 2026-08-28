@@ -251,7 +251,17 @@ body {
   color: #fde047;
   font-size: 0.82rem;
 }
-.idea-busy-banner[hidden] { display: none !important; }
+.idea-busy-banner.is-error {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+.idea-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
 .idea-busy-spinner {
   width: 14px;
   height: 14px;

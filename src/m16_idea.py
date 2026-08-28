@@ -20,7 +20,7 @@ from sqlmodel import Field, Session, SQLModel, select
 
 from .m01_config import get_settings
 from .m03_db import engine, get_session
-from .m08_llm import try_models_with_messages, model_supports_vision, get_model_id
+from .m08_llm import try_models_with_messages, model_supports_vision, get_model_id, LLMError
 from .m17_visual_lab_refs import (
     DEFAULT_SOURCE_TASKS,
     describe_reference_images,
@@ -93,6 +93,7 @@ class ProjectIdea(SQLModel, table=True):
     user_phases_json: Optional[str] = None
     user_recommendation: Optional[str] = None
     user_assessed_at: Optional[datetime] = None
+    ki_job_json: Optional[str] = Field(default=None, sa_column=Column(Text))
 
     @property
     def challenges(self) -> list[dict[str, Any]]:
@@ -326,6 +327,36 @@ def save_user_assessment(
         return obj
 
 
+def reset_user_assessment_from_ai(idea_id: int) -> Optional[ProjectIdea]:
+    """Gespeicherte Einschätzung 1:1 durch aktuelle KI-Vorbewertung ersetzen."""
+    idea = get_idea(idea_id)
+    if not idea or not idea.ai_assessed_at:
+        return None
+    d = ai_defaults_from_idea(idea)
+    return save_user_assessment(
+        idea_id,
+        summary=d["summary"],
+        internal_pt=d["internal_pt"],
+        internal_pt_reasoning=d["internal_pt_reasoning"],
+        external_cost=d["external_cost"],
+        external_cost_reasoning=d["external_cost_reasoning"],
+        challenges=d["challenges"],
+        phases=d["phases"],
+        recommendation=d["recommendation"],
+    )
+
+
+def set_idea_job_json(idea_id: int, raw: Optional[str]) -> None:
+    with get_session() as ses:
+        obj = ses.get(ProjectIdea, idea_id)
+        if not obj:
+            return
+        obj.ki_job_json = raw
+        obj.updated_at = datetime.now(timezone.utc)
+        ses.add(obj)
+        ses.commit()
+
+
 def migrate_idea_db() -> None:
     """Platzhalter für künftige Leichtmigrationen (Tabelle wird per create_all angelegt)."""
     with engine.begin() as conn:
@@ -356,6 +387,7 @@ def migrate_idea_db() -> None:
             ("user_phases_json", "ALTER TABLE project_idea ADD COLUMN user_phases_json TEXT"),
             ("user_recommendation", "ALTER TABLE project_idea ADD COLUMN user_recommendation TEXT"),
             ("user_assessed_at", "ALTER TABLE project_idea ADD COLUMN user_assessed_at DATETIME"),
+            ("ki_job_json", "ALTER TABLE project_idea ADD COLUMN ki_job_json TEXT"),
         ]
         for col, stmt in migrations:
             if col not in cols:
@@ -742,15 +774,19 @@ def assess_project_idea_with_ai(
         model_id = get_model_id(provider, model) or model
         if imgs and model_supports_vision(provider, model_id):
             images = imgs
-    raw = try_models_with_messages(
-        provider,
-        system_prompt,
-        messages,
-        max_tokens=1800,
-        temperature=0.3,
-        model=model,
-        images=images,
-    )
+    try:
+        raw = try_models_with_messages(
+            provider,
+            system_prompt,
+            messages,
+            max_tokens=1800,
+            temperature=0.3,
+            model=model,
+            images=images,
+        )
+    except LLMError:
+        log.exception("Idea-Assessment LLM-Fehler idea_id=%s provider=%s", idea_id, provider)
+        raise
 
     parsed: dict[str, Any] = {}
     if raw:
