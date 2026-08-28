@@ -120,7 +120,10 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem">
-  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Visualisierung erstellen</h2>
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem;display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+    Visualisierung erstellen
+    <span id="idea-gen-run-badge" class="badge idea-run-badge" hidden>läuft</span>
+  </h2>
   <p class="text-muted" style="font-size:.78rem;margin-bottom:.75rem">
     Input-KI liest Unterlagen; Ausgabe-KI strukturiert Folien/Berichte. Cloud-PNG nutzt OpenAI Bildmodell (gefiltert).
     {% if idea.user_assessed_at %} Der Report verwendet <strong>Ihre gespeicherte Einschätzung</strong>.
@@ -268,6 +271,10 @@
   </div>
 
   <form method="post" action="/idea/{{ idea.id }}/generate-visual" class="idea-gen-form idea-form-grid" style="margin-bottom:1rem" enctype="multipart/form-data">
+    <div class="span-2 idea-busy-banner" hidden>
+      <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+      <span>Generiere … bitte warten (30s–2min). Nicht erneut klicken.</span>
+    </div>
     <div class="span-2">
       <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
       <input type="hidden" name="llm_model" value="{{ llm_model }}" />
@@ -338,8 +345,13 @@
         placeholder="z.B. Phasen hervorheben, weniger Text, mehr Blau …"></textarea>
     </div>
     <div class="span-2">
-    <button type="submit" class="btn btn-primary idea-gen-btn">Visualisierung generieren</button>
-    <p class="idea-gen-status text-muted" style="font-size:.78rem;display:none;margin:.4rem 0 0">Generiere … bitte warten (30s–2min).</p>
+    <button type="submit" class="btn btn-primary idea-gen-btn">
+      <span class="idea-btn-idle">Visualisierung generieren</span>
+      <span class="idea-btn-busy" hidden>
+        <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+        Generiere …
+      </span>
+    </button>
     </div>
   </form>
   {% endif %}
@@ -358,10 +370,17 @@
   <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">KI-Bewertung fehlgeschlagen (Provider/Modell prüfen oder erneut versuchen).</p>
   {% endif %}
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.75rem;flex-wrap:wrap">
-    <h2 style="font-size:.95rem;font-weight:700;margin:0">🤖 KI-Vorbewertung</h2>
+    <h2 style="font-size:.95rem;font-weight:700;margin:0;display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+      🤖 KI-Vorbewertung
+      <span id="idea-assess-run-badge" class="badge idea-run-badge" hidden>läuft</span>
+    </h2>
   </div>
 
   <form method="post" action="/idea/{{ idea.id }}/assess" class="idea-assess-form idea-form-grid" style="margin-bottom:1rem;padding:.85rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)" enctype="multipart/form-data">
+    <div class="span-2 idea-busy-banner" hidden>
+      <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+      <span>Bewertung läuft … bitte warten (30s–2min). Nicht erneut klicken.</span>
+    </div>
     {% set form_id = 'idea-assess' %}
     {% if ollama_ok %}
     <p class="text-muted span-2" style="font-size:.68rem;margin:0 0 .45rem">
@@ -417,8 +436,13 @@
     </div>
     {% endif %}
     <div class="span-2">
-    <button type="submit" class="btn btn-primary idea-assess-btn">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</button>
-    <p class="idea-assess-status text-muted" style="font-size:.78rem;display:none;margin:.4rem 0 0">Bewertung läuft … bitte warten (30s–2min).</p>
+    <button type="submit" class="btn btn-primary idea-assess-btn">
+      <span class="idea-btn-idle">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</span>
+      <span class="idea-btn-busy" hidden>
+        <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+        Bewertung läuft …
+      </span>
+    </button>
     </div>
   </form>
 
@@ -455,21 +479,38 @@ document.getElementById('modal-slot').addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') document.getElementById('modal-slot').innerHTML = '';
 });
-document.querySelectorAll('.idea-gen-form').forEach(form => {
-  form.addEventListener('submit', () => {
-    const btn = form.querySelector('.idea-gen-btn');
-    const st = form.querySelector('.idea-gen-status');
-    if (btn) { btn.disabled = true; btn.textContent = 'Generiere …'; }
-    if (st) st.style.display = 'block';
+function ideaBindBusyForm(form, opts) {
+  if (!form) return;
+  form.addEventListener('submit', function (e) {
+    if (form.getAttribute('data-busy') === '1') {
+      e.preventDefault();
+      return;
+    }
+    form.setAttribute('data-busy', '1');
+    form.setAttribute('aria-busy', 'true');
+    var banner = form.querySelector('.idea-busy-banner');
+    if (banner) banner.hidden = false;
+    var badge = opts && opts.badgeId ? document.getElementById(opts.badgeId) : null;
+    if (badge) badge.hidden = false;
+    var btn = e.submitter || form.querySelector('[type="submit"]');
+    if (btn) {
+      var idle = btn.querySelector('.idea-btn-idle');
+      var busy = btn.querySelector('.idea-btn-busy');
+      if (idle) idle.hidden = true;
+      if (busy) busy.hidden = false;
+    }
+    window.setTimeout(function () {
+      form.querySelectorAll('button').forEach(function (el) {
+        el.disabled = true;
+      });
+    }, 0);
   });
+}
+document.querySelectorAll('.idea-gen-form').forEach(form => {
+  ideaBindBusyForm(form, { badgeId: 'idea-gen-run-badge' });
 });
 document.querySelectorAll('.idea-assess-form').forEach(form => {
-  form.addEventListener('submit', () => {
-    const btn = form.querySelector('.idea-assess-btn');
-    const st = form.querySelector('.idea-assess-status');
-    if (btn) { btn.disabled = true; btn.textContent = 'Bewertung läuft …'; }
-    if (st) st.style.display = 'block';
-  });
+  ideaBindBusyForm(form, { badgeId: 'idea-assess-run-badge' });
 });
 (function() {
   function reindex(tbody) {
