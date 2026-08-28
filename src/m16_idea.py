@@ -54,6 +54,8 @@ class ProjectIdea(SQLModel, table=True):
     deck_generated_at: Optional[datetime] = None
     docx_path: Optional[str] = Field(default=None, sa_column=Column(String(400)))
     docx_generated_at: Optional[datetime] = None
+    html_path: Optional[str] = Field(default=None, sa_column=Column(String(400)))
+    html_generated_at: Optional[datetime] = None
     source_attachments_json: Optional[str] = Field(default=None, sa_column=Column(Text))
     source_reference_text: Optional[str] = Field(default=None, sa_column=Column(Text))
     illustration_model: Optional[str] = Field(default=None, sa_column=Column(String(80)))
@@ -117,6 +119,8 @@ def migrate_idea_db() -> None:
             ("illustration_generated_at", "ALTER TABLE project_idea ADD COLUMN illustration_generated_at DATETIME"),
             ("docx_path", "ALTER TABLE project_idea ADD COLUMN docx_path VARCHAR(400)"),
             ("docx_generated_at", "ALTER TABLE project_idea ADD COLUMN docx_generated_at DATETIME"),
+            ("html_path", "ALTER TABLE project_idea ADD COLUMN html_path VARCHAR(400)"),
+            ("html_generated_at", "ALTER TABLE project_idea ADD COLUMN html_generated_at DATETIME"),
             ("source_attachments_json", "ALTER TABLE project_idea ADD COLUMN source_attachments_json TEXT"),
             ("source_reference_text", "ALTER TABLE project_idea ADD COLUMN source_reference_text TEXT"),
         ]

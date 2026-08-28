@@ -21,7 +21,7 @@ from src.m16_idea_visual import (
     visual_vision_models_map,
     visual_text_providers_available,
 )
-from src.m17_visual_lab_refs import DEFAULT_SOURCE_TASKS
+from src.m17_visual_lab_refs import DEFAULT_SOURCE_TASKS, MAX_ATTACHMENTS
 from src.m17_visual_lab import (
     VISUAL_LAB_KINDS,
     delete_visual_lab_run,
@@ -71,6 +71,7 @@ def _lab_context(request: Request, **extra):
         "form_input_model": "",
         "error": None,
         "ok": False,
+        "max_attachments": MAX_ATTACHMENTS,
     }
     base.update(extra)
     return base

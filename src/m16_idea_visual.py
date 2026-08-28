@@ -6,6 +6,7 @@ Prompt an OpenAI — kein Rohtext, keine Personennamen.
 """
 from __future__ import annotations
 
+import html as html_lib
 import io
 import json
 import logging
@@ -61,7 +62,8 @@ VISUAL_TEXT_DEFAULT_MODELS: dict[str, str] = {
 }
 
 IDEA_VISUAL_OUTPUT_FORMATS: dict[str, str] = {
-    "pptx": "PowerPoint — Text + Prozessdiagramm (lokal)",
+    "html": "HTML-Bericht — interaktiv (neuer Tab)",
+    "pptx": "PowerPoint — Download + Prozessdiagramm",
     "png_local": "PNG — Prozessdiagramm / Canvas (lokal)",
     "png_cloud": "PNG — Cloud-Illustration (OpenAI Images)",
     "docx": "Word — Bericht nur Text",
@@ -551,7 +553,7 @@ def deck_content_from_idea(
         ],
         phase_details=[
             {
-                "title": (p.get("name") or f"Phase {i+1}")[:60],
+                "title": _clean_phase_title(p.get("name") or f"Phase {i+1}")[:80],
                 "bullets": [str(p.get("description") or "")[:200]] if p.get("description") else [],
                 "parallel_note": str(p.get("duration_estimate") or ""),
             }
@@ -646,7 +648,7 @@ def _phase_details_from_lines(phase_lines: list[str]) -> list[dict[str, Any]]:
             title = title.strip()
             parts = [p.strip() for p in re.split(r"[·;]", rest) if p.strip()]
             bullets = parts if parts else [rest.strip()]
-        out.append({"title": title[:60], "bullets": bullets[:5], "parallel_note": ""})
+        out.append({"title": _clean_phase_title(title)[:80], "bullets": bullets[:6], "parallel_note": ""})
     return out
 
 
@@ -658,12 +660,12 @@ def _deck_content_from_parsed(parsed: dict[str, Any], fallback_title: str = "Vis
         for item in raw_details[:8]:
             if not isinstance(item, dict):
                 continue
-            title = str(item.get("title") or "").strip()
+            title = _clean_phase_title(str(item.get("title") or ""))
             if not title:
                 continue
             bullets = _as_str_list(item.get("bullets"))
             parallel = str(item.get("parallel_note") or item.get("parallel") or "").strip()
-            phase_details.append({"title": title[:60], "bullets": bullets[:5], "parallel_note": parallel[:120]})
+            phase_details.append({"title": title[:80], "bullets": bullets[:6], "parallel_note": parallel[:160]})
     if not phase_details and phase_lines:
         phase_details = _phase_details_from_lines(phase_lines)
     return DeckContent(
@@ -765,64 +767,123 @@ _PHASE_BORDER = [
     (90, 120, 150),
 ]
 
-
 _PHASE_BOX_GAP = 28
 
 
-def _vertical_phase_box_height(pd: dict[str, Any]) -> int:
-    bullets = pd.get("bullets") or []
-    par = (pd.get("parallel_note") or "").strip()
-    h = 56 + min(len(bullets), 4) * 22
-    if par:
-        h += 22
-    return h
+_LEADING_PHASE_RE = re.compile(
+    r"^(?:phase\s+)?\d+\s*[\.\)\:\-–—•·\u2022\u00b7\uf0b7]\s*",
+    re.IGNORECASE,
+)
 
 
-def _vertical_diagram_canvas_height(phase_details: list[dict[str, Any]], title: str) -> int:
-    details = phase_details[:8]
-    if not details:
-        return 400
+def _clean_phase_title(title: str) -> str:
+    """Entfernt führende Nummerierung ('1. …', 'Phase 2: …'), die sonst doppelt erscheint."""
+    t = _nfc_text((title or "").strip())
+    t = re.sub(r"^phase\s+\d+\s*:\s*", "", t, flags=re.IGNORECASE).strip()
+    t = _LEADING_PHASE_RE.sub("", t).strip()
+    return t[:80]
+
+
+def _measure_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    bbox = draw.textbbox((0, 0), _nfc_text(text), font=font)
+    return max(0, bbox[2] - bbox[0])
+
+
+def _wrap_to_width(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> list[str]:
+    text = _nfc_text(text or "").strip()
+    if not text:
+        return []
+    words = text.split()
+    lines: list[str] = []
+    cur = ""
+    for word in words:
+        test = f"{cur} {word}".strip()
+        if not cur or _measure_text_width(draw, test, font) <= max_width:
+            cur = test
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines or [text]
+
+
+def _vertical_layout(
+    details: list[dict[str, Any]],
+    title: str,
+    w: int = 1200,
+) -> tuple[list[dict[str, Any]], int]:
+    """Berechnet umbrochene Zeilen und Boxhöhen, bevor das PNG gerendert wird."""
+    dummy = Image.new("RGB", (8, 8), color=(255, 255, 255))
+    draw = ImageDraw.Draw(dummy)
+    font_h = _load_diagram_font(22)
+    font_b = _load_diagram_font(16)
+    font_s = _load_diagram_font(13)
+    inner = w - 80 * 2 - 48
+    laid: list[dict[str, Any]] = []
+    for i, pd in enumerate(details[:8]):
+        heading = f"Phase {i + 1}: {_clean_phase_title(str(pd.get('title') or ''))}"
+        heading_lines = _wrap_to_width(draw, heading, font_h, inner)
+        bullet_lines: list[str] = []
+        for b in (pd.get("bullets") or [])[:6]:
+            wrapped = _wrap_to_width(draw, f"· {b}", font_b, inner)
+            bullet_lines.extend(wrapped[:4])
+        par = (pd.get("parallel_note") or "").strip()
+        par_lines = _wrap_to_width(draw, f"parallel: {par}", font_s, inner) if par else []
+        box_h = 20 + len(heading_lines) * 26 + len(bullet_lines) * 22 + len(par_lines) * 18 + 16
+        laid.append({
+            "height": max(72, box_h),
+            "heading_lines": heading_lines,
+            "bullet_lines": bullet_lines,
+            "par_lines": par_lines,
+            "color_i": i,
+        })
     top = 80 if title else 40
-    body = sum(_vertical_phase_box_height(pd) for pd in details)
-    gaps = _PHASE_BOX_GAP * max(0, len(details) - 1)
-    return max(400, top + body + gaps + 48)
+    body = sum(x["height"] for x in laid)
+    gaps = _PHASE_BOX_GAP * max(0, len(laid) - 1)
+    return laid, max(400, top + body + gaps + 48)
 
 
 def build_vertical_process_diagram_png(
     phase_details: list[dict[str, Any]],
     title: str = "",
 ) -> bytes:
-    w = 900
+    w = 1200
     font_t = _load_diagram_font(32)
     font_h = _load_diagram_font(22)
     font_b = _load_diagram_font(16)
     font_s = _load_diagram_font(13)
-    details = phase_details[:8]
     title = _nfc_text(title)
-    h = _vertical_diagram_canvas_height(details, title)
+    laid, h = _vertical_layout(phase_details, title, w)
     img = Image.new("RGB", (w, h), color=(252, 252, 254))
     draw = ImageDraw.Draw(img)
     if title:
-        _draw_text(draw, (40, 24), title[:70], font_t, fill=(30, 58, 95))
+        _draw_text(draw, (40, 24), title[:90], font_t, fill=(30, 58, 95))
     y = 80 if title else 40
     cx = w // 2
-    for i, pd in enumerate(details):
-        bullets = pd.get("bullets") or []
-        ph = _vertical_phase_box_height(pd)
-        col = _PHASE_COLORS[i % len(_PHASE_COLORS)]
-        border = _PHASE_BORDER[i % len(_PHASE_BORDER)]
+    for i, box in enumerate(laid):
+        ph = box["height"]
+        col = _PHASE_COLORS[box["color_i"] % len(_PHASE_COLORS)]
+        border = _PHASE_BORDER[box["color_i"] % len(_PHASE_BORDER)]
         bx = 80
         draw.rounded_rectangle([bx, y, w - 80, y + ph], radius=14, fill=col, outline=border, width=2)
-        label = f"Phase {i + 1}: {pd.get('title', '')}"
-        _draw_text(draw, (bx + 16, y + 10), label[:55], font_h, fill=border)
-        by = y + 38
-        for b in bullets[:4]:
-            _draw_text(draw, (bx + 20, by), f"· {b[:70]}", font_b, fill=(55, 65, 80))
-            by += 22
-        par = (pd.get("parallel_note") or "").strip()
-        if par:
-            _draw_text(draw, (bx + 20, by), f"parallel: {par[:60]}", font_s, fill=(100, 110, 130))
-        if i < len(details) - 1:
+        ty = y + 12
+        for line in box["heading_lines"]:
+            _draw_text(draw, (bx + 20, ty), line, font_h, fill=border)
+            ty += 26
+        ty += 4
+        for line in box["bullet_lines"]:
+            _draw_text(draw, (bx + 22, ty), line, font_b, fill=(55, 65, 80))
+            ty += 22
+        for line in box["par_lines"]:
+            _draw_text(draw, (bx + 22, ty), line, font_s, fill=(100, 110, 130))
+            ty += 18
+        if i < len(laid) - 1:
             ay = y + ph + 4
             draw.polygon([(cx, ay + 18), (cx - 10, ay), (cx + 10, ay)], fill=(140, 150, 170))
             y += ph + _PHASE_BOX_GAP
@@ -975,7 +1036,7 @@ def _add_phase_detail_slide(prs: Presentation, phase: dict[str, Any], index: int
     bullets = phase.get("bullets") or []
     if not bullets:
         return
-    title = f"Phase {index + 1}: {phase.get('title', '')}"
+    title = f"Phase {index + 1}: {_clean_phase_title(str(phase.get('title', '')))}"
     lines = list(bullets)
     par = (phase.get("parallel_note") or "").strip()
     if par:
@@ -1028,6 +1089,174 @@ def build_deck_preview_png(content: DeckContent) -> bytes:
     return build_deck_composite_preview_png(content)
 
 
+def idea_html_dir() -> Path:
+    d = Path(get_settings().data_dir) / "idea_html"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _html_esc(text: str) -> str:
+    return html_lib.escape(_nfc_text(text or ""), quote=True)
+
+
+def _html_list(items: list[str]) -> str:
+    if not items:
+        return "<p class=\"muted\">—</p>"
+    lis = "".join(f"<li>{_html_esc(x)}</li>" for x in items)
+    return f"<ul>{lis}</ul>"
+
+
+def build_html_report(content: DeckContent) -> str:
+    """Selbstständige HTML-Datei: Inhaltsverzeichnis, Sprungmarken, volle Textbreite."""
+    details = content.phase_details or _phase_details_from_lines(content.phase_lines)
+    nav_items: list[tuple[str, str]] = [("top", content.title or "Bericht")]
+    if content.summary_lines:
+        nav_items.append(("summary", "Zusammenfassung"))
+    if content.resource_lines:
+        nav_items.append(("resources", "Ressourcen & Kosten"))
+    if content.challenge_lines:
+        nav_items.append(("challenges", "Herausforderungen"))
+    if details:
+        nav_items.append(("phases", "Phasen"))
+        for i, pd in enumerate(details):
+            nav_items.append((f"phase-{i+1}", f"Phase {i+1}"))
+    if content.recommendation_lines:
+        nav_items.append(("recommendation", "Empfehlung"))
+
+    nav_html = "".join(
+        f'<a href="#{hid}">{_html_esc(label)}</a>' for hid, label in nav_items
+    )
+
+    phase_html_parts: list[str] = []
+    colors = ["#6d4cb4", "#2e7d50", "#2563a8", "#c4783a", "#b4486e", "#5a7896"]
+    bgs = ["#ece4f8", "#d6f5e4", "#d6e8f8", "#fce4d2", "#f8d6e2", "#e6f0fa"]
+    for i, pd in enumerate(details):
+        col = colors[i % len(colors)]
+        bg = bgs[i % len(bgs)]
+        bullets = "".join(f"<li>{_html_esc(b)}</li>" for b in (pd.get("bullets") or []) if b)
+        par = (pd.get("parallel_note") or "").strip()
+        par_html = f'<p class="parallel">Parallel / Dauer: {_html_esc(par)}</p>' if par else ""
+        phase_html_parts.append(
+            f'<article class="phase" id="phase-{i+1}" style="--accent:{col};--bg:{bg}">'
+            f"<h3>Phase {i + 1}: {_html_esc(_clean_phase_title(str(pd.get('title') or '')))}</h3>"
+            f"{'<ul>' + bullets + '</ul>' if bullets else ''}"
+            f"{par_html}</article>"
+        )
+
+    sections: list[str] = []
+    if content.summary_lines:
+        sections.append(
+            f'<section id="summary"><h2>Zusammenfassung</h2>{_html_list(content.summary_lines)}</section>'
+        )
+    if content.resource_lines:
+        sections.append(
+            f'<section id="resources"><h2>Ressourcen &amp; Kosten</h2>{_html_list(content.resource_lines)}</section>'
+        )
+    if content.challenge_lines:
+        sections.append(
+            f'<section id="challenges"><h2>Herausforderungen</h2>{_html_list(content.challenge_lines)}</section>'
+        )
+    if phase_html_parts:
+        sections.append(
+            '<section id="phases"><h2>Phasenplanung</h2>'
+            f'<div class="phases">{"".join(phase_html_parts)}</div></section>'
+        )
+    if content.recommendation_lines:
+        sections.append(
+            f'<section id="recommendation"><h2>Empfehlung</h2>{_html_list(content.recommendation_lines)}</section>'
+        )
+
+    title = _html_esc(content.title or "Projektbericht")
+    subtitle = _html_esc(content.subtitle or "")
+    return f"""<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{title}</title>
+<style>
+:root {{
+  --ink:#1e293b; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc; --card:#fff; --accent:#1e3a5f;
+}}
+* {{ box-sizing:border-box; }}
+html {{ scroll-behavior:smooth; }}
+body {{
+  margin:0; font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  color:var(--ink); background:var(--bg); line-height:1.55;
+}}
+.layout {{ display:grid; grid-template-columns: 240px 1fr; min-height:100vh; }}
+nav {{
+  position:sticky; top:0; height:100vh; overflow:auto;
+  background:var(--accent); color:#e2e8f0; padding:1.4rem 1rem;
+}}
+nav .brand {{ font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:#94a3b8; margin-bottom:.75rem; }}
+nav a {{
+  display:block; color:#e2e8f0; text-decoration:none; font-size:.88rem;
+  padding:.35rem .5rem; border-radius:6px; margin-bottom:.15rem;
+}}
+nav a:hover, nav a:focus {{ background:rgba(255,255,255,.12); }}
+main {{ padding:2rem 2.5rem 4rem; max-width:1100px; }}
+header#top {{ margin-bottom:1.75rem; }}
+h1 {{ font-size:2rem; line-height:1.2; margin:0 0 .35rem; color:var(--accent); }}
+.subtitle {{ color:var(--muted); margin:0; font-size:1rem; }}
+h2 {{ font-size:1.25rem; color:var(--accent); margin:2rem 0 .75rem; border-bottom:2px solid var(--line); padding-bottom:.35rem; }}
+h3 {{ margin:0 0 .5rem; font-size:1.05rem; }}
+ul {{ margin:.35rem 0 0; padding-left:1.2rem; }}
+li {{ margin:.25rem 0; }}
+.muted {{ color:var(--muted); }}
+.phases {{ display:grid; gap:1rem; }}
+.phase {{
+  background:var(--bg); border-left:5px solid var(--accent); border-radius:10px;
+  padding:1rem 1.15rem; box-shadow:0 1px 2px rgba(15,23,42,.06);
+}}
+.phase .parallel {{ color:var(--muted); font-size:.9rem; margin:.5rem 0 0; }}
+footer {{ margin-top:2.5rem; color:var(--muted); font-size:.8rem; border-top:1px solid var(--line); padding-top:.75rem; }}
+@media (max-width: 880px) {{
+  .layout {{ grid-template-columns: 1fr; }}
+  nav {{ position:relative; height:auto; }}
+  main {{ padding:1.25rem; }}
+}}
+@media print {{
+  nav {{ display:none; }}
+  .layout {{ display:block; }}
+  main {{ max-width:none; }}
+}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <div class="brand">SlitProjektHub</div>
+    {nav_html}
+  </nav>
+  <main>
+    <header id="top">
+      <h1>{title}</h1>
+      {f'<p class="subtitle">{subtitle}</p>' if subtitle else ''}
+    </header>
+    {''.join(sections)}
+    <footer>KI-Vorbewertung — ersetzt keine fachliche Prüfung · SlitProjektHub</footer>
+  </main>
+</div>
+</body>
+</html>
+"""
+
+
+def _persist_html_report(idea_id: int, content: DeckContent) -> str:
+    name = f"report_{idea_id}_{uuid.uuid4().hex[:10]}.html"
+    (idea_html_dir() / name).write_text(build_html_report(content), encoding="utf-8")
+    return name
+
+
+def _unlink_html(obj: ProjectIdea) -> None:
+    if not obj.html_path:
+        return
+    p = idea_html_dir() / Path(obj.html_path).name
+    if p.is_file():
+        p.unlink(missing_ok=True)
+
+
 def generate_portfolio_deck(
     idea_id: int,
     refinement_notes: str = "",
@@ -1040,15 +1269,19 @@ def generate_portfolio_deck(
     content = deck_content_from_idea(idea, refinement_notes, llm_provider, llm_model)
     deck_name = f"deck_{idea_id}_{uuid.uuid4().hex[:10]}.pptx"
     preview_name = f"deck_preview_{idea_id}.png"
+    html_name = _persist_html_report(idea_id, content)
     (idea_decks_dir() / deck_name).write_bytes(build_pptx_bytes(content))
     (idea_images_dir() / preview_name).write_bytes(build_deck_preview_png(content))
     with get_session() as ses:
         obj = ses.get(ProjectIdea, idea_id)
         if not obj:
             return None
+        _unlink_html(obj)
         obj.deck_path = deck_name
         obj.deck_preview_path = preview_name
         obj.deck_generated_at = _now()
+        obj.html_path = html_name
+        obj.html_generated_at = _now()
         obj.updated_at = _now()
         ses.add(obj)
         ses.commit()
@@ -1184,12 +1417,44 @@ def generate_idea_docx(
     content = deck_content_from_idea(idea, refinement_notes, llm_provider, llm_model)
     docx_name = f"report_{idea_id}_{uuid.uuid4().hex[:10]}.docx"
     (idea_docx_dir() / docx_name).write_bytes(build_docx_bytes(content, include_diagram=include_diagram))
+    html_name = _persist_html_report(idea_id, content)
     with get_session() as ses:
         obj = ses.get(ProjectIdea, idea_id)
         if not obj:
             return None
+        _unlink_html(obj)
         obj.docx_path = docx_name
         obj.docx_generated_at = _now()
+        obj.html_path = html_name
+        obj.html_generated_at = _now()
+        obj.updated_at = _now()
+        ses.add(obj)
+        ses.commit()
+        ses.refresh(obj)
+        return obj
+
+
+def generate_idea_html(
+    idea_id: int,
+    refinement_notes: str = "",
+    llm_provider: str = "openai",
+    llm_model: str = "",
+) -> Optional[ProjectIdea]:
+    idea = get_idea(idea_id)
+    if not idea or idea.status != "bewertet":
+        return None
+    content = deck_content_from_idea(idea, refinement_notes, llm_provider, llm_model)
+    html_name = _persist_html_report(idea_id, content)
+    preview_name = f"deck_preview_{idea_id}.png"
+    (idea_images_dir() / preview_name).write_bytes(build_deck_preview_png(content))
+    with get_session() as ses:
+        obj = ses.get(ProjectIdea, idea_id)
+        if not obj:
+            return None
+        _unlink_html(obj)
+        obj.html_path = html_name
+        obj.html_generated_at = _now()
+        obj.deck_preview_path = preview_name
         obj.updated_at = _now()
         ses.add(obj)
         ses.commit()
@@ -1225,6 +1490,9 @@ def generate_idea_visual(
         refinement_notes, ref_text, for_cloud=out_cloud,
     )
 
+    if fmt == "html":
+        obj = generate_idea_html(idea_id, merged_notes, llm_provider, llm_model)
+        return obj, None if obj else "generation_failed"
     if fmt == "pptx":
         obj = generate_portfolio_deck(idea_id, merged_notes, llm_provider, llm_model)
         return obj, None if obj else "generation_failed"

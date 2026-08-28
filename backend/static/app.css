@@ -79,7 +79,49 @@ body {
 
 .topbar-title { font-size: 1rem; font-weight: 600; }
 
-.content { padding: 1.5rem; overflow-y: auto; flex: 1; }
+.content { padding: 1.5rem 2rem; overflow-y: auto; flex: 1; }
+
+.page-wide { width: 100%; max-width: 1680px; }
+.page-wide .page-title { font-size: 1.5rem; }
+.page-wide .form-input,
+.page-wide .form-select,
+.page-wide .form-textarea { font-size: 0.95rem; }
+.page-wide .form-label { font-size: 0.78rem; }
+
+.idea-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.85rem 1.25rem;
+  align-items: start;
+}
+.idea-form-grid .span-2 { grid-column: 1 / -1; }
+@media (max-width: 1100px) {
+  .idea-form-grid { grid-template-columns: 1fr; }
+  .idea-form-grid .span-2 { grid-column: auto; }
+}
+
+.result-card {
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.6rem;
+  background: var(--color-surface-2);
+}
+.result-card-clickable { cursor: pointer; }
+.result-card-clickable:hover {
+  border-color: var(--color-primary);
+  outline: 1px solid rgba(59,130,246,.35);
+}
+.result-card img.result-thumb {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  object-position: top;
+  margin-top: 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+}
 
 /* ── Card ── */
 .card {

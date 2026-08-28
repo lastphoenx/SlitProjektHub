@@ -3,7 +3,7 @@
 {% block topbar_title %}Projektideen{% endblock %}
 
 {% block content %}
-<div style="max-width:1200px">
+<div class="page-wide">
 
 <div class="page-header">
   <div>
@@ -21,7 +21,7 @@
   {% if error == 'empty_text' %}
   <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Bitte Beschreibung oder Unterlagen angeben.</p>
   {% elif error == 'too_many_files' %}
-  <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Zu viele Dateien (max. 5).</p>
+  <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Zu viele Dateien (max. {{ max_attachments or 10 }}).</p>
   {% elif error == 'too_large' %}
   <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Datei zu gross (max. 10 MB pro Datei).</p>
   {% elif error == 'invalid_type' %}
@@ -29,7 +29,7 @@
   {% elif error %}
   <p class="text-muted" style="color:#fca5a5;margin-bottom:.75rem;font-size:.85rem">Upload fehlgeschlagen: {{ error }}</p>
   {% endif %}
-  <form method="post" action="/idea" enctype="multipart/form-data" style="display:grid;gap:.6rem;max-width:760px">
+  <form method="post" action="/idea" enctype="multipart/form-data" style="display:grid;gap:.6rem">
     <div>
       <label class="form-label">Arbeitstitel (optional)</label>
       <input class="form-input" name="title" placeholder="Kurzer Arbeitstitel" value="{{ form_title or '' }}" />
@@ -61,7 +61,8 @@
       </p>
       {% set zone_id = 'idea-new' %}
       {% set accept = '.png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.docx' %}
-      {% set hint = 'PNG, JPG, GIF, WebP, PDF, Word (.docx), TXT — max. 5 Dateien, 10 MB je Datei' %}
+      {% set max_files = max_attachments or 10 %}
+      {% set hint = 'PNG, JPG, GIF, WebP, PDF, Word (.docx), TXT — max. ' ~ (max_attachments or 10) ~ ' Dateien, 10 MB je Datei' %}
       {% include 'partials/_file_upload_zone.html' %}
     </div>
     <div>

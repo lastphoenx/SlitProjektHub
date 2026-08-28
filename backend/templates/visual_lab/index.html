@@ -3,7 +3,7 @@
 {% block topbar_title %}Visual-Lab{% endblock %}
 
 {% block content %}
-<div style="max-width:1200px">
+<div class="page-wide">
 
 <div class="page-header">
   <div>
@@ -24,7 +24,7 @@
   {% elif error == 'png_failed' %}OpenAI Bildgenerierung fehlgeschlagen.
   {% elif error == 'cloud_confirm' %}Bestätigung für Cloud-Übertragung an OpenAI erforderlich.
   {% elif error == 'vision_cloud_confirm' %}Bestätigung für Cloud-Vision (Referenzbilder beschreiben) erforderlich.
-  {% elif error == 'too_many_files' %}Zu viele Dateien (max. 5).
+  {% elif error == 'too_many_files' %}Zu viele Dateien (max. {{ max_attachments or 10 }}).
   {% elif error == 'too_large' %}Datei zu gross (max. 10 MB pro Datei).
   {% elif error == 'invalid_type' %}Dateityp nicht erlaubt — nur PNG, JPEG, WebP, GIF, PDF, TXT, MD.
   {% elif error == 'empty' %}Leere Datei hochgeladen.
@@ -36,7 +36,7 @@
 
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Neuer Test</h2>
-  <form id="vl-generate-form" method="post" action="/visual-lab/generate" enctype="multipart/form-data" style="display:grid;gap:.6rem;max-width:800px">
+  <form id="vl-generate-form" method="post" action="/visual-lab/generate" enctype="multipart/form-data" style="display:grid;gap:.75rem">
     <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
     <input type="hidden" name="llm_model" value="{{ llm_model }}" />
     <div>
@@ -55,7 +55,8 @@
       </p>
       {% set zone_id = 'vl-ref' %}
       {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
-      {% set hint = 'PNG, JPG, PDF, Word, TXT — max. 5 × 10 MB' %}
+      {% set max_files = max_attachments or 10 %}
+      {% set hint = 'PNG, JPG, PDF, Word, TXT — max. ' ~ (max_attachments or 10) ~ ' × 10 MB' %}
       {% include 'partials/_file_upload_zone.html' %}
     </div>
     {% set llm_role = 'input' %}
@@ -124,7 +125,7 @@
       </thead>
       <tbody>
         {% for r in runs %}
-        <tr>
+        <tr style="cursor:pointer" title="Vorschau öffnen" onclick="if (!event.target.closest('a,button,form')) { const btn = this.querySelector('[hx-get]'); if (btn) btn.click(); }">
           <td>{{ r.id }}</td>
           <td><span class="badge badge-neutral">{{ r.kind }}</span></td>
           <td style="font-size:.78rem;max-width:280px;white-space:pre-wrap">{{ r.prompt_input[:120] }}{% if r.prompt_input|length > 120 %}…{% endif %}</td>
