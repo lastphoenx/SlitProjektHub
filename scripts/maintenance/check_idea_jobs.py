@@ -15,12 +15,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from src.m01_config import get_settings
+
+get_settings()  # lädt .env, bevor Ollama-URL gelesen wird
+
 from src.m08_llm import _ollama_root_url, ollama_runtime_status
 
 
 def _db_path() -> Path:
-    from src.m01_config import get_settings
-
     s = get_settings()
     url = (s.db_url or "").replace("sqlite:///", "", 1)
     p = Path(url)
@@ -32,7 +34,10 @@ def _db_path() -> Path:
 def main() -> int:
     print("=== Ollama /api/ps (im Speicher / evtl. beschäftigt) ===")
     root = _ollama_root_url()
-    print(f"URL: {root or '(nicht gesetzt)'}")
+    print(f"URL aus .env: {root or '(nicht gesetzt)'}")
+    if not root:
+        print("Ohne OLLAMA_BASE_URL in .env ist Ollama für App und CLI unsichtbar.")
+        print("curl 127.0.0.1:11434 schlägt dann fehl, wenn Ollama auf einem anderen Host läuft.")
     st = ollama_runtime_status(None)
     print(f"erreichbar: {st.get('ok')}")
     loaded = st.get("loaded") or []

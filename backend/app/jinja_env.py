@@ -29,3 +29,5 @@ class Jinja2Templates(StarletteJinja2Templates):
 
 
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+_css = BACKEND_DIR / "static" / "app.css"
+templates.env.globals["static_v"] = str(int(_css.stat().st_mtime)) if _css.exists() else "1"
