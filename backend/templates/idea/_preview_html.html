@@ -3,11 +3,14 @@
     <div class="modal-header" style="flex-shrink:0">
       <div>
         <h2 class="modal-title" style="font-size:.95rem">HTML-Bericht — {{ idea.ai_project_name or idea.title or 'Idee' }}</h2>
-        <p class="text-muted" style="font-size:.72rem">Interaktive Vorschau · Inhaltsverzeichnis im Bericht</p>
+        <p class="text-muted" style="font-size:.72rem">
+          Erzeugt {{ visual_meta.html_at or "—" }}
+          {% if visual_meta.html_older_than_ai %} · älter als KI ({{ visual_meta.ai_at }}){% endif %}
+        </p>
       </div>
       <div style="display:flex;gap:.35rem;flex-wrap:wrap">
-        <a class="btn btn-secondary btn-sm" href="/idea/report/{{ idea.id }}" target="_blank" rel="noopener">Vollansicht</a>
-        <a class="btn btn-secondary btn-sm" href="/idea/report/{{ idea.id }}?disposition=attachment">HTML Download</a>
+        <a class="btn btn-secondary btn-sm" href="{{ report_urls.inline }}" target="_blank" rel="noopener">Vollansicht</a>
+        <a class="btn btn-secondary btn-sm" href="{{ report_urls.download }}">HTML Download</a>
         {% if idea.deck_path %}
         <a class="btn btn-secondary btn-sm" href="/idea/deck/{{ idea.id }}">PPTX</a>
         {% endif %}
@@ -17,7 +20,7 @@
       </div>
     </div>
     <div style="flex:1;min-height:0;overflow:hidden;padding:.35rem">
-      <iframe src="/idea/report/{{ idea.id }}" title="HTML-Bericht"
+      <iframe src="{{ report_urls.inline }}" title="HTML-Bericht"
               style="width:100%;height:min(75vh,800px);border:1px solid var(--color-border);border-radius:.375rem;background:#fff"></iframe>
     </div>
   </div>

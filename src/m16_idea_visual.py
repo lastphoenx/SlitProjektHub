@@ -534,13 +534,18 @@ def deck_content_from_idea(
     refinement_notes: str = "",
     llm_provider: str = "openai",
     llm_model: str = "",
+    prefer_user: bool = True,
 ) -> DeckContent:
-    from .m16_idea import effective_assessment
+    from .m16_idea import effective_assessment, format_idea_dt
 
-    eff = effective_assessment(idea)
+    generated = datetime.now(timezone.utc)
+    eff = effective_assessment(idea, prefer_user=prefer_user)
     challenges = list(eff["challenges"] or [])
     phases = list(eff["phases"] or [])
-    source_label = "Fachliche Einschätzung" if eff["saved"] else "KI-Vorbewertung"
+    if eff["saved"]:
+        source_label = f"Fachliche Einschätzung {format_idea_dt(idea.user_assessed_at)}"
+    else:
+        source_label = f"KI-Vorbewertung {format_idea_dt(idea.ai_assessed_at)}"
     summary = eff.get("summary") or ""
     base = DeckContent(
         title=idea.ai_project_name or idea.title or f"Projektidee #{idea.id}",
@@ -548,7 +553,7 @@ def deck_content_from_idea(
             [x for x in [
                 idea.fachabteilung,
                 source_label,
-                idea.created_at.strftime("%d.%m.%Y"),
+                f"Bericht {format_idea_dt(generated)}",
             ] if x]
         ),
         summary_lines=[s.strip() for s in re.split(r"(?<=[.!?])\s+", summary) if s.strip()][:6],
@@ -1466,11 +1471,14 @@ def generate_portfolio_deck(
     refinement_notes: str = "",
     llm_provider: str = "openai",
     llm_model: str = "",
+    prefer_user: bool = True,
 ) -> Optional[ProjectIdea]:
     idea = get_idea(idea_id)
     if not idea or idea.status != "bewertet":
         return None
-    content = deck_content_from_idea(idea, refinement_notes, llm_provider, llm_model)
+    content = deck_content_from_idea(
+        idea, refinement_notes, llm_provider, llm_model, prefer_user=prefer_user
+    )
     deck_name = f"deck_{idea_id}_{uuid.uuid4().hex[:10]}.pptx"
     preview_name = f"deck_preview_{idea_id}.png"
     html_name = _persist_html_report(idea_id, content)
@@ -1585,11 +1593,14 @@ def generate_local_diagram_png(
     refinement_notes: str = "",
     llm_provider: str = "openai",
     llm_model: str = "",
+    prefer_user: bool = True,
 ) -> Optional[ProjectIdea]:
     idea = get_idea(idea_id)
     if not idea or idea.status != "bewertet":
         return None
-    content = deck_content_from_idea(idea, refinement_notes, llm_provider, llm_model)
+    content = deck_content_from_idea(
+        idea, refinement_notes, llm_provider, llm_model, prefer_user=prefer_user
+    )
     fname = f"diag_{idea_id}_{uuid.uuid4().hex[:10]}.png"
     (idea_images_dir() / fname).write_bytes(build_deck_preview_png(content))
     with get_session() as ses:
@@ -1614,11 +1625,14 @@ def generate_idea_docx(
     refinement_notes: str = "",
     llm_provider: str = "openai",
     llm_model: str = "",
+    prefer_user: bool = True,
 ) -> Optional[ProjectIdea]:
     idea = get_idea(idea_id)
     if not idea or idea.status != "bewertet":
         return None
-    content = deck_content_from_idea(idea, refinement_notes, llm_provider, llm_model)
+    content = deck_content_from_idea(
+        idea, refinement_notes, llm_provider, llm_model, prefer_user=prefer_user
+    )
     docx_name = f"report_{idea_id}_{uuid.uuid4().hex[:10]}.docx"
     (idea_docx_dir() / docx_name).write_bytes(build_docx_bytes(content, include_diagram=include_diagram))
     html_name = _persist_html_report(idea_id, content)
@@ -1643,11 +1657,14 @@ def generate_idea_html(
     refinement_notes: str = "",
     llm_provider: str = "openai",
     llm_model: str = "",
+    prefer_user: bool = True,
 ) -> Optional[ProjectIdea]:
     idea = get_idea(idea_id)
     if not idea or idea.status != "bewertet":
         return None
-    content = deck_content_from_idea(idea, refinement_notes, llm_provider, llm_model)
+    content = deck_content_from_idea(
+        idea, refinement_notes, llm_provider, llm_model, prefer_user=prefer_user
+    )
     html_name = _persist_html_report(idea_id, content)
     preview_name = f"deck_preview_{idea_id}.png"
     (idea_images_dir() / preview_name).write_bytes(build_deck_preview_png(content))
@@ -1676,6 +1693,7 @@ def generate_idea_visual(
     input_llm_provider: str = "",
     input_llm_model: str = "",
     source_tasks: set[str] | None = None,
+    prefer_user: bool = True,
 ) -> tuple[Optional[ProjectIdea], Optional[str]]:
     fmt = (output_format or "").strip().lower()
     if fmt not in IDEA_VISUAL_OUTPUT_FORMATS:
@@ -1695,13 +1713,19 @@ def generate_idea_visual(
     )
 
     if fmt == "html":
-        obj = generate_idea_html(idea_id, merged_notes, llm_provider, llm_model)
+        obj = generate_idea_html(
+            idea_id, merged_notes, llm_provider, llm_model, prefer_user=prefer_user
+        )
         return obj, None if obj else "generation_failed"
     if fmt == "pptx":
-        obj = generate_portfolio_deck(idea_id, merged_notes, llm_provider, llm_model)
+        obj = generate_portfolio_deck(
+            idea_id, merged_notes, llm_provider, llm_model, prefer_user=prefer_user
+        )
         return obj, None if obj else "generation_failed"
     if fmt == "png_local":
-        obj = generate_local_diagram_png(idea_id, merged_notes, llm_provider, llm_model)
+        obj = generate_local_diagram_png(
+            idea_id, merged_notes, llm_provider, llm_model, prefer_user=prefer_user
+        )
         return obj, None if obj else "generation_failed"
     if fmt == "png_cloud":
         if not have_key("openai"):
@@ -1716,9 +1740,13 @@ def generate_idea_visual(
         )
         return obj, None if obj else "png_failed"
     if fmt == "docx":
-        obj = generate_idea_docx(idea_id, False, merged_notes, llm_provider, llm_model)
+        obj = generate_idea_docx(
+            idea_id, False, merged_notes, llm_provider, llm_model, prefer_user=prefer_user
+        )
         return obj, None if obj else "generation_failed"
     if fmt == "docx_png":
-        obj = generate_idea_docx(idea_id, True, merged_notes, llm_provider, llm_model)
+        obj = generate_idea_docx(
+            idea_id, True, merged_notes, llm_provider, llm_model, prefer_user=prefer_user
+        )
         return obj, None if obj else "generation_failed"
     return None, "invalid_format"

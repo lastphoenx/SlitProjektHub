@@ -231,9 +231,44 @@ def _pick_list(user_json: Optional[str], ai_json: Optional[str], saved: bool, fn
     return _normalize_list(_safe_json_list(ai_json), fn)
 
 
-def effective_assessment(idea: ProjectIdea) -> dict[str, Any]:
+def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def format_idea_dt(dt: Optional[datetime]) -> str:
+    """Datum + Uhrzeit der letzten Erzeugung (UTC, wie übrige Idea-Zeitstempel)."""
+    if not dt:
+        return ""
+    return dt.strftime("%d.%m.%Y %H:%M")
+
+
+def visual_source_meta(idea: ProjectIdea) -> dict[str, Any]:
+    """Zeitstempel und ob der gespeicherte HTML-Bericht hinter der KI zurückliegt."""
+    html = _as_utc(idea.html_generated_at)
+    user = _as_utc(idea.user_assessed_at)
+    ai = _as_utc(idea.ai_assessed_at)
+    return {
+        "ai_at": format_idea_dt(idea.ai_assessed_at),
+        "user_at": format_idea_dt(idea.user_assessed_at),
+        "html_at": format_idea_dt(idea.html_generated_at),
+        "deck_at": format_idea_dt(idea.deck_generated_at),
+        "docx_at": format_idea_dt(idea.docx_generated_at),
+        "uses_user": bool(user),
+        "html_older_than_ai": bool(html and ai and html < ai),
+        "html_older_than_user": bool(html and user and html < user),
+        "user_older_than_ai": bool(user and ai and user < ai),
+        "report_v": int(html.timestamp()) if html else 0,
+        "prefer_ai_default": bool(user and ai and user < ai) or not bool(user),
+    }
+
+
+def effective_assessment(idea: ProjectIdea, *, prefer_user: bool = True) -> dict[str, Any]:
     """Report-/Visual-Werte: User, sobald gespeichert und Feld gesetzt, sonst KI."""
-    saved = bool(idea.user_assessed_at)
+    saved = bool(idea.user_assessed_at) and prefer_user
     challenges = _pick_list(idea.user_challenges_json, idea.ai_challenges_json, saved, normalize_challenge)
     phases = _pick_list(idea.user_phases_json, idea.ai_phases_json, saved, normalize_phase)
     internal_pt = _pick_num(idea.user_internal_pt, idea.ai_internal_pt, saved)
