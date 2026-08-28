@@ -481,29 +481,29 @@ document.addEventListener('keydown', e => {
 });
 function ideaBindBusyForm(form, opts) {
   if (!form) return;
+  function setBusy(on, submitter) {
+    form.setAttribute('data-busy', on ? '1' : '0');
+    form.setAttribute('aria-busy', on ? 'true' : 'false');
+    var banner = form.querySelector('.idea-busy-banner');
+    if (banner) banner.hidden = !on;
+    var badge = opts && opts.badgeId ? document.getElementById(opts.badgeId) : null;
+    if (badge) badge.hidden = !on;
+    var btn = submitter || form.querySelector('[type="submit"]');
+    if (!btn) return;
+    var idle = btn.querySelector('.idea-btn-idle');
+    var busy = btn.querySelector('.idea-btn-busy');
+    if (idle) idle.hidden = !!on;
+    if (busy) busy.hidden = !on;
+    btn.classList.toggle('is-busy', !!on);
+    btn.setAttribute('aria-disabled', on ? 'true' : 'false');
+  }
+  form.addEventListener('invalid', function () { setBusy(false); }, true);
   form.addEventListener('submit', function (e) {
     if (form.getAttribute('data-busy') === '1') {
       e.preventDefault();
       return;
     }
-    form.setAttribute('data-busy', '1');
-    form.setAttribute('aria-busy', 'true');
-    var banner = form.querySelector('.idea-busy-banner');
-    if (banner) banner.hidden = false;
-    var badge = opts && opts.badgeId ? document.getElementById(opts.badgeId) : null;
-    if (badge) badge.hidden = false;
-    var btn = e.submitter || form.querySelector('[type="submit"]');
-    if (btn) {
-      var idle = btn.querySelector('.idea-btn-idle');
-      var busy = btn.querySelector('.idea-btn-busy');
-      if (idle) idle.hidden = true;
-      if (busy) busy.hidden = false;
-    }
-    window.setTimeout(function () {
-      form.querySelectorAll('button').forEach(function (el) {
-        el.disabled = true;
-      });
-    }, 0);
+    setBusy(true, e.submitter || form.querySelector('[type="submit"]'));
   });
 }
 document.querySelectorAll('.idea-gen-form').forEach(form => {
