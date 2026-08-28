@@ -34,6 +34,22 @@ class Settings:
     auth_session_timeout_minutes: int
     auth_trusted_proxy_ips: tuple[str, ...]
 
+def resolve_sqlite_url(url: str, base_dir: Path) -> str:
+    """Relative sqlite:///…-URLs an base_dir binden, unabhängig vom CWD."""
+    u = (url or "").strip()
+    if not u.startswith("sqlite:///"):
+        return u
+    rest = u[len("sqlite:///"):]
+    if rest.startswith(":memory:"):
+        return u
+    p = Path(rest)
+    if not p.is_absolute():
+        p = (base_dir / p).resolve()
+    else:
+        p = p.resolve()
+    return "sqlite:///" + p.as_posix()
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     cfg_path = BASE_DIR / "config" / "config.yaml"
@@ -61,7 +77,7 @@ def get_settings() -> Settings:
 
     return Settings(
         app_name=cfg["app_name"],
-        db_url=cfg["database"]["url"],
+        db_url=resolve_sqlite_url(cfg["database"]["url"], BASE_DIR),
         db_wal_mode=cfg["database"].get("wal_mode", False),  # WAL-Modus, Standard: aus
         base_dir=base_dir,
         data_dir=data_dir,
