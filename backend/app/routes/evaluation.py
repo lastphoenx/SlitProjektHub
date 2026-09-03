@@ -1,8 +1,10 @@
 """FastAPI routes — Phase C Offertbeurteilung."""
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
+import json
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -28,8 +30,14 @@ from src.m15_evaluation import (
     create_bidder,
     create_criterion,
     delete_price_item,
+    extract_criteria_from_tender_docs,
+    extract_price_from_bidder_doc,
+    extract_price_structure_from_tender,
     get_bidder_document_ids,
+    get_bidder_preisblatt_doc_ids,
     get_score,
+    get_tender_document_ids,
+    import_criteria_payload,
     link_document_to_bidder,
     link_tender_doc,
     list_bidders,
@@ -38,10 +46,12 @@ from src.m15_evaluation import (
     list_scores_for_cell,
     list_scores_for_project,
     list_tender_docs,
+    merge_price_structure_for_bidder,
     official_score,
     rolled_up_score,
     soft_delete_bidder,
     soft_delete_criterion,
+    seed_price_structure_for_bidder,
     suggest_score_with_rag,
     sync_price_criterion_scores,
     unlink_document_from_bidder,
@@ -49,6 +59,7 @@ from src.m15_evaluation import (
     upsert_price_item,
     upsert_score,
     validate_evaluation_cloud_gate,
+    validate_tender_cloud_gate,
 )
 from src.m01_config import load_user_settings
 
@@ -202,6 +213,7 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "tender_doc_roles": tender_doc_roles,
         "tender_roles": TENDER_ROLES,
         "tender_role_labels": TENDER_ROLE_LABELS,
+        "has_tender_docs": bool(get_tender_document_ids(project_key)) if project_key else False,
         "bidder_docs": bidder_docs,
         "criterion_kinds": CRITERION_KINDS,
         "angebot_class": ANGEbot_CLASSIFICATION,
@@ -575,6 +587,77 @@ async def evaluation_delete_bidder(request: Request, project_key: str = Form(...
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
 
 
+@router.post("/evaluation/extract-criteria", response_class=HTMLResponse)
+async def evaluation_extract_criteria(
+    request: Request,
+    project_key: str = Form(...),
+    provider: str = Form(""),
+    model: str = Form(""),
+    cloud_confirm: str = Form("false"),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    settings = load_user_settings()
+    ap = (provider or settings.get("provider") or "openai").strip()
+    am = (model or settings.get("model") or "").strip()
+    gate = validate_tender_cloud_gate(ap, project_key, cloud_confirm in ("true", "on", "1", "yes"))
+    if gate:
+        return templates.TemplateResponse(
+            "evaluation/_criteria_extract.html",
+            {
+                "request": request,
+                "project_key": project_key,
+                "project_title": _project_title(project_key),
+                "error": "cloud_confirm",
+                "payload": {},
+                "criteria_json": "{}",
+                "may_evaluate": True,
+            },
+        )
+    result = await asyncio.to_thread(
+        extract_criteria_from_tender_docs, project_key, ap, am or None
+    )
+    payload = result.get("payload") or {}
+    return templates.TemplateResponse(
+        "evaluation/_criteria_extract.html",
+        {
+            "request": request,
+            "project_key": project_key,
+            "project_title": _project_title(project_key),
+            "error": result.get("error"),
+            "payload": payload,
+            "criteria_json": json.dumps(payload, ensure_ascii=False, indent=2),
+            "raw_llm": result.get("raw_llm"),
+            "may_evaluate": True,
+        },
+    )
+
+
+@router.post("/evaluation/apply-criteria", response_class=HTMLResponse)
+async def evaluation_apply_criteria(
+    request: Request,
+    project_key: str = Form(...),
+    criteria_json: str = Form(...),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    try:
+        data = json.loads(criteria_json or "{}")
+    except json.JSONDecodeError:
+        return RedirectResponse(
+            url=f"/evaluation?project_key={project_key}&criteria_apply=invalid",
+            status_code=303,
+        )
+    stats = import_criteria_payload(project_key, data, skip_existing=True)
+    return RedirectResponse(
+        url=(
+            f"/evaluation?project_key={project_key}"
+            f"&criteria_apply=ok&created={stats['created']}&skipped={stats['skipped']}"
+        ),
+        status_code=303,
+    )
+
+
 @router.post("/evaluation/delete-criterion", response_class=HTMLResponse)
 async def evaluation_delete_criterion(request: Request, project_key: str = Form(...), criterion_id: int = Form(...)):
     if not can_evaluate(_username(request)):
@@ -598,6 +681,10 @@ async def evaluation_price_page(request: Request, project_key: str, bidder_id: i
     for i in wiederkehrend:
         by_year.setdefault(i.year, []).append(i)
     tco = compute_bidder_tco(bidder_id) if bidder_id else None
+    has_price_template = bool(
+        get_tender_document_ids(project_key, roles=("preisblatt_vorlage",))
+    ) if project_key else False
+    has_bidder_preisblatt = bool(get_bidder_preisblatt_doc_ids(bidder_id)) if bidder_id else False
     return templates.TemplateResponse(
         "evaluation/_price.html",
         {
@@ -610,6 +697,9 @@ async def evaluation_price_page(request: Request, project_key: str, bidder_id: i
             "by_year": dict(sorted(by_year.items())),
             "tco": tco,
             "may_evaluate": can_evaluate(who),
+            "has_price_template": has_price_template,
+            "has_bidder_preisblatt": has_bidder_preisblatt,
+            "price_message": request.query_params.get("price_msg"),
         },
     )
 
@@ -656,6 +746,80 @@ async def evaluation_delete_price_item(
     delete_price_item(item_id)
     sync_price_criterion_scores(project_key)
     return RedirectResponse(url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}", status_code=303)
+
+
+@router.post("/evaluation/price-template/seed", response_class=HTMLResponse)
+async def evaluation_price_template_seed(
+    request: Request,
+    project_key: str = Form(...),
+    bidder_id: int = Form(...),
+    provider: str = Form(""),
+    model: str = Form(""),
+    cloud_confirm: str = Form("false"),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    settings = load_user_settings()
+    ap = (provider or settings.get("provider") or "openai").strip()
+    am = (model or settings.get("model") or "").strip()
+    gate = validate_tender_cloud_gate(ap, project_key, cloud_confirm in ("true", "on", "1", "yes"))
+    if gate:
+        return RedirectResponse(
+            url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}&price_msg=cloud_confirm",
+            status_code=303,
+        )
+    extracted = await asyncio.to_thread(
+        extract_price_structure_from_tender, project_key, ap, am or None
+    )
+    if extracted.get("error"):
+        msg = "template_error"
+    else:
+        stats = seed_price_structure_for_bidder(
+            bidder_id, extracted.get("structure") or {}, only_if_empty=True
+        )
+        sync_price_criterion_scores(project_key)
+        msg = f"seed_ok_{stats['created']}"
+    return RedirectResponse(
+        url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}&price_msg={msg}",
+        status_code=303,
+    )
+
+
+@router.post("/evaluation/price-template/parse", response_class=HTMLResponse)
+async def evaluation_price_template_parse(
+    request: Request,
+    project_key: str = Form(...),
+    bidder_id: int = Form(...),
+    provider: str = Form(""),
+    model: str = Form(""),
+    cloud_confirm: str = Form("false"),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    settings = load_user_settings()
+    ap = (provider or settings.get("provider") or "openai").strip()
+    am = (model or settings.get("model") or "").strip()
+    gate = validate_evaluation_cloud_gate(
+        ap, bidder_id, cloud_confirm in ("true", "on", "1", "yes")
+    )
+    if gate:
+        return RedirectResponse(
+            url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}&price_msg=cloud_confirm",
+            status_code=303,
+        )
+    extracted = await asyncio.to_thread(
+        extract_price_from_bidder_doc, bidder_id, project_key, ap, am or None
+    )
+    if extracted.get("error"):
+        msg = "parse_error"
+    else:
+        stats = merge_price_structure_for_bidder(bidder_id, extracted.get("structure") or {})
+        sync_price_criterion_scores(project_key)
+        msg = f"parse_ok_{stats['created']}_{stats['updated']}"
+    return RedirectResponse(
+        url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}&price_msg={msg}",
+        status_code=303,
+    )
 
 
 def _export_rows(project_key: str, may_see: bool) -> tuple[list[str], list[list]]:

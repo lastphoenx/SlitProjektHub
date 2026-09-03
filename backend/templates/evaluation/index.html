@@ -146,8 +146,34 @@
     <h2 style="font-size:.95rem;font-weight:700;margin:0">Kriterien <span class="text-muted" style="font-weight:400">(optional)</span></h2>
   </div>
   <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 .75rem">
-    Manuell anlegen oder später aus Vorgaben extrahieren. Ohne Kriterien keine Matrix — die KI nutzt trotzdem die verknüpften Vorgaben in Phase ④.
+    Manuell anlegen oder aus verknüpften Vorgaben (Phase ①) per KI extrahieren.
+    Ohne Kriterien keine Matrix — die KI nutzt trotzdem die Vorgaben in Phase ④.
   </p>
+  {% if request.query_params.get('criteria_apply') == 'ok' %}
+  <p style="font-size:.78rem;color:var(--color-success, #86efac);margin:0 0 .5rem">
+    {{ request.query_params.get('created', '0') }} Kriterien angelegt,
+    {{ request.query_params.get('skipped', '0') }} übersprungen (existierten bereits).
+  </p>
+  {% elif request.query_params.get('criteria_apply') == 'invalid' %}
+  <p style="font-size:.78rem;color:var(--color-danger);margin:0 0 .5rem">Ungültiges JSON — nicht übernommen.</p>
+  {% endif %}
+  {% if has_tender_docs %}
+  <form method="post" action="/evaluation/extract-criteria"
+        style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end;margin-bottom:.75rem;padding:.5rem;border:1px dashed var(--color-border);border-radius:6px">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <div>
+      <p style="font-size:.78rem;font-weight:600;margin:0 0 .25rem">Aus Vorgaben extrahieren (KI)</p>
+      <p class="text-muted" style="font-size:.7rem;margin:0">Nutzt Dokumente mit Rolle Eignungs-/Zuschlagskriterien etc.</p>
+    </div>
+    <label style="font-size:.72rem;display:flex;gap:.3rem;align-items:center">
+      <input type="checkbox" name="cloud_confirm" value="true" />
+      Cloud-PII bestätigen
+    </label>
+    <button type="submit" class="btn btn-secondary btn-sm">KI-Extraktion starten</button>
+  </form>
+  {% else %}
+  <p class="text-muted" style="font-size:.72rem;margin:0 0 .75rem">KI-Extraktion: zuerst Phase ① Vorgaben verknüpfen.</p>
+  {% endif %}
   <form method="post" action="/evaluation/criterion" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.5rem;max-width:900px;align-items:end">
     <input type="hidden" name="project_key" value="{{ project_key }}" />
     <div>

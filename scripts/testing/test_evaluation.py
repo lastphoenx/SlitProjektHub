@@ -14,15 +14,22 @@ from src.m15_evaluation import (
     BidderDocumentLink,
     Criterion,
     EvaluationTenderDoc,
+    PriceItem,
     Score,
     compute_rankings,
     create_bidder,
     create_criterion,
     get_tender_document_ids,
+    import_criteria_payload,
     link_tender_doc,
+    list_criteria,
+    list_price_items,
+    merge_price_structure_for_bidder,
+    seed_price_structure_for_bidder,
     tender_roles_for_criterion,
     unlink_tender_doc,
     upsert_score,
+    validate_tender_cloud_gate,
 )
 
 
@@ -276,6 +283,73 @@ def test_tender_doc_link_and_roles():
     ev.get_session = old_get
 
 
+def test_import_criteria_payload_skip_existing():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    create_criterion("p1", "zuschlag", "Preis", weight_pct=30, auto_price=True)
+    stats = import_criteria_payload(
+        "p1",
+        {
+            "zuschlag": [
+                {"name": "Preis", "weight_pct": 30, "auto_price": True},
+                {"name": "Qualität", "weight_pct": 70, "description": "Lösung"},
+            ]
+        },
+    )
+    assert stats["skipped"] >= 1
+    assert stats["created"] >= 1
+    names = {c.name for c in list_criteria("p1")}
+    assert "Qualität" in names
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_seed_and_merge_price_structure():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    bidder = create_bidder("p1", "Bieter A")
+    seeded = seed_price_structure_for_bidder(
+        bidder.id,
+        {"einmalig": [{"referenz": "F-01", "leistungsbeschreibung": "Konzept", "anzahl": 0, "kosten_pro_einheit": 0}]},
+    )
+    assert seeded["created"] == 1
+    merged = merge_price_structure_for_bidder(
+        bidder.id,
+        {"einmalig": [{"referenz": "F-01", "leistungsbeschreibung": "Konzept", "anzahl": 5, "kosten_pro_einheit": 100}]},
+    )
+    assert merged["updated"] == 1
+    items = list_price_items(bidder.id)
+    assert items[0].chf == 500.0
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_validate_tender_cloud_gate():
+    from unittest.mock import patch
+    from src.m15_evaluation import validate_tender_cloud_gate
+
+    with patch("src.m15_evaluation.get_tender_document_ids", return_value=[1]):
+        assert validate_tender_cloud_gate("openai", "p1", False) == "cloud_confirm"
+        assert validate_tender_cloud_gate("openai", "p1", True) is None
+        assert validate_tender_cloud_gate("ollama", "p1", False) is None
+
+
 if __name__ == "__main__":
     test_create_bidder_and_criterion()
     test_ranking_ko_and_weighted_sum()
@@ -284,4 +358,7 @@ if __name__ == "__main__":
     test_suggest_score_sanitizes_cloud_context()
     test_suggest_score_skips_sanitize_for_local_provider()
     test_tender_doc_link_and_roles()
+    test_import_criteria_payload_skip_existing()
+    test_seed_and_merge_price_structure()
+    test_validate_tender_cloud_gate()
     print("OK")
