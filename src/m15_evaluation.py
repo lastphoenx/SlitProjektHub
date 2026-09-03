@@ -94,6 +94,13 @@ CHUNK_SIZE_HINTS = {
     "default": 1000,
 }
 
+# Zuschlags-Ranking: Phase 1 = ZK1–7, Phase 2 = Präsentation (z. B. A-01)
+RANKING_PHASES = (1, 2)
+RANKING_PHASE_LABELS = {
+    1: "ZK (Phase 1)",
+    2: "Präsentation (Phase 2)",
+}
+
 
 class EvaluationProjectConfig(SQLModel, table=True):
     """Projekt-spezifische Offertbeurteilungs-Einstellungen."""
@@ -133,6 +140,8 @@ class Criterion(SQLModel, table=True):
     # Zuschlagskriterien wie "Preis": Wert kommt automatisch aus dem Preisblatt
     # (linear zum guenstigsten Angebot), keine manuelle 0-10-Schaetzung.
     auto_price: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, default=False))
+    # Zuschlags-Ranking: 1 = ZK (Zwischenrang), 2 = Präsentation nach Einladung (z. B. A-01)
+    ranking_phase: int = Field(default=1, sa_column=Column(Integer, nullable=False, default=1))
     sort_order: int = 0
     is_deleted: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -255,6 +264,25 @@ def list_criteria(project_key: str, include_deleted: bool = False) -> list[Crite
         return list(session.exec(q.order_by(Criterion.kind, Criterion.sort_order, Criterion.name)).all())
 
 
+def infer_ranking_phase(name: str, description: str | None = None) -> int:
+    """Heuristik: Präsentationskriterien (A-01 etc.) → Phase 2."""
+    n = (name or "").strip().lower()
+    d = (description or "").strip().lower()
+    if re.search(r"\ba-0?1\b", n, re.I):
+        return 2
+    for token in (
+        "angebotspräsentation",
+        "angebotspraesentation",
+        "präsentation",
+        "praesentation",
+        "referat",
+        "pitch",
+    ):
+        if token in n or token in d:
+            return 2
+    return 1
+
+
 def create_criterion(
     project_key: str,
     kind: str,
@@ -264,6 +292,7 @@ def create_criterion(
     parent_id: Optional[int] = None,
     auto_price: bool = False,
     description: Optional[str] = None,
+    ranking_phase: int | None = None,
 ) -> Criterion:
     kind = (kind or "").strip().lower()
     if kind not in CRITERION_KINDS:
@@ -279,6 +308,10 @@ def create_criterion(
         raise ValueError("Gewicht muss >= 0 sein")
     if auto_price and kind != "zuschlag":
         raise ValueError("auto_price nur bei Zuschlagskriterien sinnvoll")
+    phase = 1
+    if kind == "zuschlag" and parent_id is None:
+        phase = ranking_phase if ranking_phase is not None else infer_ranking_phase(name, description)
+        phase = max(1, min(2, int(phase)))
     with get_session() as session:
         criteria = session.exec(
             select(Criterion).where(Criterion.project_key == project_key, Criterion.is_deleted == False)
@@ -292,6 +325,7 @@ def create_criterion(
             parent_id=parent_id,
             scale_max=scale_max,
             auto_price=bool(auto_price),
+            ranking_phase=phase,
             sort_order=len(criteria) + 1,
         )
         session.add(crit)
@@ -307,6 +341,20 @@ def soft_delete_criterion(criterion_id: int) -> None:
             crit.is_deleted = True
             session.add(crit)
             session.commit()
+
+
+def update_criterion_ranking_phase(criterion_id: int, ranking_phase: int) -> None:
+    """Phase 1 = ZK-Zwischenrang, Phase 2 = Präsentation (nur Top-Level-Zuschlag)."""
+    phase = max(1, min(2, int(ranking_phase)))
+    with get_session() as session:
+        crit = session.get(Criterion, criterion_id)
+        if not crit or crit.is_deleted:
+            raise ValueError("Kriterium nicht gefunden")
+        if crit.kind != "zuschlag" or crit.parent_id is not None:
+            raise ValueError("ranking_phase nur für Top-Level-Zuschlagskriterien")
+        crit.ranking_phase = phase
+        session.add(crit)
+        session.commit()
 
 
 def _user_source_key(evaluator_user_id: int) -> str:
@@ -923,13 +971,64 @@ def _eignung_pass(value: float, scale_max: int) -> bool:
     return value >= (scale_max / 2.0)
 
 
+def _zuschlag_weighted_score(
+    bidder_id: int,
+    zuschlag_criteria: list[Criterion],
+    all_criteria: list[Criterion],
+    scores_by_cell: dict[tuple[int, int], list[Score]],
+    *,
+    fill_missing_phase2_at_max: bool = False,
+) -> tuple[Optional[float], list[dict[str, Any]]]:
+    """
+    Gewichteter Zuschlags-Score über die übergebene Kriterienliste (renormalisiert).
+    fill_missing_phase2_at_max: Phase-2-Kriterien ohne Bewertung als volle Punktzahl annehmen
+    (für «kann noch aufholen?»-Heuristik).
+    """
+    active = [c for c in zuschlag_criteria if c.weight_pct > 0]
+    if not active:
+        return None, []
+    total_weight = sum(c.weight_pct for c in active)
+    weighted_sum = 0.0
+    details: list[dict[str, Any]] = []
+    any_scored = False
+    for crit in active:
+        val, _answered, _total = rolled_up_score(bidder_id, crit, all_criteria, scores_by_cell)
+        assumed = False
+        if val is None:
+            if fill_missing_phase2_at_max and int(crit.ranking_phase or 1) >= 2:
+                val = float(crit.scale_max)
+                assumed = True
+            else:
+                continue
+        any_scored = True
+        normalized = val / max(1, crit.scale_max)
+        contrib = normalized * crit.weight_pct
+        weighted_sum += contrib
+        details.append(
+            {
+                "criterion_id": crit.id,
+                "name": crit.name,
+                "value": val,
+                "weight_pct": crit.weight_pct,
+                "ranking_phase": int(crit.ranking_phase or 1),
+                "normalized": round(normalized, 4),
+                "contrib": round(contrib, 4),
+                "assumed_max": assumed,
+            }
+        )
+    if not any_scored:
+        return None, details
+    return round((weighted_sum / total_weight) * 100.0, 2), details
+
+
 def compute_rankings(project_key: str) -> list[dict[str, Any]]:
     """
     Rangfolge: erst Eignung (K.O.), dann gewichtete Zuschlagskriterien.
-    Nur TOP-LEVEL-Kriterien (parent_id is None) fliessen in die Gewichtung ein -
-    Unterfragen (z.B. F01-001 unter F-01) sind Beleg-/KI-Hilfsebene, kein eigenes
-    Gewicht. Eignungs-Unterfragen lösen K.O. aus, sobald irgendeine mit "Nein" (0)
-    beantwortet ist.
+    Nur TOP-LEVEL-Kriterien (parent_id is None) fliessen in die Gewichtung ein.
+    Bei Phase-2-Kriterien (z. B. A-01 Präsentation) zusätzlich:
+    - interim_score / interim_rank: nur Phase 1, renormalisiert (Einladungsentscheid)
+    - max_score: Phase 1 bewertet + Phase 2 hypothetisch voll
+    - can_still_win: max_score >= führender interim_score
     """
     bidders = list_bidders(project_key)
     criteria = list_criteria(project_key)
@@ -939,13 +1038,15 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
     for s in scores:
         scores_by_cell.setdefault((s.bidder_id, s.criterion_id), []).append(s)
 
-    by_id = {c.id: c for c in criteria}
     eignung_top = [c for c in criteria if c.kind == "eignung" and c.parent_id is None]
     eignung_children: dict[int, list] = {}
     for c in criteria:
         if c.kind == "eignung" and c.parent_id is not None:
             eignung_children.setdefault(c.parent_id, []).append(c)
     zuschlag_top = [c for c in criteria if c.kind == "zuschlag" and c.parent_id is None]
+    phase1_zuschlag = [c for c in zuschlag_top if int(c.ranking_phase or 1) == 1]
+    phase2_zuschlag = [c for c in zuschlag_top if int(c.ranking_phase or 1) >= 2]
+    has_phase2 = bool(phase2_zuschlag)
     total_weight = sum(c.weight_pct for c in zuschlag_top if c.weight_pct > 0)
 
     def _official(bidder_id: int, crit) -> Optional[float]:
@@ -974,31 +1075,30 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
                 {"criterion_id": crit.id, "name": crit.name, "value": val, "passed": passed}
             )
 
-        weighted_sum = 0.0
+        total_score: Optional[float] = None
+        interim_score: Optional[float] = None
+        max_score: Optional[float] = None
         zuschlag_details: list[dict[str, Any]] = []
+        interim_details: list[dict[str, Any]] = []
+
         if not ko and total_weight > 0:
-            for crit in zuschlag_top:
-                if crit.weight_pct <= 0:
-                    continue
-                val, _answered, _total = rolled_up_score(bidder.id, crit, criteria, scores_by_cell)
-                if val is None:
-                    continue
-                normalized = val / max(1, crit.scale_max)
-                contrib = normalized * crit.weight_pct
-                weighted_sum += contrib
-                zuschlag_details.append(
-                    {
-                        "criterion_id": crit.id,
-                        "name": crit.name,
-                        "value": val,
-                        "weight_pct": crit.weight_pct,
-                        "normalized": round(normalized, 4),
-                        "contrib": round(contrib, 4),
-                    }
+            total_score, zuschlag_details = _zuschlag_weighted_score(
+                bidder.id, zuschlag_top, criteria, scores_by_cell
+            )
+            if has_phase2:
+                interim_score, interim_details = _zuschlag_weighted_score(
+                    bidder.id, phase1_zuschlag, criteria, scores_by_cell
                 )
-            total_score = round((weighted_sum / total_weight) * 100.0, 2) if total_weight else None
-        else:
-            total_score = None
+                max_score, _ = _zuschlag_weighted_score(
+                    bidder.id,
+                    zuschlag_top,
+                    criteria,
+                    scores_by_cell,
+                    fill_missing_phase2_at_max=True,
+                )
+            else:
+                interim_score = total_score
+                interim_details = zuschlag_details
 
         rows.append(
             {
@@ -1007,9 +1107,28 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
                 "ko": ko,
                 "eignung": eignung_details,
                 "zuschlag": zuschlag_details,
+                "interim_zuschlag": interim_details,
                 "total_score": total_score,
+                "interim_score": interim_score,
+                "max_score": max_score,
+                "can_still_win": None,
+                "has_phase2": has_phase2,
             }
         )
+
+    leader_interim: Optional[float] = None
+    if has_phase2:
+        interim_vals = [
+            r["interim_score"]
+            for r in rows
+            if not r["ko"] and r["interim_score"] is not None
+        ]
+        leader_interim = max(interim_vals) if interim_vals else None
+        for r in rows:
+            if r["ko"] or leader_interim is None or r["max_score"] is None:
+                r["can_still_win"] = None
+            else:
+                r["can_still_win"] = r["max_score"] >= leader_interim - 0.01
 
     eligible = [r for r in rows if not r["ko"] and r["total_score"] is not None]
     ineligible = [r for r in rows if r["ko"] or r["total_score"] is None]
@@ -1017,6 +1136,29 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
     ranked = eligible + ineligible
     for idx, row in enumerate(ranked, start=1):
         row["rank"] = idx if not row["ko"] and row["total_score"] is not None else None
+
+    if has_phase2:
+        interim_eligible = [
+            r for r in rows if not r["ko"] and r["interim_score"] is not None
+        ]
+        interim_ineligible = [
+            r for r in rows if r["ko"] or r["interim_score"] is None
+        ]
+        interim_eligible.sort(key=lambda r: r["interim_score"], reverse=True)
+        interim_ranked = interim_eligible + interim_ineligible
+        interim_pos = {
+            row["bidder_id"]: idx
+            for idx, row in enumerate(interim_ranked, start=1)
+            if not row["ko"] and row["interim_score"] is not None
+        }
+        for row in rows:
+            row["interim_rank"] = interim_pos.get(row["bidder_id"])
+            row["leader_interim_score"] = leader_interim
+    else:
+        for row in rows:
+            row["interim_rank"] = row.get("rank")
+            row["leader_interim_score"] = None
+
     return ranked
 
 
@@ -1201,6 +1343,11 @@ def import_criteria_payload(
                     scale_max=int(entry.get("scale_max") or 10),
                     auto_price=bool(entry.get("auto_price")),
                     description=entry.get("description"),
+                    ranking_phase=(
+                        int(entry["ranking_phase"])
+                        if entry.get("ranking_phase") is not None
+                        else None
+                    ),
                 )
                 existing_names.add(name)
                 parent_id = parent.id
@@ -1266,7 +1413,8 @@ def extract_criteria_from_tender_docs(
         "Extrahiere strukturierte Bewertungskriterien aus Ausschreibungsunterlagen. "
         "Antwort NUR als JSON mit keys eignung und zuschlag (Listen von Objekten). "
         "Jedes Objekt: name (kurz), description (voller Anforderungstext), optional children. "
-        "Zuschlag: weight_pct, scale_max (default 10), auto_price true nur für reines Preis-Kriterium. "
+        "Zuschlag: weight_pct, scale_max (default 10), auto_price true nur für reines Preis-Kriterium, "
+        "ranking_phase 1 (ZK) oder 2 (Präsentation nach Einladung, z. B. A-01). "
         "Eignung: scale_max immer 1, kein weight_pct, keine Teilpunkte."
     )
     if vergabe_extra:
@@ -1515,6 +1663,8 @@ def migrate_evaluation_db() -> None:
             conn.execute(text("ALTER TABLE criterion ADD COLUMN auto_price BOOLEAN NOT NULL DEFAULT 0"))
         if "description" not in crit_cols:
             conn.execute(text("ALTER TABLE criterion ADD COLUMN description VARCHAR"))
+        if "ranking_phase" not in crit_cols:
+            conn.execute(text("ALTER TABLE criterion ADD COLUMN ranking_phase INTEGER NOT NULL DEFAULT 1"))
 
         if "price_item" in tables:
             price_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(price_item)")).fetchall()}

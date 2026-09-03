@@ -30,6 +30,8 @@ from src.m15_evaluation import (
     ANGEbot_CLASSIFICATION,
     ANGEbot_SUBTYPES,
     CRITERION_KINDS,
+    RANKING_PHASE_LABELS,
+    RANKING_PHASES,
     TENDER_ROLE_LABELS,
     TENDER_ROLES,
     compute_bidder_tco,
@@ -69,6 +71,7 @@ from src.m15_evaluation import (
     unlink_document_from_bidder,
     unlink_tender_doc,
     upsert_price_item,
+    update_criterion_ranking_phase,
     upsert_score,
     validate_evaluation_cloud_gate,
     validate_tender_cloud_gate,
@@ -240,7 +243,13 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "tender_role_labels": TENDER_ROLE_LABELS,
         "has_tender_docs": bool(get_tender_document_ids(project_key)) if project_key else False,
         "bidder_docs": bidder_docs,
-        "criterion_kinds": CRITERION_KINDS,
+        "has_phase2_criteria": any(
+            int(c.ranking_phase or 1) >= 2
+            for c in criteria
+            if c.kind == "zuschlag" and c.parent_id is None
+        ) if project_key else False,
+        "ranking_phase_labels": RANKING_PHASE_LABELS,
+        "ranking_phases": RANKING_PHASES,
         "angebot_class": ANGEbot_CLASSIFICATION,
         "angebot_subtypes": ANGEbot_SUBTYPES,
         "may_evaluate": can_evaluate(who),
@@ -274,9 +283,13 @@ async def evaluation_create_criterion(
     parent_id: str = Form(""),
     auto_price: str = Form("false"),
     description: str = Form(""),
+    ranking_phase: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
+    rp: int | None = None
+    if ranking_phase.strip().isdigit():
+        rp = int(ranking_phase.strip())
     create_criterion(
         project_key,
         kind,
@@ -286,7 +299,27 @@ async def evaluation_create_criterion(
         parent_id=int(parent_id) if parent_id.strip() else None,
         auto_price=auto_price in ("true", "on", "1", "yes"),
         description=description or None,
+        ranking_phase=rp,
     )
+    return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
+
+
+@router.post("/evaluation/criterion-phase", response_class=HTMLResponse)
+async def evaluation_criterion_phase(
+    request: Request,
+    project_key: str = Form(...),
+    criterion_id: int = Form(...),
+    ranking_phase: int = Form(1),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    try:
+        update_criterion_ranking_phase(criterion_id, ranking_phase)
+    except ValueError:
+        return RedirectResponse(
+            url=f"/evaluation?project_key={project_key}&criterion_phase=error",
+            status_code=303,
+        )
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
 
 
@@ -994,19 +1027,45 @@ async def evaluation_export_xlsx(request: Request, project_key: str):
 
     ws2 = wb.create_sheet("Rangfolge")
     ws2.append(["Rang", "Bieter", "Gesamt %", "KO"])
-    for r in compute_rankings(project_key):
+    rankings = compute_rankings(project_key)
+    for r in rankings:
         ws2.append([r.get("rank"), r.get("bidder_name"), r.get("total_score"), r.get("ko")])
 
-    ws3 = wb.create_sheet("Preisblatt")
-    ws3.append(["Bieter", "Einmalig CHF", "2027", "2028", "2029", "2030", "Total exkl. MwSt", "MwSt", "Total inkl. MwSt"])
+    if any(r.get("has_phase2") for r in rankings):
+        ws3 = wb.create_sheet("Rangfolge Phase 1")
+        ws3.append([
+            "Rang Phase 1", "Bieter", "ZK %", "Max. bei Präsentation voll", "Einladung?", "KO",
+        ])
+        for r in rankings:
+            invite = ""
+            if r.get("can_still_win") is True:
+                invite = "ja"
+            elif r.get("can_still_win") is False:
+                invite = "nein"
+            ws3.append([
+                r.get("interim_rank"),
+                r.get("bidder_name"),
+                r.get("interim_score"),
+                r.get("max_score"),
+                invite,
+                r.get("ko"),
+            ])
+
+    ws_price = wb.create_sheet("Preisblatt")
+    eval_cfg = get_evaluation_config(project_key)
+    year_cols = eval_cfg.get("price_years") or [2027, 2028, 2029, 2030]
+    ws_price.append(
+        ["Bieter", "Einmalig CHF"] + [str(y) for y in year_cols]
+        + ["Total exkl. MwSt", "MwSt", "Total inkl. MwSt"]
+    )
     for bidder in list_bidders(project_key):
         tco = compute_bidder_tco(bidder.id)
         by_year = tco["by_year"]
-        ws3.append([
-            bidder.name, tco["einmalig_total"],
-            by_year.get(2027, 0), by_year.get(2028, 0), by_year.get(2029, 0), by_year.get(2030, 0),
-            tco["total_exkl_mwst"], tco["mwst"], tco["total_inkl_mwst"],
-        ])
+        ws_price.append(
+            [bidder.name, tco["einmalig_total"]]
+            + [by_year.get(y, 0) for y in year_cols]
+            + [tco["total_exkl_mwst"], tco["mwst"], tco["total_inkl_mwst"]]
+        )
 
     out = io.BytesIO()
     wb.save(out)
