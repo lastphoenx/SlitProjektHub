@@ -260,6 +260,7 @@ print(sanitize_for_cloud_text('Kontakt Maria Muster, AHV 756.1234.5678.97'))
 "
 
 .venv/bin/python scripts/testing/test_cloud_pii.py
+.venv/bin/python scripts/testing/test_evaluation.py
 ```
 
 Erwartung: `[PERSON]`, `[CH_AHV_NR]` (nicht nur Regex-Stufe 1).
