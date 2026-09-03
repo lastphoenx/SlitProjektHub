@@ -65,6 +65,20 @@
   <p style="font-size:.85rem;margin:0">Vorgabe-Upload fehlgeschlagen — Rolle und Datei prüfen.</p>
 </div>
 {% endif %}
+{% if request.query_params.get('config_saved') %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Projekt-Einstellungen gespeichert.</p>
+</div>
+{% endif %}
+{% if request.query_params.get('rechunk') == 'ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Dokument neu indexiert (Chunks aktualisiert).</p>
+</div>
+{% elif request.query_params.get('rechunk') == 'error' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">Re-Index fehlgeschlagen.</p>
+</div>
+{% endif %}
 
 <!-- Phase 1: Vorgaben & Frameworks (einmalig pro Ausschreibung) -->
 <div class="card eval-phase-card eval-phase-once-card" style="margin-bottom:1rem">
@@ -77,17 +91,39 @@
     ohne erneuten Upload, wenn sie bereits unter <strong>Dokumente</strong> am Projekt hängen.
     Die KI nutzt diese Rolle beim Vergleich mit den Bieter-Angeboten.
   </p>
+
+  <details style="margin-bottom:.75rem;font-size:.75rem">
+    <summary style="cursor:pointer;font-weight:600">Projekt-Einstellungen (Vergabe, Preisjahre, RAG-Tiefe)</summary>
+    <form method="post" action="/evaluation/config" style="display:grid;gap:.5rem;margin-top:.5rem;max-width:720px">
+      <input type="hidden" name="project_key" value="{{ project_key }}" />
+      <div>
+        <label class="form-label" style="font-size:.72rem">Preisblatt-Jahre (kommagetrennt)</label>
+        <input class="form-input" name="price_years" value="{{ eval_config.price_years|join(', ') }}" />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Vergabe-Hinweise (optional, für KI-Prompts)</label>
+        <textarea class="form-input" name="vergabe_notes" rows="2">{{ eval_config.vergabe_notes }}</textarea>
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">RAG-Chunks pro Rollen-Pass (4–24)</label>
+        <input class="form-input" type="number" name="rag_chunks_per_role" min="4" max="24"
+               value="{{ eval_config.rag_chunks_per_role }}" style="width:6rem" />
+      </div>
+      <button type="submit" class="btn btn-secondary btn-sm" style="justify-self:start">Speichern</button>
+    </form>
+  </details>
+
   <form method="post" action="/evaluation/tender-doc-upload" enctype="multipart/form-data"
         style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:end;margin-bottom:.75rem">
     <input type="hidden" name="project_key" value="{{ project_key }}" />
     <div>
       <label class="form-label" style="font-size:.72rem">Neu hochladen</label>
-      <input class="form-input" type="file" name="file" required
-             accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx" />
+      <input class="form-input" type="file" name="file" required id="tender-file-input"
+             accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx,.xls" />
     </div>
     <div>
       <label class="form-label" style="font-size:.72rem">Rolle</label>
-      <select class="form-select" name="tender_role" required>
+      <select class="form-select" name="tender_role" required id="tender-role-select">
         {% for role in tender_roles %}
         <option value="{{ role }}">{{ tender_role_labels[role] }}</option>
         {% endfor %}
@@ -95,7 +131,7 @@
     </div>
     <div>
       <label class="form-label" style="font-size:.72rem">Klassifikation</label>
-      <select class="form-select" name="classification">
+      <select class="form-select" name="classification" id="tender-class-select">
         <option value="Pflichtenheft (Projekt)">Pflichtenheft (Projekt)</option>
         <option value="Anforderung/Feature">Anforderung/Feature</option>
         <option value="Standard/Richtlinie">Standard/Richtlinie</option>
@@ -103,17 +139,37 @@
         <option value="Sonstiges" selected>Sonstiges</option>
       </select>
     </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Chunk-Grösse</label>
+      <input class="form-input" type="number" name="chunk_size" id="tender-chunk-size"
+             value="1000" min="0" max="4000" step="100" style="width:5.5rem"
+             title="Empfehlung: Pflichtenheft 1800, Anhänge 1200, Preisblatt 500, CSV/XLSX zeilenweise" />
+      <p class="text-muted" style="font-size:.65rem;margin:.15rem 0 0;max-width:9rem">0=zeilenweise (CSV/XLSX)</p>
+    </div>
     <button type="submit" class="btn btn-primary btn-sm">Hochladen</button>
   </form>
   {% if project_source_docs %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Datei</th><th>Klassifikation</th><th>Rolle in Beurteilung</th></tr></thead>
+      <thead><tr>
+        <th>Datei</th><th>Klassifikation</th><th>Chunks</th><th>Chunk-Gr.</th><th>Vorschlag Rolle</th><th>Rolle in Beurteilung</th><th></th>
+      </tr></thead>
       <tbody>
         {% for doc in project_source_docs %}
         <tr>
           <td style="font-size:.8rem">{{ doc.filename }}</td>
           <td style="font-size:.75rem">{{ doc.classification }}</td>
+          <td style="font-size:.75rem">{{ doc.chunk_count or 0 }}</td>
+          <td style="font-size:.75rem">
+            {% if doc.chunk_size_used == 0 %}zeilenweise{% else %}{{ doc.chunk_size_used or '—' }}{% endif %}
+            {% if chunk_recommendations.get(doc.id) is not none and (doc.chunk_size_used is none or chunk_recommendations.get(doc.id) != doc.chunk_size_used) %}
+            <span class="text-muted" title="Empfohlen">→ {{ chunk_recommendations.get(doc.id) }}</span>
+            {% endif %}
+          </td>
+          <td style="font-size:.72rem">
+            {% set sug = tender_role_suggestions.get(doc.id) %}
+            {% if sug %}{{ tender_role_labels.get(sug, sug) }}{% else %}—{% endif %}
+          </td>
           <td>
             <form method="post" action="/evaluation/tender-doc" style="display:flex;gap:.35rem;align-items:center">
               <input type="hidden" name="project_key" value="{{ project_key }}" />
@@ -122,12 +178,26 @@
                       onchange="this.form.submit()">
                 <option value="">— nicht in Beurteilung —</option>
                 {% for role in tender_roles %}
-                <option value="{{ role }}" {% if tender_doc_roles.get(doc.id) == role %}selected{% endif %}>
+                <option value="{{ role }}"
+                  {% if tender_doc_roles.get(doc.id) == role %}selected
+                  {% elif not tender_doc_roles.get(doc.id) and sug == role %}selected{% endif %}>
                   {{ tender_role_labels[role] }}
                 </option>
                 {% endfor %}
               </select>
             </form>
+          </td>
+          <td>
+            {% if may_evaluate %}
+            <form method="post" action="/evaluation/rechunk-doc" style="display:flex;gap:.25rem;align-items:center">
+              <input type="hidden" name="project_key" value="{{ project_key }}" />
+              <input type="hidden" name="document_id" value="{{ doc.id }}" />
+              <input class="form-input" type="number" name="chunk_size" min="0" max="4000" step="100"
+                     value="{{ chunk_recommendations.get(doc.id) or doc.chunk_size_used or 1000 }}"
+                     style="width:4.5rem;font-size:.72rem" title="Neu indexieren" />
+              <button type="submit" class="btn btn-secondary btn-sm" title="Neu indexieren">↻</button>
+            </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -154,6 +224,11 @@
     {{ request.query_params.get('created', '0') }} Kriterien angelegt,
     {{ request.query_params.get('skipped', '0') }} übersprungen (existierten bereits).
   </p>
+  {% if request.query_params.get('warn') %}
+  <p style="font-size:.72rem;color:var(--color-warning, #fbbf24);margin:0 0 .5rem">
+    Hinweise: {{ request.query_params.get('warn') }}
+  </p>
+  {% endif %}
   {% elif request.query_params.get('criteria_apply') == 'invalid' %}
   <p style="font-size:.78rem;color:var(--color-danger);margin:0 0 .5rem">Ungültiges JSON — nicht übernommen.</p>
   {% endif %}
@@ -258,7 +333,7 @@
       <div>
         <label class="form-label" style="font-size:.72rem">Dokument hochladen</label>
         <input class="form-input" type="file" name="file" required
-               accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx" />
+               accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx,.xls" />
       </div>
       <div>
         <label class="form-label" style="font-size:.72rem">Art (optional)</label>
@@ -271,7 +346,7 @@
       </div>
       <div>
         <label class="form-label" style="font-size:.72rem">Chunk-Grösse</label>
-        <input class="form-input" type="number" name="chunk_size" value="1000" min="200" max="4000" step="100" style="width:6.5rem" />
+        <input class="form-input" type="number" name="chunk_size" value="1000" min="0" max="4000" step="100" style="width:6.5rem" />
       </div>
       <button type="submit" class="btn btn-primary btn-sm">Hochladen</button>
     </form>

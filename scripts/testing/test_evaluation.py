@@ -13,6 +13,7 @@ from src.m15_evaluation import (
     Bidder,
     BidderDocumentLink,
     Criterion,
+    EvaluationProjectConfig,
     EvaluationTenderDoc,
     PriceItem,
     Score,
@@ -350,6 +351,46 @@ def test_validate_tender_cloud_gate():
         assert validate_tender_cloud_gate("ollama", "p1", False) is None
 
 
+def test_suggest_tender_role_and_validate_criteria():
+    from src.m15_evaluation import (
+        normalize_chunk_size,
+        suggest_tender_role,
+        validate_criteria_payload,
+    )
+
+    assert suggest_tender_role("Anforderung/Feature", "Anhang2_Preisblatt_Unisport.pdf") == "preisblatt_vorlage"
+    assert suggest_tender_role("Pflichtenheft (Projekt)", "Pflichtenheft.docx") == "ausschreibungsunterlage"
+    assert normalize_chunk_size(0) == 0
+    assert normalize_chunk_size(150) == 200
+    assert normalize_chunk_size(5000) == 4000
+    warnings = validate_criteria_payload({
+        "zuschlag": [{"name": "A", "weight_pct": 30}, {"name": "B", "weight_pct": 30}],
+    })
+    assert any("100" in w for w in warnings)
+
+
+def test_evaluation_config_roundtrip():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    from src.m15_evaluation import EvaluationProjectConfig, get_evaluation_config, save_evaluation_config
+    SQLModel.metadata.create_all(engine)
+
+    save_evaluation_config("p1", price_years=[2026, 2027], vergabe_notes="Test", rag_chunks_per_role=14)
+    cfg = get_evaluation_config("p1")
+    assert cfg["price_years"] == [2026, 2027]
+    assert cfg["rag_chunks_per_role"] == 14
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
 if __name__ == "__main__":
     test_create_bidder_and_criterion()
     test_ranking_ko_and_weighted_sum()
@@ -361,4 +402,6 @@ if __name__ == "__main__":
     test_import_criteria_payload_skip_existing()
     test_seed_and_merge_price_structure()
     test_validate_tender_cloud_gate()
+    test_suggest_tender_role_and_validate_criteria()
+    test_evaluation_config_roundtrip()
     print("OK")

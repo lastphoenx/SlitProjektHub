@@ -11,7 +11,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from backend.app.jinja_env import templates
 
 from src.m07_projects import list_projects_df
-from src.m09_docs import get_project_documents, ingest_document, calculate_sha256, get_document_by_sha256, link_document_to_project
+from src.m09_docs import (
+    force_rechunk_document,
+    get_project_documents,
+    ingest_document,
+    calculate_sha256,
+    get_document_by_sha256,
+    link_document_to_project,
+)
 from src.m14_auth import (
     can_evaluate,
     can_view_evaluator_details,
@@ -35,6 +42,7 @@ from src.m15_evaluation import (
     extract_price_structure_from_tender,
     get_bidder_document_ids,
     get_bidder_preisblatt_doc_ids,
+    get_evaluation_config,
     get_score,
     get_tender_document_ids,
     import_criteria_payload,
@@ -47,12 +55,16 @@ from src.m15_evaluation import (
     list_scores_for_project,
     list_tender_docs,
     merge_price_structure_for_bidder,
+    normalize_chunk_size,
     official_score,
+    recommended_chunk_size,
     rolled_up_score,
+    save_evaluation_config,
+    seed_price_structure_for_bidder,
     soft_delete_bidder,
     soft_delete_criterion,
-    seed_price_structure_for_bidder,
     suggest_score_with_rag,
+    suggest_tender_role,
     sync_price_criterion_scores,
     unlink_document_from_bidder,
     unlink_tender_doc,
@@ -179,7 +191,10 @@ async def evaluation_page(request: Request, project_key: str = ""):
     offer_docs = []
     bidder_docs: dict[int, list[int]] = {}
     tender_doc_roles: dict[int, str] = {}
+    tender_role_suggestions: dict[int, str | None] = {}
+    chunk_recommendations: dict[int, int] = {}
     project_source_docs = []
+    eval_config = get_evaluation_config(project_key) if project_key else {}
     if project_key:
         all_project_docs = get_project_documents(project_key)
         offer_docs = [
@@ -192,6 +207,13 @@ async def evaluation_page(request: Request, project_key: str = ""):
         ]
         for row in list_tender_docs(project_key):
             tender_doc_roles[row.document_id] = row.tender_role
+        for doc in project_source_docs:
+            tender_role_suggestions[doc.id] = suggest_tender_role(doc.classification, doc.filename)
+            chunk_recommendations[doc.id] = recommended_chunk_size(
+                doc.classification,
+                tender_role=tender_doc_roles.get(doc.id),
+                filename=doc.filename,
+            )
         for b in bidders:
             bidder_docs[b.id] = get_bidder_document_ids(b.id)
 
@@ -211,6 +233,9 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "offer_docs": offer_docs,
         "project_source_docs": project_source_docs,
         "tender_doc_roles": tender_doc_roles,
+        "tender_role_suggestions": tender_role_suggestions,
+        "chunk_recommendations": chunk_recommendations,
+        "eval_config": eval_config,
         "tender_roles": TENDER_ROLES,
         "tender_role_labels": TENDER_ROLE_LABELS,
         "has_tender_docs": bool(get_tender_document_ids(project_key)) if project_key else False,
@@ -500,10 +525,10 @@ async def evaluation_tender_doc_upload(
     role = (tender_role or "").strip().lower()
     if role not in TENDER_ROLES:
         return RedirectResponse(url=f"{redirect}&tender_upload=error", status_code=303)
-    try:
-        chunk_size = max(200, min(4000, int(chunk_size)))
-    except (TypeError, ValueError):
-        chunk_size = 1000
+    chunk_size = normalize_chunk_size(
+        chunk_size,
+        fallback=recommended_chunk_size(cls, tender_role=role, filename=file.filename or ""),
+    )
 
     success, _msg = ingest_document(
         file_name=file.filename,
@@ -558,10 +583,12 @@ async def evaluation_bidder_doc_upload(
     subtype = (doc_subtype or "").strip() or None
     if subtype and subtype not in ANGEbot_SUBTYPES:
         subtype = None
-    try:
-        chunk_size = max(200, min(4000, int(chunk_size)))
-    except (TypeError, ValueError):
-        chunk_size = 1000
+    chunk_size = normalize_chunk_size(
+        chunk_size,
+        fallback=recommended_chunk_size(
+            cls, tender_role=None, filename=file.filename or "",
+        ),
+    )
 
     success, _msg = ingest_document(
         file_name=file.filename,
@@ -585,6 +612,48 @@ async def evaluation_delete_bidder(request: Request, project_key: str = Form(...
         raise HTTPException(403, "Keine Berechtigung")
     soft_delete_bidder(bidder_id)
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
+
+
+@router.post("/evaluation/config", response_class=HTMLResponse)
+async def evaluation_save_config(
+    request: Request,
+    project_key: str = Form(...),
+    price_years: str = Form(""),
+    vergabe_notes: str = Form(""),
+    rag_chunks_per_role: int = Form(12),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    years: list[int] = []
+    for part in (price_years or "").replace(";", ",").split(","):
+        part = part.strip()
+        if part.isdigit():
+            years.append(int(part))
+    save_evaluation_config(
+        project_key,
+        price_years=years or None,
+        vergabe_notes=vergabe_notes,
+        rag_chunks_per_role=rag_chunks_per_role,
+    )
+    return RedirectResponse(url=f"/evaluation?project_key={project_key}&config_saved=1", status_code=303)
+
+
+@router.post("/evaluation/rechunk-doc", response_class=HTMLResponse)
+async def evaluation_rechunk_doc(
+    request: Request,
+    project_key: str = Form(...),
+    document_id: int = Form(...),
+    chunk_size: int = Form(1000),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    chunk_size = normalize_chunk_size(chunk_size, fallback=1000)
+    ok, _msg = await asyncio.to_thread(force_rechunk_document, document_id, chunk_size)
+    status = "ok" if ok else "error"
+    return RedirectResponse(
+        url=f"/evaluation?project_key={project_key}&rechunk={status}",
+        status_code=303,
+    )
 
 
 @router.post("/evaluation/extract-criteria", response_class=HTMLResponse)
@@ -627,6 +696,7 @@ async def evaluation_extract_criteria(
             "error": result.get("error"),
             "payload": payload,
             "criteria_json": json.dumps(payload, ensure_ascii=False, indent=2),
+            "warnings": result.get("warnings") or [],
             "raw_llm": result.get("raw_llm"),
             "may_evaluate": True,
         },
@@ -649,10 +719,14 @@ async def evaluation_apply_criteria(
             status_code=303,
         )
     stats = import_criteria_payload(project_key, data, skip_existing=True)
+    warn_q = ""
+    if stats.get("warnings"):
+        from urllib.parse import quote
+        warn_q = "&warn=" + quote("; ".join(stats["warnings"][:5]))
     return RedirectResponse(
         url=(
             f"/evaluation?project_key={project_key}"
-            f"&criteria_apply=ok&created={stats['created']}&skipped={stats['skipped']}"
+            f"&criteria_apply=ok&created={stats['created']}&skipped={stats['skipped']}{warn_q}"
         ),
         status_code=303,
     )
@@ -685,9 +759,8 @@ async def evaluation_price_page(request: Request, project_key: str, bidder_id: i
         get_tender_document_ids(project_key, roles=("preisblatt_vorlage",))
     ) if project_key else False
     has_bidder_preisblatt = bool(get_bidder_preisblatt_doc_ids(bidder_id)) if bidder_id else False
-    return templates.TemplateResponse(
-        "evaluation/_price.html",
-        {
+    eval_config = get_evaluation_config(project_key) if project_key else {}
+    price_page_ctx = {
             "request": request,
             "project_key": project_key,
             "project_title": _project_title(project_key),
@@ -700,8 +773,10 @@ async def evaluation_price_page(request: Request, project_key: str, bidder_id: i
             "has_price_template": has_price_template,
             "has_bidder_preisblatt": has_bidder_preisblatt,
             "price_message": request.query_params.get("price_msg"),
-        },
-    )
+            "eval_config": eval_config,
+            "price_years": eval_config.get("price_years", []),
+    }
+    return templates.TemplateResponse("evaluation/_price.html", price_page_ctx)
 
 
 @router.post("/evaluation/price-item", response_class=HTMLResponse)

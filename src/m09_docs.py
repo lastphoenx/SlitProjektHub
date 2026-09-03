@@ -272,6 +272,172 @@ def process_csv_to_chunks(file_path: Path, delimiter: str = ";") -> Tuple[bool, 
     return True, f"CSV erfolgreich verarbeitet: {len(chunks)} Zeilen/Fragen", chunks
 
 
+def process_generic_csv_rows(file_path: Path, delimiter: str = ";") -> Tuple[bool, str, List[dict]]:
+    """FAQ/Listen-CSV: jede Zeile ein Chunk (ohne Batch-QA-Pflichtspalten)."""
+    if pd is None:
+        return False, "pandas ist nicht installiert", []
+    try:
+        df = pd.read_csv(file_path, sep=delimiter, encoding="utf-8")
+    except Exception:
+        try:
+            df = pd.read_csv(file_path, sep=delimiter, encoding="latin-1")
+        except Exception as exc:
+            return False, f"CSV konnte nicht gelesen werden: {exc}", []
+    rows: list[dict] = []
+    for idx, row in df.iterrows():
+        parts = [f"{col}: {row[col]}" for col in df.columns if str(row[col]).strip()]
+        text = " | ".join(parts)
+        if text.strip():
+            rows.append({"Nr": str(idx), "Lieferant": "", "Frage": text, "Antwort": ""})
+    if not rows:
+        return False, "CSV enthält keine Datenzeilen", []
+    return True, f"CSV zeilenweise: {len(rows)} Zeilen", rows
+
+
+def process_xlsx_to_rows(file_path: Path) -> Tuple[bool, str, List[dict]]:
+    """Excel-Tabellen: jede Zeile als strukturierter Chunk (Preisblatt etc.)."""
+    if pd is None:
+        return False, "pandas ist nicht installiert — XLSX nicht unterstützt", []
+    try:
+        df = pd.read_excel(file_path)
+    except Exception as exc:
+        return False, f"XLSX konnte nicht gelesen werden: {exc}", []
+    df = df.fillna("")
+    rows: list[dict] = []
+    for idx, row in df.iterrows():
+        row_dict = {str(col).strip(): str(row[col]).strip() for col in df.columns}
+        if any(v for v in row_dict.values()):
+            rows.append(row_dict)
+    if not rows:
+        return False, "XLSX enthält keine Datenzeilen", []
+    return True, f"XLSX: {len(rows)} Zeilen", rows
+
+
+def _embed_and_store_chunks(
+    session,
+    doc: Document,
+    file_name: str,
+    classification: str,
+    doc_subtype: str | None,
+    chunk_size: int,
+    *,
+    csv_chunks: list[dict] | None = None,
+    text_content: str = "",
+) -> Tuple[bool, str]:
+    """Gemeinsame Chunk/Embed-Logik für ingest und force_rechunk."""
+    old_chunks = session.exec(
+        select(DocumentChunk).where(DocumentChunk.document_id == doc.id)
+    ).all()
+    for ch in old_chunks:
+        session.delete(ch)
+    session.flush()
+
+    if csv_chunks:
+        doc.chunk_count = len(csv_chunks)
+        doc.chunk_size_used = 0
+        session.add(doc)
+        frage_texts = []
+        for row in csv_chunks:
+            if "Frage" in row:
+                nr = row.get("Nr", "?")
+                frage = row.get("Frage", "")
+                prefix = f"[CSV | {file_name} | Frage {nr}]\n"
+                frage_texts.append(prefix + str(frage))
+            else:
+                prefix = chunk_meta_prefix(classification, file_name, doc_subtype)
+                frage_texts.append(prefix + json.dumps(row, ensure_ascii=False))
+        embeddings = embed_texts_batch(frage_texts)
+        for i, row_dict in enumerate(csv_chunks):
+            if "Frage" in row_dict:
+                nr = row_dict.get("Nr", "?")
+                contextual_chunk = f"[CSV | {file_name} | Frage {nr}]\n{json.dumps(row_dict, ensure_ascii=False)}"
+            else:
+                prefix = chunk_meta_prefix(classification, file_name, doc_subtype)
+                contextual_chunk = prefix + json.dumps(row_dict, ensure_ascii=False)
+            emb = embeddings[i] if i < len(embeddings) else None
+            session.add(DocumentChunk(
+                document_id=doc.id, chunk_index=i, chunk_text=contextual_chunk,
+                embedding=json.dumps(emb) if emb else None,
+                embedding_model=EMBEDDING_MODEL,
+                tokens_count=len(contextual_chunk) // 4,
+            ))
+        session.commit()
+        clear_rag_cache()
+        threading.Thread(target=_seed_keywords_for_document, args=(doc.id,), daemon=True).start()
+        return True, f"{doc.chunk_count} Tabellenzeilen indexiert"
+    if text_content:
+        chunks = chunk_text(text_content, chunk_size=chunk_size)
+        doc.chunk_count = len(chunks)
+        doc.chunk_size_used = chunk_size
+        session.add(doc)
+        prefix = chunk_meta_prefix(classification, file_name, doc_subtype)
+        contextual_chunks = [prefix + c for c in chunks]
+        embeddings = embed_texts_batch(contextual_chunks)
+        for i, contextual_chunk in enumerate(contextual_chunks):
+            emb = embeddings[i] if i < len(embeddings) else None
+            session.add(DocumentChunk(
+                document_id=doc.id, chunk_index=i, chunk_text=contextual_chunk,
+                embedding=json.dumps(emb) if emb else None,
+                embedding_model=EMBEDDING_MODEL,
+                tokens_count=len(contextual_chunk) // 4,
+            ))
+        session.commit()
+        clear_rag_cache()
+        threading.Thread(target=_seed_keywords_for_document, args=(doc.id,), daemon=True).start()
+        return True, f"{doc.chunk_count} Chunks (Grösse {chunk_size})"
+    return False, "Kein Text extrahiert"
+
+
+def force_rechunk_document(doc_id: int, chunk_size: int | None = None) -> Tuple[bool, str]:
+    """Bestehendes Dokument neu chunken/embedden (gleiche Datei, neue Chunk-Grösse)."""
+    with get_session() as session:
+        doc = session.get(Document, doc_id)
+        if not doc or doc.is_deleted:
+            return False, "Dokument nicht gefunden"
+        path = Path(doc.file_path)
+        if not path.exists():
+            return False, "Dateidatei fehlt auf dem Server"
+        size = chunk_size or doc.chunk_size_used or 1000
+        ext = path.suffix.lower()
+        csv_chunks = None
+        text_content = ""
+        if ext == ".csv":
+            ok, msg, data = process_csv_to_chunks(path)
+            if not ok:
+                ok, msg, data = process_generic_csv_rows(path)
+            if not ok:
+                return False, msg
+            csv_chunks = data
+        elif ext in (".xlsx", ".xls"):
+            ok, msg, data = process_xlsx_to_rows(path)
+            if not ok:
+                return False, msg
+            csv_chunks = data
+        elif ext == ".pdf":
+            text_content = extract_text_from_pdf(path)
+        elif ext == ".docx":
+            text_content = extract_text_from_docx(path)
+        elif ext in (".md", ".txt", ".json", ".yaml", ".yml"):
+            try:
+                text_content = path.read_text(encoding="utf-8")
+            except Exception:
+                text_content = path.read_text(encoding="latin-1", errors="replace")
+        else:
+            try:
+                text_content = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+        ok, msg = _embed_and_store_chunks(
+            session, doc, doc.filename, doc.classification, doc.doc_subtype, size,
+            csv_chunks=csv_chunks, text_content=text_content,
+        )
+        if ok:
+            doc.chunk_size_used = size
+            session.add(doc)
+            session.commit()
+        return ok, msg
+
+
 def chunk_meta_prefix(
     classification: str,
     file_name: str,
@@ -353,8 +519,15 @@ def ingest_document(
 
         if ext == ".csv":
             success, message, csv_data = process_csv_to_chunks(file_path, delimiter=csv_delimiter)
+            if not success and classification == "FAQ/Fragen-Katalog":
+                success, message, csv_data = process_generic_csv_rows(file_path, delimiter=csv_delimiter)
             if not success:
                 return False, f"CSV-Verarbeitung fehlgeschlagen: {message}"
+            csv_chunks = csv_data
+        elif ext in (".xlsx", ".xls"):
+            success, message, csv_data = process_xlsx_to_rows(file_path)
+            if not success:
+                return False, f"XLSX-Verarbeitung fehlgeschlagen: {message}"
             csv_chunks = csv_data
         elif ext == ".pdf":
             text_content = extract_text_from_pdf(file_path)
@@ -399,92 +572,16 @@ def ingest_document(
             session2.commit()
             session2.refresh(doc)
 
-            # Chunken & Embedden
-            if csv_chunks:
-                # CSV: Jede Zeile ist ein Chunk (als JSON gespeichert)
-                doc.chunk_count = len(csv_chunks)
-                session2.add(doc)
-
-                # Contextual Chunking: Prefix mit Metadaten für bessere RAG-Retrieval
-                # Format: [CSV | {filename} | Frage {Nr}]\n{Frage-Text}
-                frage_texts = []
-                for row in csv_chunks:
-                    nr = row.get("Nr", "?")
-                    frage = row.get("Frage", "")
-                    prefix = f"[CSV | {file_name} | Frage {nr}]\n"
-                    frage_texts.append(prefix + frage)
-                
-                embeddings = embed_texts_batch(frage_texts)
-
-                for i, row_dict in enumerate(csv_chunks):
-                    chunk_text_json = json.dumps(row_dict, ensure_ascii=False)
-                    # Prefix auch in gespeichertem Chunk für Kontext-Anzeige
-                    nr = row_dict.get("Nr", "?")
-                    contextual_chunk = f"[CSV | {file_name} | Frage {nr}]\n{chunk_text_json}"
-                    emb = embeddings[i]
-                    chunk_entry = DocumentChunk(
-                        document_id=doc.id,
-                        chunk_index=i,
-                        chunk_text=contextual_chunk,
-                        embedding=json.dumps(emb) if emb else None,
-                        embedding_model=EMBEDDING_MODEL,
-                        tokens_count=len(contextual_chunk) // 4
-                    )
-                    session2.add(chunk_entry)
-
-                session2.commit()
-                clear_rag_cache()
-
-                # Keyword-Generierung im Hintergrund (nicht-blockend für Upload-Response)
-                threading.Thread(
-                    target=_seed_keywords_for_document,
-                    args=(doc.id,),
-                    daemon=True,
-                ).start()
-
-                return True, f"✅ CSV erfolgreich importiert: {doc.chunk_count} Fragen"
-            elif text_content:
-                chunks = chunk_text(text_content, chunk_size=chunk_size)
-                doc.chunk_count = len(chunks)
-                session2.add(doc)
-
-                # Contextual Chunking: Prefix mit Metadaten (Klassifizierung + Dateiname)
-                # Format: [{classification} | {filename}]\n{chunk_text}
-                # Mit Subtyp: [{classification} · {subtype} | {filename}]\n{chunk_text}
-                contextual_chunks = []
-                prefix = chunk_meta_prefix(classification, file_name, doc_subtype)
-                for chunk_str in chunks:
-                    contextual_chunks.append(prefix + chunk_str)
-
-                embeddings = embed_texts_batch(contextual_chunks)
-
-                for i, contextual_chunk in enumerate(contextual_chunks):
-                    emb = embeddings[i]
-                    chunk_entry = DocumentChunk(
-                        document_id=doc.id,
-                        chunk_index=i,
-                        chunk_text=contextual_chunk,
-                        embedding=json.dumps(emb) if emb else None,
-                        embedding_model=EMBEDDING_MODEL,
-                        tokens_count=len(contextual_chunk) // 4
-                    )
-                    session2.add(chunk_entry)
-
-                session2.commit()
-                clear_rag_cache()
-
-                # Keyword-Generierung im Hintergrund (nicht-blockend für Upload-Response)
-                doc_id_for_kw = doc.id
-                threading.Thread(
-                    target=_seed_keywords_for_document,
-                    args=(doc_id_for_kw,),
-                    daemon=True,
-                ).start()
-
-                label = "neu importiert" if _reingest_doc is not None else "erfolgreich importiert"
-                return True, f"Dokument '{file_name}' {label} ({doc.chunk_count} Chunks, Chunk-Grösse: {chunk_size})."
-            else:
-                return True, f"Dokument '{file_name}' gespeichert, aber kein Text extrahiert."
+            ok, msg = _embed_and_store_chunks(
+                session2, doc, file_name, classification, doc_subtype, chunk_size,
+                csv_chunks=csv_chunks, text_content=text_content,
+            )
+            if csv_chunks or text_content:
+                if ok:
+                    label = "neu indexiert" if _reingest_doc is not None else "erfolgreich importiert"
+                    return True, f"Dokument '{file_name}' {label}: {msg}"
+                return False, msg
+            return True, f"Dokument '{file_name}' gespeichert, aber kein Text extrahiert."
 
 
 def delete_document(doc_id: int) -> bool:
