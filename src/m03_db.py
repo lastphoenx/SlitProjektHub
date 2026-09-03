@@ -480,10 +480,11 @@ def init_db() -> None:
         migrate_yaml_users_to_db,
         seed_app_roles,
     )
-    from src.m15_evaluation import (  # noqa: F401
+    from src.m15_evaluation import (
         Bidder,
         BidderDocumentLink,
         Criterion,
+        EvaluationTenderDoc,
         PriceItem,
         Score,
         migrate_evaluation_db,

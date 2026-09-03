@@ -34,10 +34,12 @@ _RAG_CACHE = {}  # Session-local cache: query_hash -> results
 
 def _get_cache_key(query: str, project_key: str | None, limit: int, threshold: float,
                    exclude_classification: str | None = None,
-                   bidder_id: int | None = None) -> str:
+                   bidder_id: int | None = None,
+                   document_ids: tuple[int, ...] | None = None) -> str:
     """Generiert Cache-Key aus Query-Parametern inkl. exclude_classification."""
     import hashlib
-    key_str = f"{query}|{project_key}|{limit}|{threshold}|{exclude_classification}|{bidder_id}"
+    ids_part = ",".join(str(i) for i in sorted(document_ids)) if document_ids else ""
+    key_str = f"{query}|{project_key}|{limit}|{threshold}|{exclude_classification}|{bidder_id}|{ids_part}"
     return hashlib.md5(key_str.encode()).hexdigest()
 
 def clear_rag_cache():
@@ -703,6 +705,7 @@ def _keyword_search(
     classification_filter: str | None = None,
     exclude_classification: str | None = None,
     bidder_id: int | None = None,
+    document_ids: tuple[int, ...] | None = None,
 ) -> dict:
     """
     BM25-basierte Keyword-Suche (Goldstandard für lexikalisches Matching).
@@ -815,6 +818,9 @@ def _keyword_search(
             doc_query = doc_query.join(
                 BidderDocumentLink, BidderDocumentLink.document_id == Document.id
             ).where(BidderDocumentLink.bidder_id == bidder_id)
+
+        if document_ids:
+            doc_query = doc_query.where(Document.id.in_(list(document_ids)))
         
         if role_key:
             doc_query = doc_query.where(Document.linked_role_keys.like(f'%"{role_key}"%'))
@@ -1134,6 +1140,7 @@ def retrieve_relevant_chunks_hybrid(
     classification_filter: str | None = None,
     exclude_classification: str | None = None,
     bidder_id: int | None = None,
+    document_ids: tuple[int, ...] | None = None,
     _expansion_attempt: int = 0,  # Internal: tracks query expansion retries
     _distilled_keywords: str | None = None,  # Internal: original distilled keywords for expansion
     _forced_expansion_terms: str | None = None,  # Internal: expansion terms appended directly to BM25 (bypass distillation)
@@ -1231,7 +1238,9 @@ def retrieve_relevant_chunks_hybrid(
     # Cache-Check NACH Distillation: Key basiert auf keyword_query damit
     # Distillations-Ergebnisse korrekt gecacht werden und keine pre-distillation
     # Resultate aus dem Cache zurückgegeben werden.
-    cache_key = _get_cache_key(keyword_query, project_key, limit, threshold, exclude_classification, bidder_id)
+    cache_key = _get_cache_key(
+        keyword_query, project_key, limit, threshold, exclude_classification, bidder_id, document_ids
+    )
     if cache_key in _RAG_CACHE:
         return _RAG_CACHE[cache_key]
 
@@ -1246,6 +1255,7 @@ def retrieve_relevant_chunks_hybrid(
         classification_filter=classification_filter,
         exclude_classification=exclude_classification,
         bidder_id=bidder_id,
+        document_ids=document_ids,
     )
     
     # ===== DEBUG LOGGING =====
@@ -1264,6 +1274,7 @@ def retrieve_relevant_chunks_hybrid(
         classification_filter=classification_filter,
         exclude_classification=exclude_classification,
         bidder_id=bidder_id,
+        document_ids=document_ids,
     )
     
     # ===== DEBUG LOGGING =====
@@ -1297,6 +1308,7 @@ def retrieve_relevant_chunks_hybrid(
                 classification_filter=classification_filter,
                 exclude_classification=exclude_classification,
                 bidder_id=bidder_id,
+                document_ids=document_ids,
             )
             hyp_kw = _keyword_search(
                 hyp, project_key, hyp_limit_kw,
@@ -1304,6 +1316,7 @@ def retrieve_relevant_chunks_hybrid(
                 classification_filter=classification_filter,
                 exclude_classification=exclude_classification,
                 bidder_id=bidder_id,
+                document_ids=document_ids,
             )
             all_rankings.append(hyp_sem.get("documents", []))
             all_rankings.append(hyp_kw)
@@ -1691,6 +1704,7 @@ def retrieve_relevant_chunks_hybrid(
                         classification_filter=classification_filter,
                         exclude_classification=exclude_classification,
                         bidder_id=bidder_id,
+                        document_ids=document_ids,
                         _expansion_attempt=_expansion_attempt + 1,
                         _distilled_keywords=_distilled_keywords,  # Keep original for warning
                         _forced_expansion_terms=expansion_terms,  # Bypass distillation für BM25!
@@ -1752,6 +1766,7 @@ def retrieve_relevant_chunks(
     classification_filter: str | None = None,
     exclude_classification: str | None = None,
     bidder_id: int | None = None,
+    document_ids: tuple[int, ...] | None = None,
 ) -> dict:
     """
     Sucht die relevantesten Chunks (Rollen, Kontexte, Projekte, Tasks, Decisions, Dokumente) für eine Query.
@@ -1906,6 +1921,9 @@ def retrieve_relevant_chunks(
             doc_query = doc_query.join(
                 BidderDocumentLink, BidderDocumentLink.document_id == Document.id
             ).where(BidderDocumentLink.bidder_id == bidder_id)
+
+        if document_ids:
+            doc_query = doc_query.where(Document.id.in_(list(document_ids)))
         
         # Filter: Rollen-Zuordnung (für Task-Gen) - NUR Rollen-spezifische Dokumente
         if role_key:

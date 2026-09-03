@@ -21,6 +21,8 @@ from src.m15_evaluation import (
     ANGEbot_CLASSIFICATION,
     ANGEbot_SUBTYPES,
     CRITERION_KINDS,
+    TENDER_ROLE_LABELS,
+    TENDER_ROLES,
     compute_bidder_tco,
     compute_rankings,
     create_bidder,
@@ -29,11 +31,13 @@ from src.m15_evaluation import (
     get_bidder_document_ids,
     get_score,
     link_document_to_bidder,
+    link_tender_doc,
     list_bidders,
     list_criteria,
     list_price_items,
     list_scores_for_cell,
     list_scores_for_project,
+    list_tender_docs,
     official_score,
     rolled_up_score,
     soft_delete_bidder,
@@ -41,6 +45,7 @@ from src.m15_evaluation import (
     suggest_score_with_rag,
     sync_price_criterion_scores,
     unlink_document_from_bidder,
+    unlink_tender_doc,
     upsert_price_item,
     upsert_score,
     validate_evaluation_cloud_gate,
@@ -162,11 +167,20 @@ async def evaluation_page(request: Request, project_key: str = ""):
 
     offer_docs = []
     bidder_docs: dict[int, list[int]] = {}
+    tender_doc_roles: dict[int, str] = {}
+    project_source_docs = []
     if project_key:
+        all_project_docs = get_project_documents(project_key)
         offer_docs = [
-            d for d in get_project_documents(project_key)
+            d for d in all_project_docs
             if d.classification == ANGEbot_CLASSIFICATION
         ]
+        project_source_docs = [
+            d for d in all_project_docs
+            if d.classification != ANGEbot_CLASSIFICATION
+        ]
+        for row in list_tender_docs(project_key):
+            tender_doc_roles[row.document_id] = row.tender_role
         for b in bidders:
             bidder_docs[b.id] = get_bidder_document_ids(b.id)
 
@@ -184,6 +198,10 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "rankings": rankings,
         "matrix_rows": matrix_rows,
         "offer_docs": offer_docs,
+        "project_source_docs": project_source_docs,
+        "tender_doc_roles": tender_doc_roles,
+        "tender_roles": TENDER_ROLES,
+        "tender_role_labels": TENDER_ROLE_LABELS,
         "bidder_docs": bidder_docs,
         "criterion_kinds": CRITERION_KINDS,
         "angebot_class": ANGEbot_CLASSIFICATION,
@@ -427,6 +445,67 @@ async def evaluation_suggest(
     tpl_ctx["suggestion"] = suggestion
     tpl_ctx["gate_error"] = None
     return templates.TemplateResponse("evaluation/_suggestion.html", tpl_ctx)
+
+
+@router.post("/evaluation/tender-doc", response_class=HTMLResponse)
+async def evaluation_tender_doc(
+    request: Request,
+    project_key: str = Form(...),
+    document_id: int = Form(...),
+    tender_role: str = Form(""),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    role = (tender_role or "").strip().lower()
+    if role:
+        link_tender_doc(project_key, document_id, role)
+    else:
+        unlink_tender_doc(project_key, document_id)
+    return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
+
+
+@router.post("/evaluation/tender-doc-upload", response_class=HTMLResponse)
+async def evaluation_tender_doc_upload(
+    request: Request,
+    project_key: str = Form(...),
+    file: UploadFile = File(...),
+    classification: str = Form(""),
+    tender_role: str = Form(...),
+    chunk_size: int = Form(1000),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    file_bytes = await file.read()
+    redirect = f"/evaluation?project_key={project_key}"
+    if not file_bytes or not file.filename:
+        return RedirectResponse(url=f"{redirect}&tender_upload=error", status_code=303)
+
+    from src.m03_db import DOCUMENT_CLASSIFICATIONS
+
+    cls = (classification or "").strip() or "Sonstiges"
+    if cls not in DOCUMENT_CLASSIFICATIONS:
+        cls = "Sonstiges"
+    role = (tender_role or "").strip().lower()
+    if role not in TENDER_ROLES:
+        return RedirectResponse(url=f"{redirect}&tender_upload=error", status_code=303)
+    try:
+        chunk_size = max(200, min(4000, int(chunk_size)))
+    except (TypeError, ValueError):
+        chunk_size = 1000
+
+    success, _msg = ingest_document(
+        file_name=file.filename,
+        file_bytes=file_bytes,
+        classification=cls,
+        chunk_size=chunk_size,
+    )
+    doc = get_document_by_sha256(calculate_sha256(file_bytes), include_deleted=True)
+    if not doc:
+        return RedirectResponse(url=f"{redirect}&tender_upload=error", status_code=303)
+    link_document_to_project(project_key, doc.id)
+    link_tender_doc(project_key, doc.id, role)
+    status = "ok" if success else "linked"
+    return RedirectResponse(url=f"{redirect}&tender_upload={status}", status_code=303)
 
 
 @router.post("/evaluation/bidder-doc", response_class=HTMLResponse)
