@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Kriterien extrahieren — SlitProjektHub{% endblock %}
+{% block topbar_title %}Kriterien-Vorschau{% endblock %}
+
+{% block content %}
+<div style="max-width:900px">
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Kriterien aus Vorgaben</h1>
+    <p class="page-subtitle">{{ project_title }} — Vorschau vor Übernahme</p>
+  </div>
+  <a class="btn btn-secondary" href="/evaluation?project_key={{ project_key }}">← zurück</a>
+</div>
+
+{% if error == 'cloud_confirm' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">Cloud-KI mit Vorgabe-Dokumenten: Bestätigung erforderlich.</p>
+  <form method="post" action="/evaluation/extract-criteria" style="margin-top:.5rem">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <label style="font-size:.78rem;display:flex;gap:.35rem;align-items:center">
+      <input type="checkbox" name="cloud_confirm" value="true" />
+      PII-Sanitizer bestätigen (Vorgaben an Cloud-KI)
+    </label>
+    <button type="submit" class="btn btn-primary btn-sm" style="margin-top:.35rem">Erneut extrahieren</button>
+  </form>
+</div>
+{% elif error %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">{{ error }}</p>
+</div>
+{% else %}
+<div class="card" style="margin-bottom:1rem">
+  <p style="font-size:.78rem;margin:0 0 .5rem">
+    {{ (payload.eignung or [])|length }} Eignungs- und {{ (payload.zuschlag or [])|length }} Zuschlagskriterien erkannt.
+    JSON prüfen/anpassen, dann übernehmen (bestehende Namen werden übersprungen).
+  </p>
+  <form method="post" action="/evaluation/apply-criteria">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <textarea class="form-input" name="criteria_json" rows="22" style="font-size:.72rem;font-family:monospace">{{ criteria_json }}</textarea>
+    <button type="submit" class="btn btn-primary" style="margin-top:.5rem">In Projekt übernehmen</button>
+  </form>
+</div>
+{% endif %}
+
+</div>
+{% endblock %}

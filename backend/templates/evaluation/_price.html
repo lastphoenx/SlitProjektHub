@@ -26,6 +26,59 @@
 </div>
 
 {% if bidder_id %}
+{% if price_message == 'cloud_confirm' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">Cloud-KI: Bitte «Cloud-PII bestätigen» aktivieren und erneut versuchen.</p>
+</div>
+{% elif price_message and price_message.startswith('seed_ok_') %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">{{ price_message.split('_')[-1] }} Preiszeilen aus Vorlage übernommen (nur wenn Preisblatt leer war).</p>
+</div>
+{% elif price_message and price_message.startswith('parse_ok_') %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Preisblatt eingelesen (neu/aktualisiert: {{ price_message.replace('parse_ok_', '') }}).</p>
+</div>
+{% elif price_message == 'template_error' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">Vorlage konnte nicht gelesen werden — Rolle «Preisblatt-Vorlage» in Phase ① prüfen.</p>
+</div>
+{% elif price_message == 'parse_error' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">Bieter-Preisblatt konnte nicht gelesen werden — Subtyp «Preisblatt» prüfen.</p>
+</div>
+{% endif %}
+
+{% if may_evaluate %}
+<div class="card" style="margin-bottom:1rem;padding:.65rem .85rem">
+  <p style="font-size:.78rem;font-weight:600;margin:0 0 .35rem">KI-Hilfe Preisblatt</p>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end">
+    {% if has_price_template %}
+    <form method="post" action="/evaluation/price-template/seed" style="display:flex;gap:.35rem;align-items:center">
+      <input type="hidden" name="project_key" value="{{ project_key }}" />
+      <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+      <label style="font-size:.7rem;display:flex;gap:.25rem;align-items:center">
+        <input type="checkbox" name="cloud_confirm" value="true" /> Cloud-PII
+      </label>
+      <button type="submit" class="btn btn-secondary btn-sm">Struktur aus Vorlage (leer)</button>
+    </form>
+    {% endif %}
+    {% if has_bidder_preisblatt %}
+    <form method="post" action="/evaluation/price-template/parse" style="display:flex;gap:.35rem;align-items:center">
+      <input type="hidden" name="project_key" value="{{ project_key }}" />
+      <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+      <label style="font-size:.7rem;display:flex;gap:.25rem;align-items:center">
+        <input type="checkbox" name="cloud_confirm" value="true" /> Cloud-PII
+      </label>
+      <button type="submit" class="btn btn-secondary btn-sm">Eingereichtes Preisblatt einlesen</button>
+    </form>
+    {% endif %}
+    {% if not has_price_template and not has_bidder_preisblatt %}
+    <p class="text-muted" style="font-size:.72rem;margin:0">Vorlage (Phase ①) oder Bieter-Dokument «Preisblatt» verknüpfen.</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Umsetzungs- und Entwicklungskosten (einmalig)</h2>
   <div class="table-wrap">

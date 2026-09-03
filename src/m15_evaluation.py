@@ -16,6 +16,7 @@ from sqlmodel import Field, Session, SQLModel, select
 
 from .m03_db import engine, get_session
 from .m08_llm import try_models_with_messages
+from .m09_docs import get_document_by_id
 from .m09_rag import retrieve_relevant_chunks_hybrid
 from .m16_idea_visual import is_cloud_llm_provider, sanitize_for_cloud_text
 
@@ -895,6 +896,360 @@ def suggest_score_with_rag(
         "rag_documents": docs,
         "raw_llm": raw,
     }
+
+
+def _parse_llm_json_object(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    m = _JSON_BLOCK_RE.search(raw)
+    if not m:
+        return {}
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        log.warning("LLM JSON parse failed: %s", raw[:200])
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def validate_tender_cloud_gate(
+    provider: str,
+    project_key: str,
+    cloud_confirm: bool,
+) -> Optional[str]:
+    """Cloud-LLM mit Vorgabe-Dokumenten nur nach Bestätigung."""
+    if not is_cloud_llm_provider(provider):
+        return None
+    if get_tender_document_ids(project_key) and not cloud_confirm:
+        return "cloud_confirm"
+    return None
+
+
+def import_criteria_payload(
+    project_key: str,
+    data: dict[str, Any],
+    *,
+    skip_existing: bool = True,
+) -> dict[str, int]:
+    """Kriterien aus JSON-Payload importieren (Format wie import_evaluation_criteria.py)."""
+    existing_names = {c.name for c in list_criteria(project_key)}
+    created = 0
+    skipped = 0
+
+    def _import_kind(kind: str, entries: list[dict]) -> None:
+        nonlocal created, skipped
+        for entry in entries or []:
+            name = (entry.get("name") or "").strip()
+            if not name:
+                continue
+            parent_id: Optional[int] = None
+            if skip_existing and name in existing_names:
+                skipped += 1
+            else:
+                parent = create_criterion(
+                    project_key,
+                    kind,
+                    name,
+                    weight_pct=float(entry.get("weight_pct") or 0),
+                    scale_max=int(entry.get("scale_max") or 10),
+                    auto_price=bool(entry.get("auto_price")),
+                    description=entry.get("description"),
+                )
+                existing_names.add(name)
+                parent_id = parent.id
+                created += 1
+            if parent_id is None:
+                for c in list_criteria(project_key):
+                    if c.name == name:
+                        parent_id = c.id
+                        break
+            for child in entry.get("children", []) or []:
+                cname = (child.get("name") or "").strip()
+                if not cname:
+                    continue
+                if skip_existing and cname in existing_names:
+                    skipped += 1
+                    continue
+                create_criterion(
+                    project_key,
+                    kind,
+                    cname,
+                    weight_pct=0,
+                    scale_max=int(child.get("scale_max") or 10),
+                    parent_id=parent_id,
+                    description=child.get("description"),
+                )
+                existing_names.add(cname)
+                created += 1
+
+    _import_kind("eignung", data.get("eignung") or [])
+    _import_kind("zuschlag", data.get("zuschlag") or [])
+    return {"created": created, "skipped": skipped}
+
+
+def extract_criteria_from_tender_docs(
+    project_key: str,
+    provider: str = "openai",
+    model: str = "gpt-4o-mini",
+) -> dict[str, Any]:
+    """KI-Extraktion von Eignungs-/Zuschlagskriterien aus verknüpften Vorgaben."""
+    roles = (
+        "eignungskriterien",
+        "zuschlagskriterien",
+        "bewertungsvorgaben",
+        "ausschreibungsunterlage",
+    )
+    tender_ids = get_tender_document_ids(project_key, roles=roles)
+    if not tender_ids:
+        return {
+            "error": "Keine Vorgaben verknüpft — zuerst Phase ① Dokumente mit Rolle markieren.",
+            "payload": {},
+            "raw_llm": None,
+        }
+
+    rag = retrieve_relevant_chunks_hybrid(
+        "Eignungskriterien Zuschlagskriterien Bewertungsmatrix Gewichtung Punkte",
+        project_key=project_key,
+        limit=8,
+        threshold=0.3,
+        document_ids=tuple(tender_ids),
+    )
+    context = _format_rag_context(
+        rag.get("documents", []),
+        empty_msg="Keine passenden Vorgaben-Stellen gefunden.",
+    )
+    if is_cloud_llm_provider(provider):
+        context = sanitize_for_cloud_text(context)
+
+    system = (
+        "Du bist Vergabesachverständiger. Extrahiere strukturierte Bewertungskriterien "
+        "aus Ausschreibungsunterlagen. Antwort NUR als JSON mit keys eignung und zuschlag "
+        "(Listen von Objekten). Jedes Objekt: name (kurz), description (voller Text), "
+        "optional children (Unteranforderungen). Zuschlag: weight_pct, scale_max (default 10), "
+        "auto_price true nur für reines Preis-Kriterium. Eignung: scale_max immer 1, kein weight_pct."
+    )
+    user = f"Ausschreibungsauszüge:\n{context}\n\nJSON:"
+    raw = try_models_with_messages(
+        provider, system, [{"role": "user", "content": user}],
+        max_tokens=4000, temperature=0.1, model=model,
+    )
+    payload = _parse_llm_json_object(raw)
+    if not payload.get("eignung") and not payload.get("zuschlag"):
+        return {
+            "error": "KI konnte keine Kriterien extrahieren — Vorgaben prüfen oder manuell anlegen.",
+            "payload": payload,
+            "raw_llm": raw,
+        }
+    return {"error": None, "payload": payload, "raw_llm": raw}
+
+
+def get_bidder_preisblatt_doc_ids(bidder_id: int) -> list[int]:
+    ids: list[int] = []
+    for doc_id in get_bidder_document_ids(bidder_id):
+        doc = get_document_by_id(doc_id)
+        if not doc:
+            continue
+        if doc.doc_subtype == "Preisblatt" or "preisblatt" in (doc.filename or "").lower():
+            ids.append(doc_id)
+    return ids
+
+
+def _price_rows_from_llm(data: dict[str, Any]) -> tuple[list[dict], list[dict]]:
+    einmalig = [r for r in (data.get("einmalig") or []) if (r.get("leistungsbeschreibung") or "").strip()]
+    wiederkehrend = [
+        r for r in (data.get("wiederkehrend") or []) if (r.get("leistungsbeschreibung") or "").strip()
+    ]
+    return einmalig, wiederkehrend
+
+
+def extract_price_structure_from_tender(
+    project_key: str,
+    provider: str = "openai",
+    model: str = "gpt-4o-mini",
+) -> dict[str, Any]:
+    """Leere Preisblatt-Struktur aus Vorlage (Rolle preisblatt_vorlage)."""
+    tender_ids = get_tender_document_ids(project_key, roles=("preisblatt_vorlage",))
+    if not tender_ids:
+        return {"error": "Keine Preisblatt-Vorlage verknüpft (Phase ①, Rolle «Preisblatt-Vorlage»).", "structure": {}}
+
+    rag = retrieve_relevant_chunks_hybrid(
+        "Preisblatt Positionen Leistungsbeschreibung Referenz Einheit Kosten",
+        project_key=project_key,
+        limit=8,
+        threshold=0.3,
+        document_ids=tuple(tender_ids),
+    )
+    context = _format_rag_context(rag.get("documents", []), empty_msg="Keine Preisblatt-Stellen gefunden.")
+    if is_cloud_llm_provider(provider):
+        context = sanitize_for_cloud_text(context)
+
+    system = (
+        "Extrahiere die Zeilenstruktur eines Preisblatts aus einer Ausschreibungsvorlage. "
+        "Antwort NUR als JSON: einmalig (Liste) und wiederkehrend (Liste). "
+        "Felder: referenz (optional), leistungsbeschreibung, einheit, anzahl, kosten_pro_einheit, "
+        "bemerkung (optional). Bei leerer Vorlage: anzahl und kosten_pro_einheit = 0. "
+        "wiederkehrend zusätzlich year (2027–2030)."
+    )
+    raw = try_models_with_messages(
+        provider, system, [{"role": "user", "content": f"Preisblatt-Vorlage:\n{context}\n\nJSON:"}],
+        max_tokens=3000, temperature=0.1, model=model,
+    )
+    structure = _parse_llm_json_object(raw)
+    einmalig, wiederkehrend = _price_rows_from_llm(structure)
+    if not einmalig and not wiederkehrend:
+        return {"error": "Keine Preisblatt-Zeilen erkannt.", "structure": structure, "raw_llm": raw}
+    return {"error": None, "structure": {"einmalig": einmalig, "wiederkehrend": wiederkehrend}, "raw_llm": raw}
+
+
+def extract_price_from_bidder_doc(
+    bidder_id: int,
+    project_key: str,
+    provider: str = "openai",
+    model: str = "gpt-4o-mini",
+) -> dict[str, Any]:
+    """Ausgefülltes Preisblatt eines Bieters einlesen (Subtyp Preisblatt)."""
+    doc_ids = get_bidder_preisblatt_doc_ids(bidder_id)
+    if not doc_ids:
+        return {"error": "Kein Preisblatt beim Bieter verknüpft (Subtyp «Preisblatt» oder Dateiname).", "structure": {}}
+
+    rag = retrieve_relevant_chunks_hybrid(
+        "Preisblatt Kosten CHF Positionen Anzahl Einheit",
+        project_key=project_key,
+        limit=8,
+        threshold=0.3,
+        classification_filter=ANGEbot_CLASSIFICATION,
+        bidder_id=bidder_id,
+        document_ids=tuple(doc_ids),
+    )
+    context = _format_rag_context(rag.get("documents", []), empty_msg="Keine Preisblatt-Stellen gefunden.")
+    if is_cloud_llm_provider(provider):
+        context = sanitize_for_cloud_text(context)
+
+    system = (
+        "Extrahiere alle Preispositionen aus dem Bieter-Preisblatt. "
+        "Antwort NUR als JSON mit einmalig und wiederkehrend (Listen). "
+        "Felder: referenz, leistungsbeschreibung, einheit, anzahl, kosten_pro_einheit, bemerkung; "
+        "wiederkehrend zusätzlich year."
+    )
+    raw = try_models_with_messages(
+        provider, system, [{"role": "user", "content": f"Bieter-Preisblatt:\n{context}\n\nJSON:"}],
+        max_tokens=3000, temperature=0.1, model=model,
+    )
+    structure = _parse_llm_json_object(raw)
+    einmalig, wiederkehrend = _price_rows_from_llm(structure)
+    if not einmalig and not wiederkehrend:
+        return {"error": "Keine Preispositionen erkannt.", "structure": structure, "raw_llm": raw}
+    return {"error": None, "structure": {"einmalig": einmalig, "wiederkehrend": wiederkehrend}, "raw_llm": raw}
+
+
+def _price_row_key(category: str, year: Optional[int], referenz: Optional[str], desc: str) -> tuple:
+    return (category, year, (referenz or "").strip(), desc.strip())
+
+
+def seed_price_structure_for_bidder(
+    bidder_id: int,
+    structure: dict[str, Any],
+    *,
+    only_if_empty: bool = True,
+) -> dict[str, int]:
+    """Vorlagen-Struktur auf Bieter übertragen (Werte 0)."""
+    existing = list_price_items(bidder_id)
+    if existing and only_if_empty:
+        return {"created": 0, "skipped": len(existing)}
+
+    created = 0
+    for row in structure.get("einmalig") or []:
+        desc = (row.get("leistungsbeschreibung") or "").strip()
+        if not desc:
+            continue
+        upsert_price_item(
+            None, bidder_id, "einmalig", desc,
+            anzahl=float(row.get("anzahl") or 0),
+            kosten_pro_einheit=float(row.get("kosten_pro_einheit") or 0),
+            referenz=row.get("referenz"),
+            einheit=row.get("einheit"),
+            bemerkung=row.get("bemerkung"),
+        )
+        created += 1
+    for row in structure.get("wiederkehrend") or []:
+        desc = (row.get("leistungsbeschreibung") or "").strip()
+        year = row.get("year")
+        if not desc or not year:
+            continue
+        upsert_price_item(
+            None, bidder_id, "wiederkehrend", desc,
+            anzahl=float(row.get("anzahl") or 0),
+            kosten_pro_einheit=float(row.get("kosten_pro_einheit") or 0),
+            year=int(year),
+            einheit=row.get("einheit"),
+            bemerkung=row.get("bemerkung"),
+        )
+        created += 1
+    return {"created": created, "skipped": 0}
+
+
+def merge_price_structure_for_bidder(bidder_id: int, structure: dict[str, Any]) -> dict[str, int]:
+    """Bieter-Preisblatt-Werte einlesen — bestehende Zeilen per Referenz/Beschreibung aktualisieren."""
+    existing = list_price_items(bidder_id)
+    by_key = {
+        _price_row_key(i.category, i.year, i.referenz, i.leistungsbeschreibung): i
+        for i in existing
+    }
+    created = updated = 0
+    for row in structure.get("einmalig") or []:
+        desc = (row.get("leistungsbeschreibung") or "").strip()
+        if not desc:
+            continue
+        key = _price_row_key("einmalig", None, row.get("referenz"), desc)
+        if key in by_key:
+            item = by_key[key]
+            upsert_price_item(
+                item.id, bidder_id, "einmalig", desc,
+                anzahl=float(row.get("anzahl", item.anzahl)),
+                kosten_pro_einheit=float(row.get("kosten_pro_einheit", item.kosten_pro_einheit)),
+                referenz=row.get("referenz") or item.referenz,
+                einheit=row.get("einheit") or item.einheit,
+                bemerkung=row.get("bemerkung") or item.bemerkung,
+            )
+            updated += 1
+        else:
+            upsert_price_item(
+                None, bidder_id, "einmalig", desc,
+                anzahl=float(row.get("anzahl") or 0),
+                kosten_pro_einheit=float(row.get("kosten_pro_einheit") or 0),
+                referenz=row.get("referenz"),
+                einheit=row.get("einheit"),
+                bemerkung=row.get("bemerkung"),
+            )
+            created += 1
+    for row in structure.get("wiederkehrend") or []:
+        desc = (row.get("leistungsbeschreibung") or "").strip()
+        year = row.get("year")
+        if not desc or not year:
+            continue
+        key = _price_row_key("wiederkehrend", int(year), row.get("referenz"), desc)
+        if key in by_key:
+            item = by_key[key]
+            upsert_price_item(
+                item.id, bidder_id, "wiederkehrend", desc,
+                anzahl=float(row.get("anzahl", item.anzahl)),
+                kosten_pro_einheit=float(row.get("kosten_pro_einheit", item.kosten_pro_einheit)),
+                year=int(year),
+                einheit=row.get("einheit") or item.einheit,
+                bemerkung=row.get("bemerkung") or item.bemerkung,
+            )
+            updated += 1
+        else:
+            upsert_price_item(
+                None, bidder_id, "wiederkehrend", desc,
+                anzahl=float(row.get("anzahl") or 0),
+                kosten_pro_einheit=float(row.get("kosten_pro_einheit") or 0),
+                year=int(year),
+                einheit=row.get("einheit"),
+                bemerkung=row.get("bemerkung"),
+            )
+            created += 1
+    return {"created": created, "updated": updated}
 
 
 def migrate_evaluation_db() -> None:
