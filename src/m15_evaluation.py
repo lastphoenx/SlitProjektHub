@@ -98,7 +98,7 @@ CHUNK_SIZE_HINTS = {
 class EvaluationProjectConfig(SQLModel, table=True):
     """Projekt-spezifische Offertbeurteilungs-Einstellungen."""
     __tablename__ = "evaluation_project_config"
-    project_key: str = Field(primary_key=True, sa_column=Column(String(80), nullable=False))
+    project_key: str = Field(sa_column=Column(String(80), primary_key=True, nullable=False))
     price_years_json: str = Field(
         default=json.dumps(list(DEFAULT_PRICE_YEARS)),
         sa_column=Column(String(120), nullable=False),
