@@ -267,7 +267,9 @@ Erwartung: `[PERSON]`, `[CH_AHV_NR]` (nicht nur Regex-Stufe 1).
 
 Web-UI: unter **PII-Sanitizer** (`/sanitize`) Text oder PDF hochladen — gleiche Pipeline, mit Entitäten-Vorschau. Bei langen PDFs **Seiten von/bis** wählen (z. B. 1–20, dann 21–40); `SANITIZE_MAX_PDF_PAGES` begrenzt die Spanne pro Lauf.
 
-**Offertbeurteilung** (`/evaluation`): Phase ① `tender_role` an bestehende Projekt-Dokumente setzen (Vorschlag in UI). Chunk-Empfehlung: Pflichtenheft ~1800, Anhänge ~1200, Preisblatt ~500, CSV/XLSX zeilenweise. Bei falscher Chunk-Grösse: **↻ Neu indexieren**. Projekt-Einstellungen: Preisblatt-Jahre, Vergabe-Hinweise, RAG-Chunks pro Pass (4–24). Nach Deploy: bestehende Docs einmal re-indexieren.
+**Offertbeurteilung** (`/evaluation`): Phase ① `tender_role` setzen; Chunk ↻ re-indexieren.
+Zweistufiges Ranking: Zuschlagskriterium «A-01» o. ä. als **Phase 2 (Präsentation)** markieren →
+Zwischenrangliste vor Einladung. Cloud-KI mit Bieter-Docs: PII-Checkbox + Sanitizer (Stufe 1+2).
 
 Optional in `.env` (Schutz vor OOM bei grossen PDFs):
 

@@ -98,54 +98,31 @@ vor jeder dateinamen-basierten Logik.
 
 ---
 
-## Ticket 3 — PII-Sanitizer (Stufe 1+2) für `suggest_score_with_rag()` — **Priorität hoch**
+## Ticket 3 — PII-Sanitizer (Stufe 1+2) für `suggest_score_with_rag()` — **erledigt** (`ffa0178`+)
 
-**Ziel:** Bieter-Dokument-Inhalte, die an Cloud-LLMs gehen, durchlaufen dieselbe
-zweistufige Sanitize-Pipeline wie Projektideen/Visual-Lab, **bevor** mehr Dokumenttypen
-(Bilanz, Referenzblätter mit echten Namen, unterschriebene Vorbehaltsliste) über Ticket 1/2
-in diesen Pfad kommen.
+**Status:** Umgesetzt. `suggest_score_with_rag()` ruft bei Cloud-Providern `sanitize_for_cloud_text()` auf
+(Vorgaben + Angebotskontext). `validate_evaluation_cloud_gate()` + Bestätigungs-Checkbox in
+`backend/templates/evaluation/_cell.html`. Tests: `test_suggest_score_sanitizes_cloud_context`,
+`test_validate_evaluation_cloud_gate` in `scripts/testing/test_evaluation.py`.
 
-**Aktueller Stand (Lücke, verifiziert):**
-- `suggest_score_with_rag()` (`src/m15_evaluation.py:639-728`) baut `context` direkt aus
-  rohen RAG-Chunk-Texten (`context_parts.append(f"[{i}] Datei: {fname}, ...\n{text}")`,
-  Zeile 668-672) und schickt das ungefiltert an `try_models_with_messages(provider, ...)`
-  (Zeile 689-696).
-- **Kein** Aufruf von `sanitize_for_cloud_text()` (`src/m16_idea_visual.py`), **kein**
-  DSGVO-Bestätigungs-Gate (vergleichbar `validate_assess_cloud_gates()` /
-  `validate_cloud_gates_for_references()`), **keine** Stufe-2-Anonymisierung
-  (`src/m18_cloud_pii.py::apply_swiss_pii_sanitize()`).
-- Provider-Default ist `"openai"` (`backend/app/routes/evaluation.py:367`) — also Cloud per
-  Default, nicht lokal.
-- Das eigene, bereits produktiv genutzte Paket **swiss-pii-anonymizer**
-  (https://github.com/lastphoenx/swiss-pii-anonymizer, Presidio + Flair) ist bereits
-  Dependency (`requirements.txt`) und über `src/m18_cloud_pii.py` fertig integriert —
-  hier **nicht neu bauen, nur denselben Einstiegspunkt aufrufen** (keine Redundanz).
+**Vor Produktivstart mit Referenzprojekten/Kurzprofilen:** Stichprobe mit echtem Auszug über
+`/sanitize` und `test_cloud_pii.py` auf dem Server (Flair warm).
 
-**Aufgabe:**
-1. In `suggest_score_with_rag()`: jeden `context_parts`-Textblock (bzw. den fertigen
-   `context`-String vor dem Prompt-Bau) durch `sanitize_for_cloud_text()`
-   (`m16_idea_visual.py`) schicken — das deckt Stufe 1 (Regex) **und** Stufe 2
-   (`m18_cloud_pii.apply_swiss_pii_sanitize()`) automatisch ab, da Stufe 2 bereits intern in
-   Stufe 1 eingehängt ist (siehe bestehende Architektur-Entscheidung, ein zentraler
-   Sanitize-Punkt für alle Call-Sites).
-2. Cloud-Gate/Bestätigungs-Checkbox analog Projektideen ergänzen: nur wenn `provider` in
-   `CLOUD_LLM_PROVIDERS` (`m16_idea_visual.py`, `is_cloud_llm_provider()`) UND Bieter hat
-   verlinkte Dokumente → Checkbox „Ich bestätige, dass die an {Provider} übermittelten
-   Angebotsauszüge auf personenbezogene Daten geprüft wurden" muss aktiv sein, bevor
-   `POST /evaluation/suggest` ausgeführt wird (analog `_cloud_gate_attachment_state()`-Pattern).
-3. Kein neuer Sanitize-Code — ausschließlich bestehende Funktionen aus
-   `m16_idea_visual.py` / `m18_cloud_pii.py` wiederverwenden.
-4. Test ergänzen in `scripts/testing/` (analog `test_cloud_pii.py`): Mock von
-   `sanitize_for_cloud_text()` in `suggest_score_with_rag()`, prüft dass der an
-   `try_models_with_messages()` übergebene `user`-Prompt keine rohen PII-Marker mehr enthält.
+---
 
-**Akzeptanzkriterien:**
-- Kein RAG-Chunk-Text erreicht `try_models_with_messages()` mehr ungesanitized, wenn
-  `provider` ein Cloud-Provider ist.
-- Ohne bestätigte Checkbox liefert `/evaluation/suggest` bei Cloud-Provider einen Block
-  (HTTP 4xx oder UI-Hinweis), analog Projektideen-Verhalten.
-- Lokale Provider (Ollama o. ä.) bleiben von der Gate-Pflicht unberührt (wie bei
-  Projektideen bereits gehandhabt).
+## Ticket 5 — Zweistufiges Ranking (Phase 1 ZK / Phase 2 Präsentation, z. B. A-01) — **erledigt**
+
+**Ziel:** Nach Bewertung von ZK1–7 Zwischenrangliste für Einladungsentscheid; Bieter, die selbst mit
+voller Punktzahl in Phase 2 nicht mehr aufholen können, als «keine Einladung» markieren.
+
+**Umsetzung:**
+- `Criterion.ranking_phase` (1 = ZK, 2 = Präsentation); Heuristik `infer_ranking_phase()` (A-01 etc.)
+- `compute_rankings()` liefert `interim_score`, `interim_rank`, `max_score`, `can_still_win`
+- UI: Tabelle «Vor Präsentation (Phase 1)» + Excel-Blatt «Rangfolge Phase 1»
+- Kriterium anlegen / Liste: Phase-Dropdown; KI-Extraktion: `ranking_phase` im JSON
+
+**Akzeptanz:** A-01 als Phase 2 markieren → Zwischenrang nur über ZK; Einladungsspalte «nein» wenn
+`max_score < führender interim_score`.
 
 ---
 
@@ -183,6 +160,4 @@ Einzel-Providers.
 
 ---
 
-**Reihenfolge-Empfehlung:** 3 → 1 → 2 → 4 (Compliance-Lücke zuerst, dann die UX-Erweiterung,
-die die Lücke sonst vergrößert; Sub-Klassifikation und KI-Picker sind unabhängig
-nachziehbar).
+**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → 4 (Ticket 3 und 5 erledigt; Ticket 4 optional).

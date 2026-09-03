@@ -279,6 +279,15 @@
         {% for c in top_criteria %}<option value="{{ c.id }}">{{ c.kind }}: {{ c.name }}</option>{% endfor %}
       </select>
     </div>
+    <div id="crit-phase-field">
+      <label class="form-label" style="font-size:.72rem">Ranking-Phase</label>
+      <select class="form-select" name="ranking_phase">
+        {% for p in ranking_phases %}
+        <option value="{{ p }}">{{ ranking_phase_labels[p] }}</option>
+        {% endfor %}
+      </select>
+      <p class="text-muted" style="font-size:.65rem;margin:.15rem 0 0">Phase 2 = Präsentation (z. B. A-01), erst nach Einladung</p>
+    </div>
     <div style="display:flex;align-items:center;gap:.35rem">
       <input type="checkbox" id="auto_price" name="auto_price" value="true" />
       <label for="auto_price" style="font-size:.78rem;margin:0">Preis-Kriterium (automatisch aus Preisblatt)</label>
@@ -292,7 +301,22 @@
     <li style="margin:.35rem 0">
       {% if c.parent_id %}&nbsp;&nbsp;↳ {% endif %}{{ c.kind }}: {{ c.name }}
       {% if c.kind == 'zuschlag' and not c.parent_id %}({{ c.weight_pct }}%){% endif %}
+      {% if c.kind == 'zuschlag' and not c.parent_id and (c.ranking_phase or 1) >= 2 %}
+      <span class="text-muted" style="font-size:.72rem"> · Phase 2</span>
+      {% endif %}
       {% if c.auto_price %} 💰{% endif %}
+      {% if may_evaluate and c.kind == 'zuschlag' and not c.parent_id %}
+      <form method="post" action="/evaluation/criterion-phase" style="display:inline;margin-left:.35rem">
+        <input type="hidden" name="project_key" value="{{ project_key }}" />
+        <input type="hidden" name="criterion_id" value="{{ c.id }}" />
+        <select class="form-select" name="ranking_phase" style="font-size:.72rem;padding:.1rem .25rem;height:auto;display:inline-block;width:auto"
+                onchange="this.form.submit()">
+          {% for p in ranking_phases %}
+          <option value="{{ p }}" {% if (c.ranking_phase or 1) == p %}selected{% endif %}>{{ ranking_phase_labels[p] }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% endif %}
       <form method="post" action="/evaluation/delete-criterion" style="display:inline">
         <input type="hidden" name="project_key" value="{{ project_key }}" />
         <input type="hidden" name="criterion_id" value="{{ c.id }}" />
@@ -436,6 +460,37 @@
 
 <div class="card eval-phase-card eval-phase-result-card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Rangfolge</h2>
+  {% if has_phase2_criteria %}
+  <p class="text-muted" style="font-size:.75rem;margin:0 0 .75rem">
+  Zweistufige Bewertung: Zuerst ZK-Kriterien (Phase 1) für die Einladungsentscheid — danach Präsentation (Phase 2, z. B. A-01).
+  </p>
+  <h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Vor Präsentation (Phase 1, ZK)</h3>
+  <div class="table-wrap" style="margin-bottom:1rem">
+  <table>
+    <thead><tr>
+      <th>Rang</th><th>Bieter</th><th>ZK %</th><th>Max. bei Präsentation voll</th><th>Einladung?</th><th>Eignung</th>
+    </tr></thead>
+    <tbody>
+      {% for r in rankings %}
+      <tr{% if r.can_still_win == false %} style="opacity:.75"{% endif %}>
+        <td>{{ r.interim_rank if r.interim_rank else 'K.O./offen' }}</td>
+        <td>{{ r.bidder_name }}</td>
+        <td>{{ r.interim_score if r.interim_score is not none else '—' }}</td>
+        <td>{{ r.max_score if r.max_score is not none else '—' }}</td>
+        <td>
+          {% if r.ko %}K.O.
+          {% elif r.can_still_win == false %}<span title="Selbst mit voller Punktzahl in Phase 2 nicht mehr erreichbar">nein</span>
+          {% elif r.can_still_win %}ja
+          {% else %}—{% endif %}
+        </td>
+        <td>{{ 'ja' if not r.ko else 'K.O.' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Gesamt (alle Phasen bewertet)</h3>
+  {% endif %}
   <div class="table-wrap">
   <table>
     <thead><tr><th>Rang</th><th>Bieter</th><th>Gesamt %</th><th>Eignung OK</th></tr></thead>
@@ -504,6 +559,8 @@ function toggleCritFields() {
   document.getElementById('crit-weight-field').style.display = isEignung ? 'none' : '';
   document.getElementById('crit-scale-field').style.display = isEignung ? 'none' : '';
   document.getElementById('crit-eignung-hint').style.display = isEignung ? '' : 'none';
+  const phaseField = document.getElementById('crit-phase-field');
+  if (phaseField) phaseField.style.display = isEignung ? 'none' : '';
 }
 toggleCritFields();
 </script>

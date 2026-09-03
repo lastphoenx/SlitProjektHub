@@ -142,6 +142,76 @@ def test_ranking_ko_and_weighted_sum():
     ev.get_session = old_get
 
 
+def test_compute_rankings_phase2_interim():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-phase2"
+
+    with Session(engine) as session:
+        b1 = Bidder(project_key=project_key, name="Leader")
+        b2 = Bidder(project_key=project_key, name="Chaser")
+        b3 = Bidder(project_key=project_key, name="Out")
+        session.add(b1)
+        session.add(b2)
+        session.add(b3)
+        session.commit()
+        session.refresh(b1)
+        session.refresh(b2)
+        session.refresh(b3)
+
+        zk = Criterion(
+            project_key=project_key, kind="zuschlag", name="ZK1", weight_pct=70,
+            scale_max=10, ranking_phase=1,
+        )
+        a01 = Criterion(
+            project_key=project_key, kind="zuschlag", name="A-01 Präsentation", weight_pct=30,
+            scale_max=10, ranking_phase=2,
+        )
+        session.add(zk)
+        session.add(a01)
+        session.commit()
+        session.refresh(zk)
+        session.refresh(a01)
+
+        def score(bid, crit, val):
+            session.add(
+                Score(
+                    bidder_id=bid,
+                    criterion_id=crit,
+                    source_key=f"user:{evaluator_id}",
+                    evaluator_user_id=evaluator_id,
+                    value=val,
+                )
+            )
+
+        score(b1.id, zk.id, 9.0)
+        score(b2.id, zk.id, 9.0)
+        score(b3.id, zk.id, 6.5)
+        session.commit()
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    rankings = {r["bidder_name"]: r for r in compute_rankings(project_key)}
+
+    assert rankings["Leader"]["interim_score"] == 90.0
+    assert rankings["Chaser"]["interim_score"] == 90.0
+    assert rankings["Leader"]["interim_rank"] in (1, 2)
+    assert rankings["Chaser"]["interim_rank"] in (1, 2)
+    assert rankings["Chaser"]["can_still_win"] is True
+    assert rankings["Out"]["can_still_win"] is False
+    assert rankings["Leader"]["has_phase2"] is True
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
 def test_create_bidder_and_criterion():
     engine, _ = _setup_db()
     import src.m15_evaluation as ev
@@ -354,12 +424,15 @@ def test_validate_tender_cloud_gate():
 def test_suggest_tender_role_and_validate_criteria():
     from src.m15_evaluation import (
         normalize_chunk_size,
+        infer_ranking_phase,
         suggest_tender_role,
         validate_criteria_payload,
     )
 
     assert suggest_tender_role("Anforderung/Feature", "Anhang2_Preisblatt_Unisport.pdf") == "preisblatt_vorlage"
     assert suggest_tender_role("Pflichtenheft (Projekt)", "Pflichtenheft.docx") == "ausschreibungsunterlage"
+    assert infer_ranking_phase("A-01 Angebotspräsentation") == 2
+    assert infer_ranking_phase("ZK3 Lösung") == 1
     assert normalize_chunk_size(0) == 0
     assert normalize_chunk_size(150) == 200
     assert normalize_chunk_size(5000) == 4000
@@ -394,6 +467,7 @@ def test_evaluation_config_roundtrip():
 if __name__ == "__main__":
     test_create_bidder_and_criterion()
     test_ranking_ko_and_weighted_sum()
+    test_compute_rankings_phase2_interim()
     test_chunk_meta_prefix_subtype()
     test_validate_evaluation_cloud_gate()
     test_suggest_score_sanitizes_cloud_context()
