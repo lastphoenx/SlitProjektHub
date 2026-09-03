@@ -35,9 +35,10 @@
 <div class="card eval-workflow-hint" style="margin-bottom:1rem;padding:.65rem .85rem">
   <p style="font-size:.78rem;margin:0;line-height:1.5">
     <strong>Ablauf:</strong>
-    <span class="eval-phase-tag eval-phase-once">① einmalig</span> Kriterien für die Ausschreibung definieren →
-    <span class="eval-phase-tag eval-phase-bidder">② pro Bieter</span> Angebote hochladen &amp; verknüpfen →
-    <span class="eval-phase-tag eval-phase-result">③ Auswertung</span> Matrix-Zellen bewerten (KI-Vorschlag optional).
+    <span class="eval-phase-tag eval-phase-once">① einmalig</span> Vorgaben &amp; Frameworks verknüpfen →
+    <span class="eval-phase-tag eval-phase-once">② optional</span> Kriterien (manuell oder später aus Vorgaben) →
+    <span class="eval-phase-tag eval-phase-bidder">③ pro Bieter</span> Angebote hochladen →
+    <span class="eval-phase-tag eval-phase-result">④ Auswertung</span> Matrix (KI vergleicht Vorgabe ↔ Angebot).
   </p>
 </div>
 
@@ -55,15 +56,97 @@
   <p style="font-size:.85rem;margin:0">Upload fehlgeschlagen — Datei prüfen und erneut versuchen.</p>
 </div>
 {% endif %}
+{% if request.query_params.get('tender_upload') == 'ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Vorgabe-Dokument hochgeladen und für die Beurteilung markiert.</p>
+</div>
+{% elif request.query_params.get('tender_upload') == 'error' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">Vorgabe-Upload fehlgeschlagen — Rolle und Datei prüfen.</p>
+</div>
+{% endif %}
 
-<!-- Phase 1: einmalig pro Ausschreibung -->
+<!-- Phase 1: Vorgaben & Frameworks (einmalig pro Ausschreibung) -->
 <div class="card eval-phase-card eval-phase-once-card" style="margin-bottom:1rem">
   <div class="eval-phase-header">
     <span class="eval-phase-tag eval-phase-once">Einmalig pro Ausschreibung</span>
-    <h2 style="font-size:.95rem;font-weight:700;margin:0">Kriterien</h2>
+    <h2 style="font-size:.95rem;font-weight:700;margin:0">Vorgaben &amp; Frameworks</h2>
   </div>
   <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 .75rem">
-    Gilt für alle Bieter dieser Ausschreibung — nicht pro Anbieter wiederholen.
+    Ausschreibungsunterlagen (Eignungs-/Zuschlagskriterien, Bewertungsvorgaben, Preisblatt-Vorlage) —
+    ohne erneuten Upload, wenn sie bereits unter <strong>Dokumente</strong> am Projekt hängen.
+    Die KI nutzt diese Rolle beim Vergleich mit den Bieter-Angeboten.
+  </p>
+  <form method="post" action="/evaluation/tender-doc-upload" enctype="multipart/form-data"
+        style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:end;margin-bottom:.75rem">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <div>
+      <label class="form-label" style="font-size:.72rem">Neu hochladen</label>
+      <input class="form-input" type="file" name="file" required
+             accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx" />
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Rolle</label>
+      <select class="form-select" name="tender_role" required>
+        {% for role in tender_roles %}
+        <option value="{{ role }}">{{ tender_role_labels[role] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Klassifikation</label>
+      <select class="form-select" name="classification">
+        <option value="Pflichtenheft (Projekt)">Pflichtenheft (Projekt)</option>
+        <option value="Anforderung/Feature">Anforderung/Feature</option>
+        <option value="Standard/Richtlinie">Standard/Richtlinie</option>
+        <option value="FAQ/Fragen-Katalog">FAQ/Fragen-Katalog</option>
+        <option value="Sonstiges" selected>Sonstiges</option>
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Hochladen</button>
+  </form>
+  {% if project_source_docs %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Datei</th><th>Klassifikation</th><th>Rolle in Beurteilung</th></tr></thead>
+      <tbody>
+        {% for doc in project_source_docs %}
+        <tr>
+          <td style="font-size:.8rem">{{ doc.filename }}</td>
+          <td style="font-size:.75rem">{{ doc.classification }}</td>
+          <td>
+            <form method="post" action="/evaluation/tender-doc" style="display:flex;gap:.35rem;align-items:center">
+              <input type="hidden" name="project_key" value="{{ project_key }}" />
+              <input type="hidden" name="document_id" value="{{ doc.id }}" />
+              <select class="form-select" name="tender_role" style="font-size:.75rem;min-width:14rem"
+                      onchange="this.form.submit()">
+                <option value="">— nicht in Beurteilung —</option>
+                {% for role in tender_roles %}
+                <option value="{{ role }}" {% if tender_doc_roles.get(doc.id) == role %}selected{% endif %}>
+                  {{ tender_role_labels[role] }}
+                </option>
+                {% endfor %}
+              </select>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted" style="font-size:.8rem;margin:0">Noch keine Projekt-Dokumente (ausser Bieter-Angebote) — oben hochladen oder unter Dokumente verknüpfen.</p>
+  {% endif %}
+</div>
+
+<!-- Phase 2: Kriterien (optional) -->
+<div class="card eval-phase-card eval-phase-once-card" style="margin-bottom:1rem">
+  <div class="eval-phase-header">
+    <span class="eval-phase-tag eval-phase-once">Einmalig pro Ausschreibung</span>
+    <h2 style="font-size:.95rem;font-weight:700;margin:0">Kriterien <span class="text-muted" style="font-weight:400">(optional)</span></h2>
+  </div>
+  <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 .75rem">
+    Manuell anlegen oder später aus Vorgaben extrahieren. Ohne Kriterien keine Matrix — die KI nutzt trotzdem die verknüpften Vorgaben in Phase ④.
   </p>
   <form method="post" action="/evaluation/criterion" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.5rem;max-width:900px;align-items:end">
     <input type="hidden" name="project_key" value="{{ project_key }}" />
@@ -119,7 +202,7 @@
   </ul>
 </div>
 
-<!-- Phase 2: pro Bieter -->
+<!-- Phase 3: pro Bieter -->
 <div class="card eval-phase-card eval-phase-bidder-card" style="margin-bottom:1rem">
   <div class="eval-phase-header">
     <span class="eval-phase-tag eval-phase-bidder">Pro Bieter</span>
@@ -195,7 +278,7 @@
 </div>
 {% endif %}
 
-<!-- Phase 3: Auswertung -->
+<!-- Phase 4: Auswertung -->
 <div class="card eval-phase-card eval-phase-result-card" style="margin-bottom:1rem">
   <div class="eval-phase-header">
     <span class="eval-phase-tag eval-phase-result">Auswertung</span>
@@ -246,7 +329,7 @@
   </div>
   </div>
   {% else %}
-  <p class="text-muted">Noch keine Kriterien oder Bieter — zuerst Phase ① und ② abschliessen.</p>
+  <p class="text-muted">Noch keine Kriterien oder Bieter — zuerst Phase ② (optional) und ③ abschliessen.</p>
   {% endif %}
 </div>
 

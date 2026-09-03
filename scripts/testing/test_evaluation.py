@@ -13,10 +13,15 @@ from src.m15_evaluation import (
     Bidder,
     BidderDocumentLink,
     Criterion,
+    EvaluationTenderDoc,
     Score,
     compute_rankings,
     create_bidder,
     create_criterion,
+    get_tender_document_ids,
+    link_tender_doc,
+    tender_roles_for_criterion,
+    unlink_tender_doc,
     upsert_score,
 )
 
@@ -232,6 +237,45 @@ def test_suggest_score_skips_sanitize_for_local_provider():
     assert "Maria Muster" in captured["user"]
 
 
+def test_tender_doc_link_and_roles():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+    from src.m03_db import Document
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    with Session(engine) as session:
+        doc = Document(
+            filename="pflichtenheft.pdf",
+            sha256_hash="abc123",
+            classification="Pflichtenheft (Projekt)",
+            file_path="/tmp/x.pdf",
+        )
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
+        doc_id = doc.id
+
+    link_tender_doc("p1", doc_id, "zuschlagskriterien")
+    assert get_tender_document_ids("p1") == [doc_id]
+    assert get_tender_document_ids("p1", roles=("eignungskriterien",)) == []
+
+    crit = Criterion(project_key="p1", kind="zuschlag", name="Z1")
+    assert "zuschlagskriterien" in tender_roles_for_criterion(crit)
+
+    unlink_tender_doc("p1", doc_id)
+    assert get_tender_document_ids("p1") == []
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
 if __name__ == "__main__":
     test_create_bidder_and_criterion()
     test_ranking_ko_and_weighted_sum()
@@ -239,4 +283,5 @@ if __name__ == "__main__":
     test_validate_evaluation_cloud_gate()
     test_suggest_score_sanitizes_cloud_context()
     test_suggest_score_skips_sanitize_for_local_provider()
+    test_tender_doc_link_and_roles()
     print("OK")

@@ -37,6 +37,24 @@ ANGEbot_SUBTYPES = (
     "Sonstiges",
 )
 
+# Rolle in der Offertbeurteilung (zusätzlich zur globalen DOCUMENT_CLASSIFICATION)
+TENDER_ROLES = (
+    "eignungskriterien",
+    "zuschlagskriterien",
+    "bewertungsvorgaben",
+    "preisblatt_vorlage",
+    "ausschreibungsunterlage",
+    "interne_richtlinie",
+)
+TENDER_ROLE_LABELS = {
+    "eignungskriterien": "Eignungskriterien (Vorgabe)",
+    "zuschlagskriterien": "Zuschlagskriterien (Vorgabe)",
+    "bewertungsvorgaben": "Bewertungsvorgaben (Framework)",
+    "preisblatt_vorlage": "Preisblatt-Vorlage (Framework)",
+    "ausschreibungsunterlage": "Ausschreibungsunterlage",
+    "interne_richtlinie": "Interne Beurteilungsrichtlinie",
+}
+
 
 class Bidder(SQLModel, table=True):
     __tablename__ = "bidder"
@@ -99,6 +117,19 @@ class BidderDocumentLink(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     bidder_id: int = Field(foreign_key="bidder.id", index=True)
     document_id: int = Field(foreign_key="document.id", index=True)
+    added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class EvaluationTenderDoc(SQLModel, table=True):
+    """Projekt-Vorgaben/Frameworks für die Offertbeurteilung (verweist auf bestehende Document-Zeilen)."""
+    __tablename__ = "evaluation_tender_doc"
+    __table_args__ = (
+        UniqueConstraint("project_key", "document_id", name="uq_eval_tender_doc"),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_key: str = Field(sa_column=Column(String(80), nullable=False, index=True))
+    document_id: int = Field(foreign_key="document.id", index=True)
+    tender_role: str = Field(sa_column=Column(String(40), nullable=False))
     added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -419,6 +450,87 @@ def get_bidder_document_ids(bidder_id: int) -> list[int]:
         ]
 
 
+def list_tender_docs(project_key: str) -> list[EvaluationTenderDoc]:
+    with get_session() as session:
+        return list(
+            session.exec(
+                select(EvaluationTenderDoc)
+                .where(EvaluationTenderDoc.project_key == project_key)
+                .order_by(EvaluationTenderDoc.tender_role, EvaluationTenderDoc.document_id)
+            ).all()
+        )
+
+
+def get_tender_document_ids(
+    project_key: str,
+    roles: tuple[str, ...] | None = None,
+) -> list[int]:
+    with get_session() as session:
+        q = select(EvaluationTenderDoc).where(EvaluationTenderDoc.project_key == project_key)
+        rows = list(session.exec(q).all())
+    if roles:
+        role_set = set(roles)
+        rows = [r for r in rows if r.tender_role in role_set]
+    return [r.document_id for r in rows]
+
+
+def link_tender_doc(project_key: str, document_id: int, tender_role: str) -> bool:
+    role = (tender_role or "").strip().lower()
+    if role not in TENDER_ROLES:
+        raise ValueError(f"tender_role muss einer von {TENDER_ROLES} sein")
+    with get_session() as session:
+        existing = session.exec(
+            select(EvaluationTenderDoc).where(
+                EvaluationTenderDoc.project_key == project_key,
+                EvaluationTenderDoc.document_id == document_id,
+            )
+        ).first()
+        if existing:
+            existing.tender_role = role
+            session.add(existing)
+            session.commit()
+            return True
+        link = EvaluationTenderDoc(
+            project_key=project_key,
+            document_id=document_id,
+            tender_role=role,
+        )
+        session.add(link)
+        session.commit()
+        return True
+
+
+def unlink_tender_doc(project_key: str, document_id: int) -> None:
+    with get_session() as session:
+        row = session.exec(
+            select(EvaluationTenderDoc).where(
+                EvaluationTenderDoc.project_key == project_key,
+                EvaluationTenderDoc.document_id == document_id,
+            )
+        ).first()
+        if row:
+            session.delete(row)
+            session.commit()
+
+
+def tender_roles_for_criterion(criterion: Criterion) -> tuple[str, ...]:
+    """Welche Vorgabe-Rollen für RAG zu einem Kriterium passen."""
+    common = ("bewertungsvorgaben", "ausschreibungsunterlage", "interne_richtlinie")
+    if criterion.kind == "eignung":
+        return ("eignungskriterien",) + common
+    return ("zuschlagskriterien",) + common
+
+
+def _format_rag_context(docs: list[dict], *, empty_msg: str) -> str:
+    parts: list[str] = []
+    for i, d in enumerate(docs[:5], 1):
+        text = (d.get("text") or "")[:1200]
+        fname = d.get("filename", "?")
+        chunk_id = d.get("chunk_id")
+        parts.append(f"[{i}] Datei: {fname}, Chunk {chunk_id}\n{text}")
+    return "\n\n".join(parts) or empty_msg
+
+
 def validate_evaluation_cloud_gate(
     provider: str,
     bidder_id: int,
@@ -670,10 +782,35 @@ def suggest_score_with_rag(
     provider: str = "openai",
     model: str = "gpt-4o-mini",
 ) -> dict[str, Any]:
-    """RAG + LLM-Vorschlag für eine Bewertung (Mensch bestätigt)."""
-    query = f"{criterion.description or criterion.name} — Nachweis im Angebot"
+    """RAG + LLM-Vorschlag für eine Bewertung (Mensch bestätigt). Dual-Kontext: Vorgabe + Angebot."""
+    req_query = f"{criterion.description or criterion.name} — Anforderung Ausschreibung"
+    offer_query = f"{criterion.description or criterion.name} — Nachweis im Angebot"
+
+    tender_ids = get_tender_document_ids(
+        project_key, roles=tender_roles_for_criterion(criterion)
+    )
+    doc_ids = tuple(tender_ids) if tender_ids else None
+
+    if doc_ids:
+        tender_rag = retrieve_relevant_chunks_hybrid(
+            req_query,
+            project_key=project_key,
+            limit=4,
+            threshold=0.35,
+            document_ids=doc_ids,
+        )
+    else:
+        tender_rag = retrieve_relevant_chunks_hybrid(
+            req_query,
+            project_key=project_key,
+            limit=4,
+            threshold=0.35,
+            exclude_classification=ANGEbot_CLASSIFICATION,
+        )
+    tender_docs = tender_rag.get("documents", [])
+
     rag = retrieve_relevant_chunks_hybrid(
-        query,
+        offer_query,
         project_key=project_key,
         limit=5,
         threshold=0.35,
@@ -683,7 +820,7 @@ def suggest_score_with_rag(
     docs = rag.get("documents", [])
     if not docs:
         rag = retrieve_relevant_chunks_hybrid(
-            query,
+            offer_query,
             project_key=project_key,
             limit=5,
             threshold=0.35,
@@ -691,19 +828,19 @@ def suggest_score_with_rag(
         )
         docs = rag.get("documents", [])
 
-    context_parts: list[str] = []
-    for i, d in enumerate(docs[:5], 1):
-        text = (d.get("text") or "")[:1200]
-        fname = d.get("filename", "?")
-        chunk_id = d.get("chunk_id")
-        context_parts.append(f"[{i}] Datei: {fname}, Chunk {chunk_id}\n{text}")
-
-    context = "\n\n".join(context_parts) or "Keine passenden Angebotsstellen gefunden."
+    tender_context = _format_rag_context(
+        tender_docs, empty_msg="Keine passenden Vorgaben-Stellen gefunden."
+    )
+    offer_context = _format_rag_context(
+        docs, empty_msg="Keine passenden Angebotsstellen gefunden."
+    )
     if is_cloud_llm_provider(provider):
-        context = sanitize_for_cloud_text(context)
+        tender_context = sanitize_for_cloud_text(tender_context)
+        offer_context = sanitize_for_cloud_text(offer_context)
     scale_max = max(1, criterion.scale_max)
     system = (
-        "Du bist Vergabesachverständiger. Bewerte ein Angebot zu einem Kriterium. "
+        "Du bist Vergabesachverständiger. Vergleiche Ausschreibungs-Vorgaben mit dem Angebot "
+        "des Bieters und bewerte ein Kriterium. "
         "Antwort NUR als JSON mit keys: value (Zahl 0 bis scale_max), justification (kurz), "
         "source_quote (Zitat aus dem Angebot), source_chunk_id (Zahl oder null)."
     )
@@ -711,7 +848,8 @@ def suggest_score_with_rag(
         f"Kriterium ({criterion.kind}): {criterion.name}\n"
         + (f"Anforderungstext: {criterion.description}\n" if criterion.description else "")
         + f"Skala: 0 bis {scale_max}\n\n"
-        f"Angebotsstellen:\n{context}\n\n"
+        f"VORGABEN (Ausschreibung):\n{tender_context}\n\n"
+        f"ANGEBOT (Bieter):\n{offer_context}\n\n"
         "JSON:"
     )
     messages = [{"role": "user", "content": user}]
