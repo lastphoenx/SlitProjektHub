@@ -484,6 +484,7 @@ def init_db() -> None:
         Bidder,
         BidderDocumentLink,
         Criterion,
+        EvaluationProjectConfig,
         EvaluationTenderDoc,
         PriceItem,
         Score,

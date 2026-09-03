@@ -126,7 +126,7 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem">
-  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Betriebskosten (wiederkehrend, 2027–2030)</h2>
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Betriebskosten (wiederkehrend{% if price_years %}, {{ price_years|join('–') }}{% endif %})</h2>
   {% for year, items in by_year.items() %}
   <div style="margin-bottom:.75rem">
     <strong style="font-size:.85rem">{{ year }}</strong>
@@ -167,8 +167,9 @@
     <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
     <input type="hidden" name="category" value="wiederkehrend" />
     <select class="form-select" name="year" required>
-      <option value="2027">2027</option><option value="2028">2028</option>
-      <option value="2029">2029</option><option value="2030">2030</option>
+      {% for y in price_years %}
+      <option value="{{ y }}">{{ y }}</option>
+      {% endfor %}
     </select>
     <input class="form-input" name="leistungsbeschreibung" placeholder="Leistungsbeschreibung" required style="grid-column:span 2" />
     <input class="form-input" name="anzahl" type="number" step="0.01" placeholder="Anzahl" />

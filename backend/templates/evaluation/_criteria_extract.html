@@ -31,6 +31,11 @@
 </div>
 {% else %}
 <div class="card" style="margin-bottom:1rem">
+  {% if warnings %}
+  <ul style="font-size:.75rem;margin:0 0 .5rem;padding-left:1.1rem;color:var(--color-warning, #fbbf24)">
+    {% for w in warnings %}<li>{{ w }}</li>{% endfor %}
+  </ul>
+  {% endif %}
   <p style="font-size:.78rem;margin:0 0 .5rem">
     {{ (payload.eignung or [])|length }} Eignungs- und {{ (payload.zuschlag or [])|length }} Zuschlagskriterien erkannt.
     JSON prüfen/anpassen, dann übernehmen (bestehende Namen werden übersprungen).

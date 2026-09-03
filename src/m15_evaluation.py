@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy import Boolean, Column, Float, Integer, String, UniqueConstraint, text
@@ -55,6 +56,56 @@ TENDER_ROLE_LABELS = {
     "ausschreibungsunterlage": "Ausschreibungsunterlage",
     "interne_richtlinie": "Interne Beurteilungsrichtlinie",
 }
+
+DEFAULT_PRICE_YEARS = (2027, 2028, 2029, 2030)
+VERGABE_SYSTEM_RULES = (
+    "Vergaberecht Schweiz (BöB/IVöB): Eignungskriterien sind K.O.-Kriterien (binär erfüllt/nicht erfüllt, "
+    "keine Teilpunkte). Zuschlagskriterien werden gewichtet; Gewichte der Top-Level-Zuschlagskriterien "
+    "sollten 100% ergeben. Preis-Kriterium nur mit auto_price=true."
+)
+
+# Bieter-Subtypen bevorzugt pro Kriterium-Art (für RAG-Filter)
+EIGNUNG_BIDDER_SUBTYPES = (
+    "Eignungsnachweis", "Referenzprojektblatt", "Zertifizierung", "Bilanz/Erfolgsrechnung",
+)
+ZUSCHLAG_BIDDER_SUBTYPES = (
+    "Grobkonzept/Lösungskonzept", "Management Summary", "Proof of Concept",
+    "Referenzprojektblatt", "Vorbehaltsliste",
+)
+
+def normalize_chunk_size(raw: int | str | None, *, fallback: int = 1000) -> int:
+    """0 = zeilenbasiert (CSV/XLSX); sonst 200–4000."""
+    try:
+        size = int(raw) if raw is not None else fallback
+    except (TypeError, ValueError):
+        size = fallback
+    if size == 0:
+        return 0
+    return max(200, min(4000, size))
+
+
+CHUNK_SIZE_HINTS = {
+    "pflichtenheft": 1800,
+    "anforderung": 1200,
+    "preisblatt": 500,
+    "angebot": 1200,
+    "faq_csv": 0,
+    "xlsx": 0,
+    "default": 1000,
+}
+
+
+class EvaluationProjectConfig(SQLModel, table=True):
+    """Projekt-spezifische Offertbeurteilungs-Einstellungen."""
+    __tablename__ = "evaluation_project_config"
+    project_key: str = Field(primary_key=True, sa_column=Column(String(80), nullable=False))
+    price_years_json: str = Field(
+        default=json.dumps(list(DEFAULT_PRICE_YEARS)),
+        sa_column=Column(String(120), nullable=False),
+    )
+    vergabe_notes: Optional[str] = Field(default=None, sa_column=Column(String))
+    rag_chunks_per_role: int = Field(default=12, sa_column=Column(Integer, nullable=False, default=12))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Bidder(SQLModel, table=True):
@@ -514,6 +565,202 @@ def unlink_tender_doc(project_key: str, document_id: int) -> None:
             session.commit()
 
 
+def get_evaluation_config(project_key: str) -> dict[str, Any]:
+    with get_session() as session:
+        row = session.get(EvaluationProjectConfig, project_key)
+    if not row:
+        return {
+            "price_years": list(DEFAULT_PRICE_YEARS),
+            "vergabe_notes": "",
+            "rag_chunks_per_role": 12,
+        }
+    try:
+        years = json.loads(row.price_years_json or "[]")
+        years = [int(y) for y in years if y]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        years = list(DEFAULT_PRICE_YEARS)
+    if not years:
+        years = list(DEFAULT_PRICE_YEARS)
+    return {
+        "price_years": years,
+        "vergabe_notes": (row.vergabe_notes or "").strip(),
+        "rag_chunks_per_role": max(4, min(24, int(row.rag_chunks_per_role or 12))),
+    }
+
+
+def save_evaluation_config(
+    project_key: str,
+    *,
+    price_years: list[int] | None = None,
+    vergabe_notes: str | None = None,
+    rag_chunks_per_role: int | None = None,
+) -> None:
+    cfg = get_evaluation_config(project_key)
+    if price_years is not None:
+        cfg["price_years"] = [int(y) for y in price_years if y]
+    if vergabe_notes is not None:
+        cfg["vergabe_notes"] = vergabe_notes.strip()
+    if rag_chunks_per_role is not None:
+        cfg["rag_chunks_per_role"] = max(4, min(24, int(rag_chunks_per_role)))
+    with get_session() as session:
+        row = session.get(EvaluationProjectConfig, project_key)
+        if not row:
+            row = EvaluationProjectConfig(project_key=project_key)
+        row.price_years_json = json.dumps(cfg["price_years"])
+        row.vergabe_notes = cfg["vergabe_notes"] or None
+        row.rag_chunks_per_role = cfg["rag_chunks_per_role"]
+        row.updated_at = _now()
+        session.add(row)
+        session.commit()
+
+
+def suggest_tender_role(classification: str, filename: str) -> Optional[str]:
+    """Heuristik: empfohlene tender_role aus Klassifikation + Dateiname."""
+    fn = (filename or "").lower()
+    cls = (classification or "").strip()
+    if "preisblatt" in fn or "preis_blatt" in fn:
+        return "preisblatt_vorlage"
+    if "fragen" in fn or "simap" in fn or cls == "FAQ/Fragen-Katalog":
+        return None
+    if cls == "Pflichtenheft (Projekt)":
+        return "ausschreibungsunterlage"
+    if cls == "Anforderung/Feature":
+        if any(k in fn for k in ("beilage", "bewertung", "matrix", "gewichtung")):
+            return "bewertungsvorgaben"
+        if any(k in fn for k in ("zuschlag", "wertung")):
+            return "zuschlagskriterien"
+        return "zuschlagskriterien"
+    if cls == "Standard/Richtlinie":
+        return "interne_richtlinie"
+    if "agb" in fn or "richtlinie" in fn or "strategie" in fn:
+        return "interne_richtlinie"
+    if cls == "Sonstiges" and ("agb" in fn or "ikt" in fn):
+        return "interne_richtlinie"
+    return "ausschreibungsunterlage"
+
+
+def recommended_chunk_size(
+    classification: str,
+    *,
+    tender_role: str | None = None,
+    filename: str = "",
+    file_ext: str = "",
+) -> int:
+    """Empfohlene Chunk-Grösse je Dokumenttyp (0 = zeilenbasiert, kein Zeichen-Chunking)."""
+    ext = (file_ext or Path(filename).suffix).lower()
+    fn = (filename or "").lower()
+    role = (tender_role or "").lower()
+    if ext in (".csv",) and ("fragen" in fn or "faq" in fn or "simap" in fn):
+        return CHUNK_SIZE_HINTS["faq_csv"]
+    if ext in (".xlsx", ".xls"):
+        return CHUNK_SIZE_HINTS["xlsx"]
+    if role == "preisblatt_vorlage" or "preisblatt" in fn:
+        return CHUNK_SIZE_HINTS["preisblatt"]
+    if cls_match := classification:
+        if "Pflichtenheft" in cls_match:
+            return CHUNK_SIZE_HINTS["pflichtenheft"]
+        if cls_match == "Anforderung/Feature":
+            return CHUNK_SIZE_HINTS["anforderung"]
+    if classification == ANGEbot_CLASSIFICATION or "angebot" in fn:
+        return CHUNK_SIZE_HINTS["angebot"]
+    return CHUNK_SIZE_HINTS["default"]
+
+
+def validate_criteria_payload(data: dict[str, Any]) -> list[str]:
+    """Prüft extrahierte/importierte Kriterien — gibt Warnungen zurück."""
+    warnings: list[str] = []
+    eignung = data.get("eignung") or []
+    zuschlag = data.get("zuschlag") or []
+    if not eignung and not zuschlag:
+        warnings.append("Keine Kriterien im Payload.")
+        return warnings
+    if not eignung:
+        warnings.append("Keine Eignungskriterien — BöB/IVöB erwartet meist mindestens ein K.O.-Kriterium.")
+    top_weights = [
+        float(e.get("weight_pct") or 0)
+        for e in zuschlag
+        if not e.get("parent_id") and e.get("weight_pct") is not None
+    ]
+    if top_weights:
+        total = sum(top_weights)
+        if abs(total - 100.0) > 1.0:
+            warnings.append(f"Zuschlags-Gewichte summieren sich auf {total:.0f}% (erwartet ~100%).")
+    has_price = any(bool(e.get("auto_price")) for e in zuschlag)
+    price_named = any("preis" in (e.get("name") or "").lower() for e in zuschlag)
+    if price_named and not has_price:
+        warnings.append("Preis-Kriterium erkannt, aber auto_price nicht gesetzt — ggf. manuell aktivieren.")
+    for kind, entries in (("eignung", eignung), ("zuschlag", zuschlag)):
+        for e in entries:
+            for ch in e.get("children") or []:
+                if kind == "eignung" and int(ch.get("scale_max") or 10) != 1:
+                    warnings.append(f"Eignungs-Unterkriterium «{ch.get('name')}»: scale_max sollte 1 sein.")
+    return warnings
+
+
+def _dedupe_rag_docs(docs: list[dict]) -> list[dict]:
+    seen: set[int] = set()
+    out: list[dict] = []
+    for d in docs:
+        cid = d.get("chunk_id")
+        if cid in seen:
+            continue
+        seen.add(cid)
+        out.append(d)
+    return out
+
+
+def _retrieve_tender_context_multi(
+    project_key: str,
+    role_queries: list[tuple[tuple[str, ...], str]],
+    *,
+    limit_per_role: int = 12,
+) -> str:
+    """Mehrere RAG-Pässe nach tender_role, dedupliziert."""
+    all_docs: list[dict] = []
+    for roles, query in role_queries:
+        ids = get_tender_document_ids(project_key, roles=roles)
+        if not ids:
+            continue
+        rag = retrieve_relevant_chunks_hybrid(
+            query,
+            project_key=project_key,
+            limit=limit_per_role,
+            threshold=0.28,
+            document_ids=tuple(ids),
+        )
+        all_docs.extend(rag.get("documents", []))
+    return _format_rag_context(
+        _dedupe_rag_docs(all_docs)[: limit_per_role * 2],
+        empty_msg="Keine passenden Vorgaben-Stellen gefunden.",
+    )
+
+
+def bidder_doc_ids_for_criterion(bidder_id: int, criterion: Criterion) -> list[int]:
+    """Bevorzugte Bieter-Dokument-IDs passend zum Kriterium (Subtyp-Heuristik)."""
+    all_ids = get_bidder_document_ids(bidder_id)
+    if not all_ids:
+        return []
+    by_subtype: dict[str, list[int]] = {}
+    for doc_id in all_ids:
+        doc = get_document_by_id(doc_id)
+        if not doc:
+            continue
+        st = (doc.doc_subtype or "").strip()
+        if st:
+            by_subtype.setdefault(st, []).append(doc_id)
+    preferred: tuple[str, ...]
+    if criterion.auto_price or "preis" in (criterion.name or "").lower():
+        preferred = ("Preisblatt",)
+    elif criterion.kind == "eignung":
+        preferred = EIGNUNG_BIDDER_SUBTYPES
+    else:
+        preferred = ZUSCHLAG_BIDDER_SUBTYPES
+    matched: list[int] = []
+    for st in preferred:
+        matched.extend(by_subtype.get(st, []))
+    return matched or all_ids
+
+
 def tender_roles_for_criterion(criterion: Criterion) -> tuple[str, ...]:
     """Welche Vorgabe-Rollen für RAG zu einem Kriterium passen."""
     common = ("bewertungsvorgaben", "ausschreibungsunterlage", "interne_richtlinie")
@@ -787,51 +1034,48 @@ def suggest_score_with_rag(
     req_query = f"{criterion.description or criterion.name} — Anforderung Ausschreibung"
     offer_query = f"{criterion.description or criterion.name} — Nachweis im Angebot"
 
-    tender_ids = get_tender_document_ids(
-        project_key, roles=tender_roles_for_criterion(criterion)
+    cfg = get_evaluation_config(project_key)
+    limit = cfg["rag_chunks_per_role"]
+    roles = tender_roles_for_criterion(criterion)
+    role_groups = [(roles, req_query)]
+    tender_context_raw = _retrieve_tender_context_multi(
+        project_key, role_groups, limit_per_role=limit
     )
-    doc_ids = tuple(tender_ids) if tender_ids else None
-
-    if doc_ids:
+    if tender_context_raw == "Keine passenden Vorgaben-Stellen gefunden.":
         tender_rag = retrieve_relevant_chunks_hybrid(
             req_query,
             project_key=project_key,
-            limit=4,
-            threshold=0.35,
-            document_ids=doc_ids,
-        )
-    else:
-        tender_rag = retrieve_relevant_chunks_hybrid(
-            req_query,
-            project_key=project_key,
-            limit=4,
+            limit=limit,
             threshold=0.35,
             exclude_classification=ANGEbot_CLASSIFICATION,
         )
-    tender_docs = tender_rag.get("documents", [])
+        tender_context_raw = _format_rag_context(
+            tender_rag.get("documents", []),
+            empty_msg="Keine passenden Vorgaben-Stellen gefunden.",
+        )
 
+    bidder_doc_ids = bidder_doc_ids_for_criterion(bidder_id, criterion)
     rag = retrieve_relevant_chunks_hybrid(
         offer_query,
         project_key=project_key,
-        limit=5,
+        limit=limit,
         threshold=0.35,
         classification_filter=ANGEbot_CLASSIFICATION,
         bidder_id=bidder_id,
+        document_ids=tuple(bidder_doc_ids) if bidder_doc_ids else None,
     )
     docs = rag.get("documents", [])
     if not docs:
         rag = retrieve_relevant_chunks_hybrid(
             offer_query,
             project_key=project_key,
-            limit=5,
+            limit=limit,
             threshold=0.35,
             bidder_id=bidder_id,
         )
         docs = rag.get("documents", [])
 
-    tender_context = _format_rag_context(
-        tender_docs, empty_msg="Keine passenden Vorgaben-Stellen gefunden."
-    )
+    tender_context = tender_context_raw
     offer_context = _format_rag_context(
         docs, empty_msg="Keine passenden Angebotsstellen gefunden."
     )
@@ -840,11 +1084,14 @@ def suggest_score_with_rag(
         offer_context = sanitize_for_cloud_text(offer_context)
     scale_max = max(1, criterion.scale_max)
     system = (
+        f"{VERGABE_SYSTEM_RULES}\n"
         "Du bist Vergabesachverständiger. Vergleiche Ausschreibungs-Vorgaben mit dem Angebot "
         "des Bieters und bewerte ein Kriterium. "
         "Antwort NUR als JSON mit keys: value (Zahl 0 bis scale_max), justification (kurz), "
         "source_quote (Zitat aus dem Angebot), source_chunk_id (Zahl oder null)."
     )
+    if cfg.get("vergabe_notes"):
+        system += f"\nProjekt-Hinweise: {cfg['vergabe_notes']}"
     user = (
         f"Kriterium ({criterion.kind}): {criterion.name}\n"
         + (f"Anforderungstext: {criterion.description}\n" if criterion.description else "")
@@ -984,7 +1231,8 @@ def import_criteria_payload(
 
     _import_kind("eignung", data.get("eignung") or [])
     _import_kind("zuschlag", data.get("zuschlag") or [])
-    return {"created": created, "skipped": skipped}
+    warnings = validate_criteria_payload(data)
+    return {"created": created, "skipped": skipped, "warnings": warnings}
 
 
 def extract_criteria_from_tender_docs(
@@ -992,55 +1240,52 @@ def extract_criteria_from_tender_docs(
     provider: str = "openai",
     model: str = "gpt-4o-mini",
 ) -> dict[str, Any]:
-    """KI-Extraktion von Eignungs-/Zuschlagskriterien aus verknüpften Vorgaben."""
-    roles = (
-        "eignungskriterien",
-        "zuschlagskriterien",
-        "bewertungsvorgaben",
-        "ausschreibungsunterlage",
-    )
-    tender_ids = get_tender_document_ids(project_key, roles=roles)
-    if not tender_ids:
+    """KI-Extraktion von Eignungs-/Zuschlagskriterien — rollenweise RAG-Pässe."""
+    if not get_tender_document_ids(project_key):
         return {
             "error": "Keine Vorgaben verknüpft — zuerst Phase ① Dokumente mit Rolle markieren.",
             "payload": {},
+            "warnings": [],
             "raw_llm": None,
         }
 
-    rag = retrieve_relevant_chunks_hybrid(
-        "Eignungskriterien Zuschlagskriterien Bewertungsmatrix Gewichtung Punkte",
-        project_key=project_key,
-        limit=8,
-        threshold=0.3,
-        document_ids=tuple(tender_ids),
-    )
-    context = _format_rag_context(
-        rag.get("documents", []),
-        empty_msg="Keine passenden Vorgaben-Stellen gefunden.",
-    )
+    cfg = get_evaluation_config(project_key)
+    limit = cfg["rag_chunks_per_role"]
+    role_queries = [
+        (("eignungskriterien", "ausschreibungsunterlage"), "Eignungskriterien K.O. Mindestanforderungen Bieter"),
+        (("zuschlagskriterien", "bewertungsvorgaben"), "Zuschlagskriterien Gewichtung Punkte Bewertungsmatrix"),
+        (("bewertungsvorgaben", "ausschreibungsunterlage"), "Bewertungsvorgaben Verfahren Skala Rangfolge"),
+    ]
+    context = _retrieve_tender_context_multi(project_key, role_queries, limit_per_role=limit)
     if is_cloud_llm_provider(provider):
         context = sanitize_for_cloud_text(context)
 
+    vergabe_extra = cfg.get("vergabe_notes") or ""
     system = (
-        "Du bist Vergabesachverständiger. Extrahiere strukturierte Bewertungskriterien "
-        "aus Ausschreibungsunterlagen. Antwort NUR als JSON mit keys eignung und zuschlag "
-        "(Listen von Objekten). Jedes Objekt: name (kurz), description (voller Text), "
-        "optional children (Unteranforderungen). Zuschlag: weight_pct, scale_max (default 10), "
-        "auto_price true nur für reines Preis-Kriterium. Eignung: scale_max immer 1, kein weight_pct."
+        f"{VERGABE_SYSTEM_RULES}\n"
+        "Extrahiere strukturierte Bewertungskriterien aus Ausschreibungsunterlagen. "
+        "Antwort NUR als JSON mit keys eignung und zuschlag (Listen von Objekten). "
+        "Jedes Objekt: name (kurz), description (voller Anforderungstext), optional children. "
+        "Zuschlag: weight_pct, scale_max (default 10), auto_price true nur für reines Preis-Kriterium. "
+        "Eignung: scale_max immer 1, kein weight_pct, keine Teilpunkte."
     )
+    if vergabe_extra:
+        system += f"\nProjekt-Hinweise: {vergabe_extra}"
     user = f"Ausschreibungsauszüge:\n{context}\n\nJSON:"
     raw = try_models_with_messages(
         provider, system, [{"role": "user", "content": user}],
         max_tokens=4000, temperature=0.1, model=model,
     )
     payload = _parse_llm_json_object(raw)
+    warnings = validate_criteria_payload(payload)
     if not payload.get("eignung") and not payload.get("zuschlag"):
         return {
             "error": "KI konnte keine Kriterien extrahieren — Vorgaben prüfen oder manuell anlegen.",
             "payload": payload,
+            "warnings": warnings,
             "raw_llm": raw,
         }
-    return {"error": None, "payload": payload, "raw_llm": raw}
+    return {"error": None, "payload": payload, "warnings": warnings, "raw_llm": raw}
 
 
 def get_bidder_preisblatt_doc_ids(bidder_id: int) -> list[int]:
@@ -1072,11 +1317,14 @@ def extract_price_structure_from_tender(
     if not tender_ids:
         return {"error": "Keine Preisblatt-Vorlage verknüpft (Phase ①, Rolle «Preisblatt-Vorlage»).", "structure": {}}
 
+    cfg = get_evaluation_config(project_key)
+    years_str = ", ".join(str(y) for y in cfg["price_years"])
+
     rag = retrieve_relevant_chunks_hybrid(
         "Preisblatt Positionen Leistungsbeschreibung Referenz Einheit Kosten",
         project_key=project_key,
-        limit=8,
-        threshold=0.3,
+        limit=cfg["rag_chunks_per_role"],
+        threshold=0.28,
         document_ids=tuple(tender_ids),
     )
     context = _format_rag_context(rag.get("documents", []), empty_msg="Keine Preisblatt-Stellen gefunden.")
@@ -1087,8 +1335,8 @@ def extract_price_structure_from_tender(
         "Extrahiere die Zeilenstruktur eines Preisblatts aus einer Ausschreibungsvorlage. "
         "Antwort NUR als JSON: einmalig (Liste) und wiederkehrend (Liste). "
         "Felder: referenz (optional), leistungsbeschreibung, einheit, anzahl, kosten_pro_einheit, "
-        "bemerkung (optional). Bei leerer Vorlage: anzahl und kosten_pro_einheit = 0. "
-        "wiederkehrend zusätzlich year (2027–2030)."
+        f"bemerkung (optional). Bei leerer Vorlage: anzahl und kosten_pro_einheit = 0. "
+        f"wiederkehrend zusätzlich year (erlaubte Jahre: {years_str})."
     )
     raw = try_models_with_messages(
         provider, system, [{"role": "user", "content": f"Preisblatt-Vorlage:\n{context}\n\nJSON:"}],
@@ -1112,11 +1360,14 @@ def extract_price_from_bidder_doc(
     if not doc_ids:
         return {"error": "Kein Preisblatt beim Bieter verknüpft (Subtyp «Preisblatt» oder Dateiname).", "structure": {}}
 
+    cfg = get_evaluation_config(project_key)
+    years_str = ", ".join(str(y) for y in cfg["price_years"])
+
     rag = retrieve_relevant_chunks_hybrid(
         "Preisblatt Kosten CHF Positionen Anzahl Einheit",
         project_key=project_key,
-        limit=8,
-        threshold=0.3,
+        limit=cfg["rag_chunks_per_role"],
+        threshold=0.28,
         classification_filter=ANGEbot_CLASSIFICATION,
         bidder_id=bidder_id,
         document_ids=tuple(doc_ids),
@@ -1129,7 +1380,7 @@ def extract_price_from_bidder_doc(
         "Extrahiere alle Preispositionen aus dem Bieter-Preisblatt. "
         "Antwort NUR als JSON mit einmalig und wiederkehrend (Listen). "
         "Felder: referenz, leistungsbeschreibung, einheit, anzahl, kosten_pro_einheit, bemerkung; "
-        "wiederkehrend zusätzlich year."
+        f"wiederkehrend zusätzlich year ({years_str})."
     )
     raw = try_models_with_messages(
         provider, system, [{"role": "user", "content": f"Bieter-Preisblatt:\n{context}\n\nJSON:"}],
