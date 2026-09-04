@@ -673,6 +673,18 @@ def test_ref_enrichment_query_and_child_refs():
     assert merged[0]["requirement_ref"] == "T01-003"
 
 
+def test_enrichment_ref_diag():
+    from src.m15_evaluation import _enrichment_ref_diag
+
+    ctx = "Anforderung F01-001 Text\nF01-004 weiter\n"
+    d = _enrichment_ref_diag(ctx, "F01")
+    assert "2 Zeilennummer" in d
+    assert "F01-001" in d
+
+    empty = _enrichment_ref_diag("kein blatt", "T01")
+    assert "T01-001 nicht" in empty
+
+
 def test_ki_busy_hint():
     from unittest.mock import patch
 
@@ -1218,6 +1230,7 @@ if __name__ == "__main__":
     test_parse_expected_child_count_and_completeness()
     test_ensure_criteria_refs_and_import_referenz()
     test_ref_enrichment_query_and_child_refs()
+    test_enrichment_ref_diag()
     test_ki_busy_hint()
     test_score_justification_required()
     test_sync_price_criterion_scores_reciprocal_gate()

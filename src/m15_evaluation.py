@@ -2699,6 +2699,63 @@ def _stamp_child_requirement_refs(children: list[dict[str, Any]]) -> None:
             ch["requirement_ref"] = cref
 
 
+def _literal_chunks_for_requirement_ref(
+    document_ids: tuple[int, ...],
+    ref: Optional[str],
+    *,
+    max_chunks: int = 16,
+) -> list[dict[str, Any]]:
+    """Volltext-Scan aller Vorgaben-Chunks nach Zeilennummern der Ref-Gruppe (Ticket 21)."""
+    from sqlmodel import select
+
+    from .m03_db import Document, DocumentChunk, get_session
+
+    if not ref or not document_ids:
+        return []
+    scored: list[tuple[int, dict[str, Any]]] = []
+    with get_session() as session:
+        rows = session.exec(
+            select(DocumentChunk, Document)
+            .join(Document, Document.id == DocumentChunk.document_id)
+            .where(DocumentChunk.document_id.in_(list(document_ids)))
+            .where(Document.is_deleted == False)  # noqa: E712
+        ).all()
+    for chunk, doc in rows:
+        text = chunk.chunk_text or ""
+        score = len(_extract_line_numbers_from_text(text, ref))
+        if score <= 0:
+            norm = (_normalize_requirement_ref(ref) or "").lower()
+            flat = text.lower().replace("-", "").replace(" ", "")
+            if norm and norm in flat:
+                score = 1
+        if score <= 0:
+            continue
+        scored.append((
+            score,
+            {
+                "chunk_id": chunk.id,
+                "document_id": chunk.document_id,
+                "filename": doc.filename or "",
+                "text": text,
+                "classification": doc.classification or "",
+            },
+        ))
+    scored.sort(key=lambda x: (-x[0], x[1].get("chunk_id") or 0))
+    return [row for _, row in scored[:max_chunks]]
+
+
+def _enrichment_ref_diag(ctx: str, ref: Optional[str]) -> str:
+    """Kurzdiagnose für KI-Hinweise: wie viele Zeilen, welche Beispiele."""
+    lines = sorted(_extract_line_numbers_from_text(ctx, ref))
+    if lines:
+        sample = ", ".join(lines[:4])
+        if len(lines) > 4:
+            sample += f" (+{len(lines) - 4})"
+        return f"{len(lines)} Zeilennummer(n); im Kontext: {sample}"
+    norm = _normalize_requirement_ref(ref or "") or "?"
+    return f"0 Zeilennummer(n); {norm}-001 nicht wörtlich im Kontext"
+
+
 def _ref_enrichment_query(ref: Optional[str], name: str = "") -> str:
     """BM25-Query für Anforderungsblatt-Zeilen einer Ref-Gruppe (Ticket 20)."""
     if not ref:
@@ -2750,6 +2807,13 @@ def _retrieve_enrichment_context(
             document_ids=doc_ids,
         )
         rag_docs = _dedupe_rag_docs(rag_docs + list(ref_rag.get("documents", [])))
+        literal = _literal_chunks_for_requirement_ref(doc_ids, ref, max_chunks=limit)
+        if literal:
+            rag_docs = _dedupe_rag_docs(rag_docs + literal)
+            log.info(
+                "[criteria-enrich] %s: +%d Literal-Chunk(s) für %s",
+                name, len(literal), ref,
+            )
     return _format_rag_context(
         rag_docs,
         empty_msg="",
@@ -2861,17 +2925,18 @@ def _enrich_criteria_children_from_requirements(
             entry["children"] = filtered
 
         if not _zuschlag_has_line_structure_evidence(list(entry.get("children") or []), ctx, ref):
-            line_n = len(_extract_line_numbers_from_text(ctx, ref))
+            diag = _enrichment_ref_diag(ctx, ref)
             if step1_removed:
                 hints.append(
                     f"{name}: {step1_removed} Schritt-1-Unterfragen verworfen "
-                    f"(keine Zeilenstruktur für {ref or search_term}; {line_n} Zeile(n) im RAG-Kontext)"
+                    f"({diag})"
                 )
             elif not entry.get("children"):
-                hints.append(
-                    f"{name}: keine Unterfragen — {line_n} Zeilennummer(n) für "
-                    f"{ref or search_term} im RAG-Kontext (≥2 nötig)"
-                )
+                hints.append(f"{name}: keine Unterfragen — {diag}")
+            log.info(
+                "[criteria-enrich] Gate rot für «%s» (%s): %s",
+                name, ref or search_term, diag,
+            )
             entry["children"] = []
             continue
 
