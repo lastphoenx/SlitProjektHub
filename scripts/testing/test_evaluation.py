@@ -504,6 +504,39 @@ def test_criteria_preview_cache():
     assert load_criteria_preview(pid, "OTHER") is None
 
 
+def test_retrieve_tender_context_multi_fair_pass_budget():
+    from unittest.mock import patch
+
+    from src.m15_evaluation import _retrieve_tender_context_multi
+
+    role_queries = [
+        (("eignungskriterien",), "eignung"),
+        (("zuschlagskriterien",), "zuschlag"),
+        (("bewertungsvorgaben",), "bewertung"),
+    ]
+    pass_labels = iter(["eignung", "zuschlag", "bewertung"])
+
+    def fake_rag(query, **kwargs):
+        label = next(pass_labels)
+        limit = kwargs.get("limit", 12)
+        return {
+            "documents": [
+                {"chunk_id": f"{label}-{i}", "text": f"{label} chunk {i}", "filename": "doc.pdf"}
+                for i in range(limit)
+            ]
+        }
+
+    with patch("src.m15_evaluation.get_tender_document_ids", return_value=[1]):
+        with patch("src.m15_evaluation.retrieve_relevant_chunks_hybrid", side_effect=fake_rag):
+            ctx = _retrieve_tender_context_multi("p1", role_queries, limit_per_role=4)
+
+    assert "eignung chunk 0" in ctx
+    assert "zuschlag chunk 0" in ctx
+    assert "bewertung chunk 0" in ctx
+    assert ctx.index("eignung chunk 0") < ctx.index("zuschlag chunk 0")
+    assert ctx.index("zuschlag chunk 0") < ctx.index("bewertung chunk 0")
+
+
 def test_criteria_preview_meta():
     from src.m15_evaluation import criteria_apply_requires_confirm, criteria_preview_meta
 
@@ -687,6 +720,7 @@ if __name__ == "__main__":
     test_validate_tender_cloud_gate()
     test_suggest_tender_role_and_validate_criteria()
     test_evaluation_config_roundtrip()
+    test_retrieve_tender_context_multi_fair_pass_budget()
     test_criteria_preview_cache()
     test_criteria_preview_meta()
     test_ki_busy_hint()
