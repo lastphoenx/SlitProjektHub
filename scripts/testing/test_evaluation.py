@@ -885,12 +885,87 @@ def test_evaluator_score_discrepancies():
 
 
 def test_criterion_ref_prefix():
-    from src.m15_evaluation import _criterion_ref_prefix
+    from src.m15_evaluation import _criterion_ref_prefix, _normalize_requirement_ref
 
     assert _criterion_ref_prefix("F-01") == "F01"
     assert _criterion_ref_prefix("F01") == "F01"
     assert _criterion_ref_prefix("T-10") == "T10"
     assert _criterion_ref_prefix("Preis") is None
+    assert _normalize_requirement_ref("EK2") == "EK2"
+    assert _normalize_requirement_ref("W-01") == "W01"
+
+
+def test_resolve_requirement_search():
+    from src.m15_evaluation import _resolve_requirement_search
+
+    ref, term = _resolve_requirement_search({
+        "name": "Funktionale Anforderungen",
+        "requirement_ref": "F01",
+        "description": "Füllen Sie das Anforderungsblatt aus.",
+    })
+    assert ref == "F01"
+    assert term == "F01"
+
+    ref2, term2 = _resolve_requirement_search({
+        "name": "Preis",
+        "description": "Datenblatt Preis W-01 ausfüllen",
+    })
+    assert ref2 == "W01"
+    assert term2 == "W01"
+
+    ref3, term3 = _resolve_requirement_search({
+        "name": "Projektorganisation und -planung",
+        "description": "Beschreiben Sie Ihr Projektvorgehen",
+    })
+    assert ref3 is None
+    assert term3 == "Projektorganisation und -planung"
+
+
+def test_retrieve_tender_context_respects_max_format_chunks():
+    from unittest.mock import patch
+
+    from src.m15_evaluation import _retrieve_tender_context_multi
+
+    role_queries = [(("zuschlagskriterien",), "zk")]
+
+    def fake_rag(query, **kwargs):
+        limit = kwargs.get("limit", 12)
+        return {
+            "documents": [
+                {"chunk_id": i, "text": f"chunk {i}", "filename": "doc.pdf"}
+                for i in range(limit)
+            ]
+        }
+
+    with patch("src.m15_evaluation.get_tender_document_ids", return_value=[1]):
+        with patch("src.m15_evaluation.retrieve_relevant_chunks_hybrid", side_effect=fake_rag):
+            ctx = _retrieve_tender_context_multi(
+                "p1", role_queries, limit_per_role=12, max_format_chunks=36,
+            )
+    assert "chunk 0" in ctx
+    assert "chunk 11" in ctx
+
+
+def test_evaluation_config_extraction_roundtrip():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    from src.m15_evaluation import get_evaluation_config, save_evaluation_config
+
+    save_evaluation_config("p-ext", rag_chunks_extraction=40)
+    cfg = get_evaluation_config("p-ext")
+    assert cfg["rag_chunks_extraction"] == 40
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
 
 
 def test_criteria_editor_payload_and_save():
@@ -990,6 +1065,9 @@ if __name__ == "__main__":
     test_criteria_manage_confirm_after_scores()
     test_evaluator_score_discrepancies()
     test_criterion_ref_prefix()
+    test_resolve_requirement_search()
+    test_retrieve_tender_context_respects_max_format_chunks()
+    test_evaluation_config_extraction_roundtrip()
     test_criteria_editor_payload_and_save()
     test_compute_price_reciprocal()
     print("OK")

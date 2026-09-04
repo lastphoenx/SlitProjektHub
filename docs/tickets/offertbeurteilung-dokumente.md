@@ -244,4 +244,11 @@ Siehe **`docs/tickets/pdf-ocr-ingest.md`** — OCR-Pipeline in `ingest_document(
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → 4
+## Tickets 13–16 — KI-Extraktion: Unterfragen vollständig ✅ erledigt
+
+Siehe **`docs/tickets/ki-kriterien-extraktion-13-16.md`** — `requirement_ref`, RAG-Cap-Fix,
+kind-agnostisches Enrichment (Eignung + Zuschlag), CSV/XLSX-Zeilen.
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → ~~13–16~~ → 4

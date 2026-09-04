@@ -199,6 +199,12 @@
         <input class="form-input" type="number" name="rag_chunks_per_role" min="4" max="24"
                value="{{ eval_config.rag_chunks_per_role }}" style="width:6rem" />
       </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">RAG-Chunks Kriterien-Extraktion (16–48)</label>
+        <input class="form-input" type="number" name="rag_chunks_extraction" min="16" max="48"
+               value="{{ eval_config.rag_chunks_extraction }}" style="width:6rem"
+               title="Schritt 1: wie viele Vorgaben-Chunks ans LLM (Standard 36)" />
+      </div>
       {% set form_id = 'vorgaben-config' %}
       {% set picker_title = 'KI-Default für Kriterien- & Preisblatt-KI (②③)' %}
       {% set picker_hint = 'Startwert für Kriterien-Extraktion und Preisblatt-KI. Leer = globale KI-Einstellungen. Pro Lauf im Picker änderbar.' %}

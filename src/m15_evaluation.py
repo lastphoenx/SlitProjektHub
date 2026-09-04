@@ -113,6 +113,9 @@ PRICE_FORMULA_LABELS = {
     "linear_minmax": "Linear: günstig = max, teuer = 0",
 }
 DEFAULT_PRICE_FORMULA = "reciprocal"
+DEFAULT_RAG_CHUNKS_EXTRACTION = 36
+ENRICH_CHILDREN_RAG_LIMIT = 24
+ENRICH_CHILDREN_RAG_THRESHOLD = 0.20
 
 
 class EvaluationProjectConfig(SQLModel, table=True):
@@ -125,6 +128,7 @@ class EvaluationProjectConfig(SQLModel, table=True):
     )
     vergabe_notes: Optional[str] = Field(default=None, sa_column=Column(String))
     rag_chunks_per_role: int = Field(default=12, sa_column=Column(Integer, nullable=False, default=12))
+    rag_chunks_extraction: int = Field(default=36, sa_column=Column(Integer, nullable=False, default=36))
     price_formula: str = Field(
         default=DEFAULT_PRICE_FORMULA,
         sa_column=Column(String(20), nullable=False, default=DEFAULT_PRICE_FORMULA),
@@ -1221,6 +1225,7 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
             "price_years": list(DEFAULT_PRICE_YEARS),
             "vergabe_notes": "",
             "rag_chunks_per_role": 12,
+            "rag_chunks_extraction": DEFAULT_RAG_CHUNKS_EXTRACTION,
             "price_formula": DEFAULT_PRICE_FORMULA,
             "vorgaben_ki_provider": "",
             "vorgaben_ki_model": "",
@@ -1239,6 +1244,9 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
         "price_years": years,
         "vergabe_notes": (row.vergabe_notes or "").strip(),
         "rag_chunks_per_role": max(4, min(24, int(row.rag_chunks_per_role or 12))),
+        "rag_chunks_extraction": max(
+            16, min(48, int(getattr(row, "rag_chunks_extraction", None) or DEFAULT_RAG_CHUNKS_EXTRACTION))
+        ),
         "price_formula": formula,
         "vorgaben_ki_provider": (row.vorgaben_ki_provider or "").strip(),
         "vorgaben_ki_model": (row.vorgaben_ki_model or "").strip(),
@@ -1293,6 +1301,7 @@ def save_evaluation_config(
     price_years: list[int] | None = None,
     vergabe_notes: str | None = None,
     rag_chunks_per_role: int | None = None,
+    rag_chunks_extraction: int | None = None,
     price_formula: str | None = None,
     vorgaben_ki_provider: str | None = None,
     vorgaben_ki_model: str | None = None,
@@ -1304,6 +1313,8 @@ def save_evaluation_config(
         cfg["vergabe_notes"] = vergabe_notes.strip()
     if rag_chunks_per_role is not None:
         cfg["rag_chunks_per_role"] = max(4, min(24, int(rag_chunks_per_role)))
+    if rag_chunks_extraction is not None:
+        cfg["rag_chunks_extraction"] = max(16, min(48, int(rag_chunks_extraction)))
     if price_formula is not None:
         pf = (price_formula or "").strip().lower()
         cfg["price_formula"] = pf if pf in PRICE_FORMULAS else DEFAULT_PRICE_FORMULA
@@ -1318,6 +1329,7 @@ def save_evaluation_config(
         row.price_years_json = json.dumps(cfg["price_years"])
         row.vergabe_notes = cfg["vergabe_notes"] or None
         row.rag_chunks_per_role = cfg["rag_chunks_per_role"]
+        row.rag_chunks_extraction = cfg["rag_chunks_extraction"]
         row.price_formula = cfg.get("price_formula", DEFAULT_PRICE_FORMULA)
         row.vorgaben_ki_provider = cfg.get("vorgaben_ki_provider") or None
         row.vorgaben_ki_model = cfg.get("vorgaben_ki_model") or None
@@ -1406,12 +1418,16 @@ def validate_criteria_payload(data: dict[str, Any]) -> list[str]:
             ename = (e.get("name") or "").strip()
             if ename and not (e.get("description") or "").strip():
                 warnings.append(f"«{ename}»: Beschreibung fehlt — bitte ergänzen oder in Vorgaben nachziehen.")
+            if not (e.get("requirement_ref") or "").strip():
+                warnings.append(
+                    f"«{ename}»: requirement_ref fehlt — Schritt 2 nutzt nur Namen/Beschreibung als Suchbegriff."
+                )
             for ch in e.get("children") or []:
                 cname = (ch.get("name") or "").strip()
+                if kind == "eignung":
+                    ch["scale_max"] = 1
                 if cname and not (ch.get("description") or "").strip():
                     warnings.append(f"«{cname}» (Unterkriterium): Beschreibung fehlt.")
-                if kind == "eignung" and int(ch.get("scale_max") or 10) != 1:
-                    warnings.append(f"Eignungs-Unterkriterium «{cname}»: scale_max sollte 1 sein.")
     return warnings
 
 
@@ -1495,6 +1511,7 @@ def _retrieve_tender_context_multi(
     role_queries: list[tuple[tuple[str, ...], str]],
     *,
     limit_per_role: int = 12,
+    max_format_chunks: int | None = None,
 ) -> str:
     """Mehrere RAG-Pässe nach tender_role, dedupliziert."""
     per_pass_docs: list[list[dict]] = []
@@ -1520,11 +1537,11 @@ def _retrieve_tender_context_multi(
 
     max_chunks = limit_per_role * max(1, len(role_queries))
     docs = _dedupe_rag_docs(merged)[:max_chunks]
-    format_limit = min(len(docs), max(5, limit_per_role))
+    format_cap = max_format_chunks if max_format_chunks is not None else len(docs)
     return _format_rag_context(
         docs,
         empty_msg="Keine passenden Vorgaben-Stellen gefunden.",
-        max_chunks=format_limit,
+        max_chunks=min(len(docs), format_cap),
     )
 
 
@@ -2155,7 +2172,7 @@ def import_criteria_payload(
                     kind,
                     cname,
                     weight_pct=0,
-                    scale_max=int(child.get("scale_max") or 10),
+                    scale_max=int(child.get("scale_max") or (1 if kind == "eignung" else 10)),
                     parent_id=parent_id,
                     description=child.get("description"),
                 )
@@ -2168,12 +2185,335 @@ def import_criteria_payload(
     return {"created": created, "skipped": skipped, "warnings": warnings}
 
 
-def _criterion_ref_prefix(name: str) -> Optional[str]:
-    """F-01 / F01 -> F01, T-01 -> T01 (Referenz für Einzelanforderungen)."""
-    m = re.match(r"^([A-Za-z])-?0*(\d+)\b", (name or "").strip())
-    if not m:
+def _normalize_requirement_ref(raw: str) -> Optional[str]:
+    """F-01 / F01 / EK2 / W-01 → kanonische Referenz für RAG/Suche."""
+    s = (raw or "").strip()
+    if not s:
         return None
-    return f"{m.group(1).upper()}{int(m.group(2)):02d}"
+    m = re.match(r"^(EK\d+)\b", s, re.I)
+    if m:
+        return m.group(1).upper()
+    m = re.match(r"^([A-Za-z])-?0*(\d+)\b", s)
+    if m:
+        return f"{m.group(1).upper()}{int(m.group(2)):02d}"
+    if re.match(r"^[A-Za-z]{1,4}\d+", s):
+        return s.upper().replace("-", "")
+    return None
+
+
+def _criterion_ref_prefix(name: str) -> Optional[str]:
+    """Legacy-Helfer: Referenz nur aus dem Namen (Start-Muster)."""
+    return _normalize_requirement_ref(name)
+
+
+def _requirement_ref_from_text(text: str) -> Optional[str]:
+    """Regex-Fallback: Referenz aus Name oder Beschreibung (z. B. «vgl. F-02»)."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    m = re.match(r"^(EK\d+)\b", t, re.I)
+    if m:
+        return m.group(1).upper()
+    m = re.match(r"^([A-Za-z])-?0*(\d+)\b", t)
+    if m:
+        return f"{m.group(1).upper()}{int(m.group(2)):02d}"
+    for pat in (r"\b(EK\d+)\b", r"\b([A-Za-z])-?0*(\d+)\b"):
+        m = re.search(pat, t, re.I)
+        if not m:
+            continue
+        if m.lastindex == 1:
+            return m.group(1).upper()
+        return f"{m.group(1).upper()}{int(m.group(2)):02d}"
+    return None
+
+
+def _resolve_requirement_search(entry: dict[str, Any]) -> tuple[Optional[str], str]:
+    """
+    requirement_ref (LLM) → Regex auf name/description → sonst name als Suchbegriff.
+    Schritt 2 läuft immer; ohne Referenz nur mit reduzierter Trefferqualität.
+    """
+    name = (entry.get("name") or "").strip()
+    desc = (entry.get("description") or "").strip()
+    llm_ref = _normalize_requirement_ref(entry.get("requirement_ref") or "")
+    if llm_ref:
+        return llm_ref, llm_ref
+    for text in (name, desc):
+        ref = _requirement_ref_from_text(text)
+        if ref:
+            return ref, ref
+    return None, name
+
+
+def _ref_matches_row_identifier(identifier: str, ref: Optional[str], search_term: str) -> bool:
+    ident = re.sub(r"[\s_]+", "", (identifier or "").upper())
+    if not ident:
+        return False
+    if ref:
+        ref_norm = re.sub(r"[\s_-]+", "", ref.upper())
+        if ident.startswith(ref_norm) or ref_norm in ident:
+            return True
+    term = re.sub(r"[\s_]+", "", (search_term or "").upper())
+    if len(term) >= 4 and term in ident:
+        return True
+    return False
+
+
+def _child_dict_from_structured_row(row: dict[str, Any], *, kind: str) -> Optional[dict[str, Any]]:
+    name = (
+        str(row.get("Nr") or row.get("Referenz") or row.get("referenz") or row.get("ID") or "")
+    ).strip()
+    desc = (
+        str(
+            row.get("Frage")
+            or row.get("Anforderung")
+            or row.get("Beschreibung")
+            or row.get("Text")
+            or ""
+        )
+    ).strip()
+    if not desc:
+        parts = [
+            f"{k}: {v}" for k, v in row.items()
+            if k not in ("Nr", "Referenz", "referenz", "ID", "Lieferant", "Antwort")
+            and str(v).strip()
+        ]
+        desc = " | ".join(parts).strip()
+    if not name and desc:
+        name = desc[:60]
+    if not name:
+        return None
+    return {
+        "name": name,
+        "description": desc or name,
+        "scale_max": 1 if kind == "eignung" else int(row.get("scale_max") or 10),
+    }
+
+
+def _enrich_children_from_structured_tender_docs(
+    project_key: str,
+    entry: dict[str, Any],
+    *,
+    kind: str,
+    ref: Optional[str],
+    search_term: str,
+) -> list[dict[str, Any]]:
+    """CSV/XLSX-Vorgaben zeilenweise → deterministische Unterfragen (Ticket 16)."""
+    from pathlib import Path
+
+    from .m09_docs import (
+        get_document_by_id,
+        process_csv_to_chunks,
+        process_generic_csv_rows,
+        process_xlsx_to_rows,
+    )
+
+    roles = (
+        ("eignungskriterien", "ausschreibungsunterlage", "bewertungsvorgaben")
+        if kind == "eignung"
+        else ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben")
+    )
+    doc_ids = get_tender_document_ids(project_key, roles=roles)
+    children: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for doc_id in doc_ids:
+        doc = get_document_by_id(doc_id)
+        if not doc or not doc.file_path:
+            continue
+        path = Path(doc.file_path)
+        if not path.is_file():
+            continue
+        ext = path.suffix.lower()
+        if ext not in (".csv", ".xlsx", ".xls"):
+            continue
+        fn = (doc.filename or path.name).lower()
+        if ref:
+            ref_lo = ref.lower().replace("-", "")
+            if ref_lo not in fn.replace("-", "") and ref_lo not in path.name.lower().replace("-", ""):
+                pass  # kein Dateiname-Match — Zeilenfilter kann trotzdem treffen
+
+        rows: list[dict[str, Any]] = []
+        if ext == ".csv":
+            ok, _msg, data = process_csv_to_chunks(path)
+            if not ok:
+                ok, _msg, data = process_generic_csv_rows(path)
+            if ok:
+                rows = data
+        else:
+            ok, _msg, data = process_xlsx_to_rows(path)
+            if ok:
+                rows = data
+
+        fn_norm = fn.replace("-", "").replace("_", "")
+        file_matches = False
+        if ref:
+            file_matches = ref.lower().replace("-", "") in fn_norm
+        elif search_term and len(search_term) >= 4:
+            file_matches = search_term.lower().replace(" ", "")[:12] in fn_norm
+
+        for row in rows:
+            ident = str(
+                row.get("Nr") or row.get("Referenz") or row.get("referenz") or row.get("ID") or ""
+            )
+            frage = str(row.get("Frage") or row.get("Anforderung") or "")
+            row_match = _ref_matches_row_identifier(ident, ref, search_term) or _ref_matches_row_identifier(
+                frage, ref, search_term
+            )
+            if not row_match and not file_matches:
+                continue
+            child = _child_dict_from_structured_row(row, kind=kind)
+            if not child:
+                continue
+            cname = child["name"]
+            if cname in seen:
+                continue
+            seen.add(cname)
+            children.append(child)
+    return children
+
+
+def _merge_criteria_children(
+    existing: list[dict[str, Any]],
+    new_children: list[dict[str, Any]],
+    *,
+    kind: str,
+) -> list[dict[str, Any]]:
+    by_name = {(c.get("name") or "").strip(): c for c in existing if (c.get("name") or "").strip()}
+    for ch in new_children:
+        cname = (ch.get("name") or "").strip()
+        if not cname:
+            continue
+        if cname not in by_name:
+            scale = 1 if kind == "eignung" else int(ch.get("scale_max") or 10)
+            by_name[cname] = {
+                "name": cname,
+                "description": (ch.get("description") or "").strip(),
+                "scale_max": scale,
+            }
+    return list(by_name.values())
+
+
+def _enrich_criteria_children_from_requirements(
+    project_key: str,
+    payload: dict[str, Any],
+    provider: str,
+    model: str | None,
+    *,
+    enrich_limit: int = ENRICH_CHILDREN_RAG_LIMIT,
+    enrich_threshold: float = ENRICH_CHILDREN_RAG_THRESHOLD,
+) -> list[str]:
+    """Schritt 2: Unterfragen für Eignung + Zuschlag (kind-agnostisch, Ticket 13/15)."""
+    hints: list[str] = []
+    role_sets = {
+        "eignung": ("eignungskriterien", "ausschreibungsunterlage", "bewertungsvorgaben"),
+        "zuschlag": ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben"),
+    }
+
+    for kind in ("eignung", "zuschlag"):
+        roles = role_sets[kind]
+        doc_ids = get_tender_document_ids(project_key, roles=roles)
+        if not doc_ids:
+            continue
+
+        for entry in payload.get(kind) or []:
+            name = (entry.get("name") or "").strip()
+            if not name:
+                continue
+            ref, search_term = _resolve_requirement_search(entry)
+            if ref and not entry.get("requirement_ref"):
+                entry["requirement_ref"] = ref
+
+            existing = list(entry.get("children") or [])
+            structured = _enrich_children_from_structured_tender_docs(
+                project_key, entry, kind=kind, ref=ref, search_term=search_term,
+            )
+            if structured:
+                entry["children"] = _merge_criteria_children(existing, structured, kind=kind)
+                hints.append(f"{name}: {len(structured)} Unterfragen aus strukturierter Vorgabe")
+                existing = list(entry.get("children") or [])
+
+            if len(existing) >= 30:
+                continue
+
+            query_parts = [search_term]
+            if ref and ref != search_term:
+                query_parts.append(ref)
+            query_parts.append(
+                "Einzelanforderungen Fragenr Referenz Anforderung Lieferant "
+                "Ja Nein Teilweise Begründung Pflicht Kapitel Anforderungen"
+            )
+            query = " ".join(query_parts)
+            rag = retrieve_relevant_chunks_hybrid(
+                query,
+                project_key=project_key,
+                limit=enrich_limit,
+                threshold=enrich_threshold,
+                document_ids=tuple(doc_ids),
+            )
+            ctx = _format_rag_context(
+                rag.get("documents", []),
+                empty_msg="",
+                max_chunks=enrich_limit,
+            )
+            if not ctx.strip():
+                if not structured:
+                    hints.append(f"{name}: keine passenden Vorgaben-Stellen für Unterfragen")
+                continue
+            if is_cloud_llm_provider(provider):
+                ctx = sanitize_for_cloud_text(ctx)
+
+            ref_hint = f"Referenz-Gruppe: {ref}" if ref else f"Suchbegriff: {search_term}"
+            if kind == "eignung":
+                system = (
+                    "Extrahiere alle Unterfragen (Einzelanforderungen) für ein Eignungs-K.O.-Kriterium. "
+                    f"{ref_hint}. "
+                    "Antwort NUR als JSON mit key children (Liste). "
+                    "Jedes Kind: name (exakte Fragennummer), description (voller Text), scale_max immer 1."
+                )
+            else:
+                system = (
+                    "Extrahiere alle Einzelanforderungen (Unterfragen) für ein Zuschlagskriterium aus "
+                    "dem Kapitel «Anforderungen» / Anforderungsblatt — NICHT nur die Kapitel-Einleitung. "
+                    f"{ref_hint} (Fragen z. B. F01-001, EK2-03). "
+                    "Antwort NUR als JSON mit key children (Liste). "
+                    "Jedes Kind: name (kurz, exakte Fragennummer), description (voller Anforderungstext)."
+                )
+            user = f"Top-Kriterium ({kind}): {name}\n\nAusschreibungsauszug:\n{ctx}\n\nJSON:"
+            raw = try_models_with_messages(
+                provider,
+                system,
+                [{"role": "user", "content": user}],
+                max_tokens=4500,
+                temperature=0.1,
+                model=model,
+            )
+            sub = _parse_llm_json_object(raw)
+            children = sub.get("children") if isinstance(sub, dict) else []
+            if not children and isinstance(sub, list):
+                children = sub
+            if not children:
+                continue
+
+            llm_children: list[dict[str, Any]] = []
+            for ch in children:
+                cname = (ch.get("name") or "").strip()
+                if not cname:
+                    continue
+                scale = 1 if kind == "eignung" else int(ch.get("scale_max") or 10)
+                llm_children.append({
+                    "name": cname,
+                    "description": (ch.get("description") or "").strip(),
+                    "scale_max": scale,
+                })
+            before = len(entry.get("children") or [])
+            entry["children"] = _merge_criteria_children(
+                list(entry.get("children") or []), llm_children, kind=kind,
+            )
+            added = len(entry.get("children") or []) - before
+            if added:
+                hints.append(f"{name}: +{added} Unterfragen (KI/RAG)")
+
+    return hints
 
 
 def _enrich_zuschlag_children_from_requirements(
@@ -2183,80 +2523,11 @@ def _enrich_zuschlag_children_from_requirements(
     model: str | None,
     limit: int,
 ) -> list[str]:
-    """Schritt 2: Einzelanforderungen pro Top-Level-Zuschlag (Ticket 8)."""
-    hints: list[str] = []
-    roles = ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben")
-    doc_ids = get_tender_document_ids(project_key, roles=roles)
-    if not doc_ids:
-        return hints
-
-    for entry in payload.get("zuschlag") or []:
-        ref = _criterion_ref_prefix(entry.get("name") or "")
-        if not ref:
-            continue
-        existing = list(entry.get("children") or [])
-        if len(existing) >= 8:
-            continue
-
-        query = (
-            f"{ref} Einzelanforderungen Fragenr Referenz Anforderung Lieferant "
-            f"Ja Nein Teilweise Begründung Pflicht Kapitel Anforderungen"
-        )
-        rag = retrieve_relevant_chunks_hybrid(
-            query,
-            project_key=project_key,
-            limit=limit,
-            threshold=0.24,
-            document_ids=tuple(doc_ids),
-        )
-        ctx = _format_rag_context(
-            rag.get("documents", []),
-            empty_msg="",
-            max_chunks=limit,
-        )
-        if not ctx.strip():
-            continue
-        if is_cloud_llm_provider(provider):
-            ctx = sanitize_for_cloud_text(ctx)
-
-        system = (
-            "Extrahiere alle Einzelanforderungen (Unterfragen) für ein Zuschlagskriterium aus "
-            "dem Kapitel «Anforderungen» / Anforderungsblatt — NICHT nur die Kapitel-Einleitung. "
-            f"Referenz-Gruppe: {ref} (Fragen z. B. {ref}-001, {ref}001, F01-003). "
-            "Antwort NUR als JSON mit key children (Liste). "
-            "Jedes Kind: name (kurz, exakte Fragennummer), description (voller Anforderungstext)."
-        )
-        user = f"Top-Kriterium: {entry.get('name')}\n\nAusschreibungsauszug:\n{ctx}\n\nJSON:"
-        raw = try_models_with_messages(
-            provider,
-            system,
-            [{"role": "user", "content": user}],
-            max_tokens=3500,
-            temperature=0.1,
-            model=model,
-        )
-        sub = _parse_llm_json_object(raw)
-        children = sub.get("children") if isinstance(sub, dict) else []
-        if not children and isinstance(sub, list):
-            children = sub
-        if not children:
-            continue
-
-        by_name = {(c.get("name") or "").strip(): c for c in existing if (c.get("name") or "").strip()}
-        for ch in children:
-            cname = (ch.get("name") or "").strip()
-            if not cname:
-                continue
-            if cname not in by_name:
-                by_name[cname] = {
-                    "name": cname,
-                    "description": (ch.get("description") or "").strip(),
-                    "scale_max": int(ch.get("scale_max") or 10),
-                }
-        entry["children"] = list(by_name.values())
-        hints.append(f"{entry.get('name')}: {len(entry['children'])} Unterfragen aus Anforderungen-Kapitel")
-
-    return hints
+    """Abwärtskompatibler Alias — delegiert an kind-agnostische Enrichment-Funktion."""
+    return _enrich_criteria_children_from_requirements(
+        project_key, payload, provider, model,
+        enrich_limit=max(ENRICH_CHILDREN_RAG_LIMIT, min(48, limit * 2)),
+    )
 
 
 def extract_criteria_from_tender_docs(
@@ -2275,6 +2546,7 @@ def extract_criteria_from_tender_docs(
 
     cfg = get_evaluation_config(project_key)
     limit = cfg["rag_chunks_per_role"]
+    extraction_limit = cfg.get("rag_chunks_extraction", DEFAULT_RAG_CHUNKS_EXTRACTION)
     role_queries = [
         (("eignungskriterien", "ausschreibungsunterlage"), "Eignungskriterien K.O. Mindestanforderungen Bieter"),
         (("zuschlagskriterien", "bewertungsvorgaben"), "Zuschlagskriterien Gewichtung Punkte Bewertungsmatrix Übersicht"),
@@ -2284,7 +2556,12 @@ def extract_criteria_from_tender_docs(
         ),
         (("bewertungsvorgaben", "ausschreibungsunterlage"), "Bewertungsvorgaben Verfahren Skala Rangfolge"),
     ]
-    context = _retrieve_tender_context_multi(project_key, role_queries, limit_per_role=limit)
+    context = _retrieve_tender_context_multi(
+        project_key,
+        role_queries,
+        limit_per_role=limit,
+        max_format_chunks=extraction_limit,
+    )
     if is_cloud_llm_provider(provider):
         context = sanitize_for_cloud_text(context)
 
@@ -2294,10 +2571,12 @@ def extract_criteria_from_tender_docs(
         "Extrahiere strukturierte Bewertungskriterien aus Ausschreibungsunterlagen. "
         "Antwort NUR als JSON mit keys eignung und zuschlag (Listen von Objekten). "
         "Jedes Objekt: name (kurz), description (Kapitel-Einleitung / Aufgabenstellung), "
-        "optional children (Einzelanforderungen mit vollem Text — werden ggf. in Schritt 2 ergänzt). "
+        "requirement_ref (PFLICHT: Dokument-/Kapitelreferenz aus den Vorgaben, z. B. F01, F-02, "
+        "T01, W01, EK2 — unabhängig vom name-Text), "
+        "optional children (Einzelanforderungen — werden in Schritt 2 ergänzt). "
         "Zuschlag: weight_pct, scale_max (default 10), auto_price true nur für reines Preis-Kriterium, "
         "ranking_phase 1 (ZK) oder 2 (Präsentation nach Einladung, z. B. A-01). "
-        "Eignung: scale_max immer 1, kein weight_pct, keine Teilpunkte."
+        "Eignung: scale_max immer 1, kein weight_pct, keine Teilpunkte; Unterfragen scale_max 1."
     )
     if vergabe_extra:
         system += f"\nProjekt-Hinweise: {vergabe_extra}"
@@ -2307,8 +2586,10 @@ def extract_criteria_from_tender_docs(
         max_tokens=4000, temperature=0.1, model=model,
     )
     payload = _parse_llm_json_object(raw)
-    child_hints = _enrich_zuschlag_children_from_requirements(
-        project_key, payload, provider, model, limit
+    child_hints = _enrich_criteria_children_from_requirements(
+        project_key, payload, provider, model,
+        enrich_limit=ENRICH_CHILDREN_RAG_LIMIT,
+        enrich_threshold=ENRICH_CHILDREN_RAG_THRESHOLD,
     )
     warnings = validate_criteria_payload(payload)
     warnings = list(warnings) + child_hints
@@ -2741,6 +3022,11 @@ def migrate_evaluation_db() -> None:
             if "vorgaben_ki_model" not in cfg_cols:
                 conn.execute(text(
                     "ALTER TABLE evaluation_project_config ADD COLUMN vorgaben_ki_model VARCHAR(80)"
+                ))
+            if "rag_chunks_extraction" not in cfg_cols:
+                conn.execute(text(
+                    f"ALTER TABLE evaluation_project_config "
+                    f"ADD COLUMN rag_chunks_extraction INTEGER NOT NULL DEFAULT {DEFAULT_RAG_CHUNKS_EXTRACTION}"
                 ))
 
         if "evaluation_tender_doc" in tables:
