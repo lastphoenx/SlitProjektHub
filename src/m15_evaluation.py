@@ -1442,6 +1442,13 @@ def parse_expected_child_count(text: str, ref: Optional[str] = None) -> Optional
     if m:
         return int(m.group(1))
     m = re.search(
+        r"([A-Za-z])-?0*(\d+)-0*(\d+)\s*(?:bis|–|-|to)\s*\1-?0*(\d+)-0*(\d+)",
+        t,
+        re.I,
+    )
+    if m:
+        return max(1, int(m.group(5)) - int(m.group(3)) + 1)
+    m = re.search(
         r"([A-Za-z])-?0*(\d+)\s*(?:bis|–|-|to)\s*\1-?0*(\d+)",
         t,
         re.I,

@@ -78,8 +78,10 @@
   function parseExpectedChildCount(text, ref) {
     const t = String(text || '').trim();
     if (!t) return null;
-    let m = t.match(/(\d+)\s+Einzelanforderungen/i);
+    let     m = t.match(/(\d+)\s+Einzelanforderungen/i);
     if (m) return parseInt(m[1], 10);
+    m = t.match(/([A-Za-z])-?0*(\d+)-0*(\d+)\s*(?:bis|–|-|to)\s*\1-?0*(\d+)-0*(\d+)/i);
+    if (m) return Math.max(1, parseInt(m[5], 10) - parseInt(m[3], 10) + 1);
     m = t.match(/([A-Za-z])-?0*(\d+)\s*(?:bis|–|-|to)\s*\1-?0*(\d+)/i);
     if (m) return Math.max(1, parseInt(m[3], 10) - parseInt(m[2], 10) + 1);
     return null;
