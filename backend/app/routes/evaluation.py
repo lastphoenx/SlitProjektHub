@@ -65,6 +65,7 @@ from src.m15_evaluation import (
     official_score,
     price_offers_status,
     recommended_chunk_size,
+    resolve_vorgaben_ki,
     rolled_up_score,
     score_requires_justification,
     save_evaluation_config,
@@ -684,6 +685,8 @@ async def evaluation_save_config(
     vergabe_notes: str = Form(""),
     rag_chunks_per_role: int = Form(12),
     price_formula: str = Form("reciprocal"),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -698,6 +701,8 @@ async def evaluation_save_config(
         vergabe_notes=vergabe_notes,
         rag_chunks_per_role=rag_chunks_per_role,
         price_formula=price_formula,
+        vorgaben_ki_provider=visual_llm_provider,
+        vorgaben_ki_model=visual_llm_model,
     )
     return RedirectResponse(url=f"/evaluation?project_key={project_key}&config_saved=1", status_code=303)
 
@@ -726,45 +731,46 @@ async def evaluation_extract_criteria(
     project_key: str = Form(...),
     provider: str = Form(""),
     model: str = Form(""),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
     cloud_confirm: str = Form("false"),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
     settings = load_user_settings()
-    ap = (provider or settings.get("provider") or "openai").strip()
-    am = (model or settings.get("model") or "").strip()
+    gp = (provider or settings.get("provider") or "openai").strip()
+    gm = (model or settings.get("model") or "").strip()
+    ap, am = resolve_vorgaben_ki(
+        project_key, visual_llm_provider, visual_llm_model,
+        global_provider=gp, global_model=gm,
+    )
     gate = validate_tender_cloud_gate(ap, project_key, cloud_confirm in ("true", "on", "1", "yes"))
+    extract_ctx = {
+        "request": request,
+        "project_key": project_key,
+        "project_title": _project_title(project_key),
+        "may_evaluate": True,
+    }
+    extract_ctx.update(_llm_picker_context())
     if gate:
-        return templates.TemplateResponse(
-            "evaluation/_criteria_extract.html",
-            {
-                "request": request,
-                "project_key": project_key,
-                "project_title": _project_title(project_key),
-                "error": "cloud_confirm",
-                "payload": {},
-                "criteria_json": "{}",
-                "may_evaluate": True,
-            },
-        )
+        extract_ctx.update({
+            "error": "cloud_confirm",
+            "payload": {},
+            "criteria_json": "{}",
+        })
+        return templates.TemplateResponse("evaluation/_criteria_extract.html", extract_ctx)
     result = await asyncio.to_thread(
         extract_criteria_from_tender_docs, project_key, ap, am or None
     )
     payload = result.get("payload") or {}
-    return templates.TemplateResponse(
-        "evaluation/_criteria_extract.html",
-        {
-            "request": request,
-            "project_key": project_key,
-            "project_title": _project_title(project_key),
-            "error": result.get("error"),
-            "payload": payload,
-            "criteria_json": json.dumps(payload, ensure_ascii=False, indent=2),
-            "warnings": result.get("warnings") or [],
-            "raw_llm": result.get("raw_llm"),
-            "may_evaluate": True,
-        },
-    )
+    extract_ctx.update({
+        "error": result.get("error"),
+        "payload": payload,
+        "criteria_json": json.dumps(payload, ensure_ascii=False, indent=2),
+        "warnings": result.get("warnings") or [],
+        "raw_llm": result.get("raw_llm"),
+    })
+    return templates.TemplateResponse("evaluation/_criteria_extract.html", extract_ctx)
 
 
 @router.post("/evaluation/apply-criteria", response_class=HTMLResponse)
@@ -842,6 +848,7 @@ async def evaluation_price_page(request: Request, project_key: str, bidder_id: i
             "price_years": eval_config.get("price_years", []),
             "price_offers_status": price_status,
     }
+    price_page_ctx.update(_llm_picker_context())
     return templates.TemplateResponse("evaluation/_price.html", price_page_ctx)
 
 
@@ -908,13 +915,19 @@ async def evaluation_price_template_seed(
     bidder_id: int = Form(...),
     provider: str = Form(""),
     model: str = Form(""),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
     cloud_confirm: str = Form("false"),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
     settings = load_user_settings()
-    ap = (provider or settings.get("provider") or "openai").strip()
-    am = (model or settings.get("model") or "").strip()
+    gp = (provider or settings.get("provider") or "openai").strip()
+    gm = (model or settings.get("model") or "").strip()
+    ap, am = resolve_vorgaben_ki(
+        project_key, visual_llm_provider, visual_llm_model,
+        global_provider=gp, global_model=gm,
+    )
     gate = validate_tender_cloud_gate(ap, project_key, cloud_confirm in ("true", "on", "1", "yes"))
     if gate:
         return RedirectResponse(
@@ -947,13 +960,19 @@ async def evaluation_price_template_parse(
     bidder_id: int = Form(...),
     provider: str = Form(""),
     model: str = Form(""),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
     cloud_confirm: str = Form("false"),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
     settings = load_user_settings()
-    ap = (provider or settings.get("provider") or "openai").strip()
-    am = (model or settings.get("model") or "").strip()
+    gp = (provider or settings.get("provider") or "openai").strip()
+    gm = (model or settings.get("model") or "").strip()
+    ap, am = resolve_vorgaben_ki(
+        project_key, visual_llm_provider, visual_llm_model,
+        global_provider=gp, global_model=gm,
+    )
     gate = validate_evaluation_cloud_gate(
         ap, bidder_id, cloud_confirm in ("true", "on", "1", "yes")
     )

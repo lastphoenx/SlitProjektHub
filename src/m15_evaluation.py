@@ -124,6 +124,9 @@ class EvaluationProjectConfig(SQLModel, table=True):
         default=DEFAULT_PRICE_FORMULA,
         sa_column=Column(String(20), nullable=False, default=DEFAULT_PRICE_FORMULA),
     )
+    # Default KI für Phase ② Kriterien-Extraktion und ③ Preisblatt (Picker pro Lauf überschreibbar)
+    vorgaben_ki_provider: Optional[str] = Field(default=None, sa_column=Column(String(40)))
+    vorgaben_ki_model: Optional[str] = Field(default=None, sa_column=Column(String(80)))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -740,6 +743,8 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
             "vergabe_notes": "",
             "rag_chunks_per_role": 12,
             "price_formula": DEFAULT_PRICE_FORMULA,
+            "vorgaben_ki_provider": "",
+            "vorgaben_ki_model": "",
         }
     try:
         years = json.loads(row.price_years_json or "[]")
@@ -756,7 +761,26 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
         "vergabe_notes": (row.vergabe_notes or "").strip(),
         "rag_chunks_per_role": max(4, min(24, int(row.rag_chunks_per_role or 12))),
         "price_formula": formula,
+        "vorgaben_ki_provider": (row.vorgaben_ki_provider or "").strip(),
+        "vorgaben_ki_model": (row.vorgaben_ki_model or "").strip(),
     }
+
+
+def resolve_vorgaben_ki(
+    project_key: str,
+    form_provider: str = "",
+    form_model: str = "",
+    *,
+    global_provider: str = "openai",
+    global_model: str = "",
+) -> tuple[str, str]:
+    """KI für ② Kriterien / ③ Preis: Picker > Projekt-Default > globale KI-Einstellungen."""
+    from .m16_idea_visual import resolve_visual_llm
+
+    cfg = get_evaluation_config(project_key)
+    fallback_p = (cfg.get("vorgaben_ki_provider") or "").strip() or (global_provider or "openai").strip()
+    fallback_m = (cfg.get("vorgaben_ki_model") or "").strip() or (global_model or "").strip()
+    return resolve_visual_llm(form_provider, form_model, fallback_p, fallback_m)
 
 
 def save_evaluation_config(
@@ -766,6 +790,8 @@ def save_evaluation_config(
     vergabe_notes: str | None = None,
     rag_chunks_per_role: int | None = None,
     price_formula: str | None = None,
+    vorgaben_ki_provider: str | None = None,
+    vorgaben_ki_model: str | None = None,
 ) -> None:
     cfg = get_evaluation_config(project_key)
     if price_years is not None:
@@ -777,6 +803,10 @@ def save_evaluation_config(
     if price_formula is not None:
         pf = (price_formula or "").strip().lower()
         cfg["price_formula"] = pf if pf in PRICE_FORMULAS else DEFAULT_PRICE_FORMULA
+    if vorgaben_ki_provider is not None:
+        cfg["vorgaben_ki_provider"] = (vorgaben_ki_provider or "").strip()
+    if vorgaben_ki_model is not None:
+        cfg["vorgaben_ki_model"] = (vorgaben_ki_model or "").strip()
     with get_session() as session:
         row = session.get(EvaluationProjectConfig, project_key)
         if not row:
@@ -785,6 +815,8 @@ def save_evaluation_config(
         row.vergabe_notes = cfg["vergabe_notes"] or None
         row.rag_chunks_per_role = cfg["rag_chunks_per_role"]
         row.price_formula = cfg.get("price_formula", DEFAULT_PRICE_FORMULA)
+        row.vorgaben_ki_provider = cfg.get("vorgaben_ki_provider") or None
+        row.vorgaben_ki_model = cfg.get("vorgaben_ki_model") or None
         row.updated_at = _now()
         session.add(row)
         session.commit()
@@ -2002,5 +2034,13 @@ def migrate_evaluation_db() -> None:
                 conn.execute(text(
                     "ALTER TABLE evaluation_project_config "
                     f"ADD COLUMN price_formula VARCHAR(20) NOT NULL DEFAULT '{DEFAULT_PRICE_FORMULA}'"
+                ))
+            if "vorgaben_ki_provider" not in cfg_cols:
+                conn.execute(text(
+                    "ALTER TABLE evaluation_project_config ADD COLUMN vorgaben_ki_provider VARCHAR(40)"
+                ))
+            if "vorgaben_ki_model" not in cfg_cols:
+                conn.execute(text(
+                    "ALTER TABLE evaluation_project_config ADD COLUMN vorgaben_ki_model VARCHAR(80)"
                 ))
         # zukünftige Spalten hier ergänzen

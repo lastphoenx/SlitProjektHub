@@ -77,7 +77,7 @@
           {% set form_id = 'eval-cell-' ~ bidder.id ~ '-' ~ criterion.id %}
           {% set llm_role = 'output' %}
           {% set picker_title = 'KI für Bewertungsvorschlag' %}
-          {% set picker_hint = 'Ein LLM-Aufruf: RAG-Stellen werden bewertet. Leer = KI-Einstellungen (' ~ (llm_provider or 'openai') ~ ' / ' ~ (llm_model or 'Standard') ~ '). Cloud-Provider brauchen die Bestätigung unten, sobald Bieter-Dokumente verknüpft sind.' %}
+          {% set picker_hint = 'Aufgabe ④ Matrix-Zelle: Dual-RAG (Vorgabe + Angebot). Leer = KI-Einstellungen (' ~ (llm_provider or 'openai') ~ ' / ' ~ (llm_model or 'Standard') ~ '). Empfehlung: Ollama qwen3:32b oder gpt-4o-mini — siehe Hinweis oben. Cloud: Bestätigung unten bei verknüpften Bieter-Dokumenten.' %}
           {% set form_visual_provider = form_visual_provider | default('') %}
           {% set form_visual_model = form_visual_model | default('') %}
           {% include 'partials/_llm_picker.html' %}
