@@ -343,7 +343,9 @@
   <div class="card" style="margin-bottom:.75rem;border-color:var(--color-warning, #fbbf24);padding:.5rem .65rem">
     <p style="font-size:.75rem;margin:0">
       <strong>Bewertung läuft.</strong> Strukturelle Kriterienänderungen (Gewicht, Löschen, neue Top-Level-Kriterien)
-      sind ein Rekursrisiko (BöB/IVöB) — nur mit Bestätigung in «Kriterien verwalten» oder unten beim Anlegen.
+      sind ein Rekursrisiko (BöB/IVöB) — nur mit Bestätigung in
+      <a href="/evaluation/criteria-manage?project_key={{ project_key }}" class="badge badge-warn">Kriterien verwalten</a>
+      oder unten beim Anlegen.
     </p>
   </div>
   {% endif %}
@@ -451,7 +453,7 @@
   </form>
   <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">
     Unterfragen (z.&nbsp;B. F01-001 unter F-01) sind Beleg-/KI-Hilfsebene —
-    <a href="/evaluation/criteria-manage?project_key={{ project_key }}">in «Kriterien verwalten»</a>
+    <a href="/evaluation/criteria-manage?project_key={{ project_key }}" class="badge badge-warn">in «Kriterien verwalten»</a>
     anlegen und bearbeiten. Nur das übergeordnete Kriterium zählt in der Rangfolge.
   </p>
   {% if criteria %}
@@ -599,13 +601,14 @@
   <table>
       <thead>
         <tr>
-          <th>Kriterium</th><th>Art</th><th>Gewicht</th>
+          <th>Ref</th><th>Kriterium</th><th>Art</th><th>Gewicht</th>
           {% for b in bidders %}<th>{{ b.name }}</th>{% endfor %}
         </tr>
       </thead>
       <tbody>
         {% for row in matrix_rows %}
         <tr>
+          <td style="font-family:var(--font-mono,monospace);font-size:.78rem;white-space:nowrap;color:var(--color-text-muted)">{{ row.referenz or '—' }}</td>
           <td>{{ row.name }}{% if row.auto_price %} <span class="text-muted" style="font-size:.72rem">(Preisblatt)</span>{% endif %}</td>
           <td>{{ row.kind }}</td>
           <td>{{ row.weight or '' }}</td>
@@ -616,10 +619,11 @@
               hx-target="#modal-slot" hx-swap="innerHTML">
             <strong>{{ cell.display }}</strong>
             <div style="font-size:.7rem;color:var(--color-text-muted)">
+              Bewerten ›
               {% if row.has_children %}
-              Ø {{ cell.answered }}/{{ cell.total }} Anford.
+              · Ø {{ cell.answered }}/{{ cell.total }} Anford.
               {% else %}
-              {% if cell.ai_value is not none %}🤖{{ "%.1f"|format(cell.ai_value) }}{% endif %}
+              {% if cell.ai_value is not none %}· 🤖{{ "%.1f"|format(cell.ai_value) }}{% endif %}
               {% if cell.evaluator_count %} · {{ cell.evaluator_count }} Bewertung{{ "en" if cell.evaluator_count != 1 else "" }}{% endif %}
               {% endif %}
             </div>

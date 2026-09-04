@@ -16,10 +16,50 @@
       <div class="card" style="margin-bottom:.75rem;background:var(--color-surface-2)">
         <strong>Kriteriumswert (automatisch): {{ "%.2f"|format(official) if official is not none else "—" }}</strong>
         <p style="font-size:.72rem;margin:.35rem 0 0">
-          <a href="/evaluation/criteria-manage?project_key={{ project_key }}">Kriterien verwalten</a>
+          <a href="/evaluation/criteria-manage?project_key={{ project_key }}" class="badge badge-warn">Kriterien verwalten</a>
           — Unterfragen bearbeiten oder ergänzen
         </p>
       </div>
+
+      {% if may_evaluate and child_rows %}
+      <div class="card" style="margin-bottom:.75rem;background:var(--color-surface-2)">
+        <strong style="font-size:.85rem">KI-Stapelverarbeitung</strong>
+        <p class="text-muted" style="font-size:.72rem;margin:.35rem 0 .5rem">
+          Alle {{ total }} Unterfragen nacheinander als KI-Vorschlag (RAG) — speichert je Kind unter 🤖, ohne deine Bewerter-Zeile.
+        </p>
+        <div id="parent-batch-llm-picker" style="margin:.25rem 0 .5rem">
+          {% set form_id = 'eval-parent-' ~ bidder.id ~ '-' ~ criterion.id %}
+          {% set llm_role = 'output' %}
+          {% set picker_title = 'KI für Stapelverarbeitung' %}
+          {% set picker_hint = 'Leer = Bewertungs-KI aus Projekt-Einstellungen. Cloud: Bestätigung unten bei verknüpften Angebotsdokumenten.' %}
+          {% set form_visual_provider = form_visual_provider | default('') %}
+          {% set form_visual_model = form_visual_model | default('') %}
+          {% include 'partials/_llm_picker.html' %}
+        </div>
+        {% if has_bidder_docs %}
+        <div id="parent-batch-cloud-gate" style="display:none;padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem;margin-bottom:.5rem">
+          <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
+            <input type="checkbox" id="parent-batch-cloud-confirm" value="1" style="margin-top:.15rem" />
+            <span>Ich bestätige, dass die an die Cloud übermittelten Angebotsauszüge auf personenbezogene Daten geprüft wurden.</span>
+          </label>
+        </div>
+        {% endif %}
+        <button type="button" class="btn btn-secondary btn-sm" id="parent-batch-ki-btn" onclick="parentBatchKiStart(this)">
+          <span class="ki-btn-idle">KI für alle {{ total }} Anforderungen</span>
+          <span class="ki-btn-busy" hidden>
+            <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+            KI läuft …
+          </span>
+        </button>
+        <div id="parent-batch-progress" style="margin-top:.65rem;display:none">
+          <div style="height:.45rem;border-radius:999px;background:rgba(148,163,184,.2);overflow:hidden">
+            <div id="parent-batch-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#6366f1,#818cf8);transition:width .25s ease"></div>
+          </div>
+          <p id="parent-batch-status" class="text-muted" style="font-size:.72rem;margin:.4rem 0 0">0 / {{ total }}</p>
+          <ul id="parent-batch-log" style="font-size:.7rem;margin:.35rem 0 0;padding-left:1rem;max-height:6rem;overflow:auto"></ul>
+        </div>
+      </div>
+      {% endif %}
 
       <div class="table-wrap">
         <table>
@@ -49,3 +89,114 @@
     </div>
   </div>
 </div>
+<script>
+(function() {
+  const picker = document.querySelector('#parent-batch-llm-picker select[name="visual_llm_provider"]');
+  const wrap = document.getElementById('parent-batch-cloud-gate');
+  function isCloud(p) { return p === 'openai' || p === 'anthropic'; }
+  function syncGate() {
+    if (!wrap) return;
+    const chosen = picker && picker.value ? picker.value : (window.KI && window.KI.provider) || '{{ llm_provider | default("") }}';
+    wrap.style.display = isCloud(chosen) ? 'block' : 'none';
+  }
+  if (picker) picker.addEventListener('change', syncGate);
+  syncGate();
+})();
+
+const parentBatchChildren = [
+  {% for row in child_rows %}
+  { id: {{ row.criterion.id }}, name: {{ row.criterion.name | tojson }} }{% if not loop.last %},{% endif %}
+  {% endfor %}
+];
+
+async function parentBatchKiStart(btn) {
+  if (!parentBatchChildren.length) return;
+  if (typeof evalKiBusy === 'function' && evalKiBusy()) return;
+
+  const picker = document.querySelector('#parent-batch-llm-picker select[name="visual_llm_provider"]');
+  const modelSel = document.querySelector('#parent-batch-llm-picker select[name="visual_llm_model"]');
+  const visProvider = picker ? picker.value : '';
+  const visModel = modelSel ? modelSel.value : '';
+  const prov = visProvider || (window.KI && window.KI.provider) || '{{ llm_provider | default("") }}';
+  const mod = visModel || (window.KI && window.KI.model) || '{{ llm_model | default("") }}';
+  if (typeof evalStartKiAsync === 'function' && !evalStartKiAsync(prov, mod)) return;
+
+  const progress = document.getElementById('parent-batch-progress');
+  const bar = document.getElementById('parent-batch-bar');
+  const status = document.getElementById('parent-batch-status');
+  const log = document.getElementById('parent-batch-log');
+  const total = parentBatchChildren.length;
+  const idle = btn.querySelector('.ki-btn-idle');
+  const busy = btn.querySelector('.ki-btn-busy');
+  const confirm = document.getElementById('parent-batch-cloud-confirm');
+
+  btn.disabled = true;
+  if (idle) idle.hidden = true;
+  if (busy) busy.hidden = false;
+  if (progress) progress.style.display = '';
+  if (log) log.innerHTML = '';
+
+  let done = 0;
+  let errors = 0;
+
+  try {
+    for (const child of parentBatchChildren) {
+      status.textContent = `${done} / ${total} — ${child.name} …`;
+      const fd = new FormData();
+      fd.append('project_key', {{ project_key | tojson }});
+      fd.append('bidder_id', String({{ bidder.id }}));
+      fd.append('criterion_id', String(child.id));
+      fd.append('visual_llm_provider', visProvider);
+      fd.append('visual_llm_model', visModel);
+      if (confirm && confirm.checked) fd.append('cloud_confirm', '1');
+
+      let result = { ok: false, error: 'Netzwerkfehler' };
+      try {
+        const r = await fetch('/evaluation/suggest-batch-step', { method: 'POST', body: fd });
+        result = await r.json();
+      } catch (err) {
+        result = { ok: false, error: String(err) };
+      }
+
+      done += 1;
+      const pct = Math.round((done / total) * 100);
+      if (bar) bar.style.width = pct + '%';
+      status.textContent = `${done} / ${total}`;
+
+      const li = document.createElement('li');
+      if (result.ok) {
+        li.textContent = `${child.name}: 🤖 ${result.value}`;
+        li.style.color = 'var(--color-text-muted)';
+      } else if (result.needs_cloud_confirm) {
+        li.textContent = `${child.name}: Cloud-Bestätigung erforderlich — Stapel abgebrochen.`;
+        li.style.color = '#fca5a5';
+        errors += 1;
+        break;
+      } else {
+        li.textContent = `${child.name}: ${result.error || 'kein Vorschlag'}`;
+        li.style.color = '#fca5a5';
+        errors += 1;
+      }
+      if (log) log.appendChild(li);
+    }
+
+    if (errors === 0) {
+      status.textContent = `Fertig — ${done} / ${total} KI-Vorschläge gespeichert.`;
+    } else if (done < total) {
+      status.textContent = `Abgebrochen bei ${done} / ${total} (${errors} Fehler).`;
+    } else {
+      status.textContent = `Fertig — ${done - errors} ok, ${errors} Fehler.`;
+    }
+
+    const reloadUrl = '/evaluation/cell?bidder_id={{ bidder.id }}&criterion_id={{ criterion.id }}&project_key={{ project_key }}';
+    if (window.htmx) {
+      setTimeout(() => htmx.ajax('GET', reloadUrl, { target: '#modal-slot', swap: 'innerHTML' }), 800);
+    }
+  } finally {
+    btn.disabled = false;
+    if (idle) idle.hidden = false;
+    if (busy) busy.hidden = true;
+    if (typeof evalSetKiBusy === 'function') evalSetKiBusy(false);
+  }
+}
+</script>
