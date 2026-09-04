@@ -2483,6 +2483,183 @@ def _extract_line_numbers_from_text(text: str, ref: Optional[str]) -> set[str]:
     return found
 
 
+def _line_label_for_ref(ref: str, line_suffix: int) -> str:
+    """F01 + 3 → F01-003 (kanonisches Label)."""
+    norm = (_normalize_requirement_ref(ref) or ref or "").upper().replace("-", "")
+    m = re.match(r"^([A-Z])(\d{2})$", norm)
+    if not m:
+        return f"{norm}-{line_suffix:03d}"
+    return f"{m.group(1)}{m.group(2)}-{line_suffix:03d}"
+
+
+def _line_label_regex(label: str) -> str:
+    """Regex-Fragment für F01-003 / F-01-003 / T01-003 im Fliesstext."""
+    line = _normalize_line_ref(label) or (label or "").strip().upper()
+    m = re.match(r"^([A-Z])(\d{2})-(\d{3})$", line)
+    if not m:
+        return re.escape(label)
+    letter, block, num = m.group(1), int(m.group(2)), int(m.group(3))
+    return rf"\b{letter}-?0*{block}-?0*{num}\b"
+
+
+def _parse_line_suffix_from_label(label: str, ref: Optional[str]) -> Optional[int]:
+    """Zeilen-Suffix (3 aus F01-003), nur wenn Block zur Parent-Ref passt."""
+    raw = (label or "").strip()
+    if not raw:
+        return None
+    line = _normalize_line_ref(raw) or _store_referenz(raw)
+    if not line or "-" not in line:
+        return None
+    m = re.match(r"^([A-Z])(\d{2})-(\d{3})$", line.upper())
+    if not m:
+        return None
+    block = f"{m.group(1)}{m.group(2)}"
+    ref_norm = (_normalize_requirement_ref(ref or "") or "").upper()
+    if ref_norm and block != ref_norm:
+        return None
+    return int(m.group(3))
+
+
+def _parse_line_suffix_from_child(ch: dict[str, Any], ref: Optional[str]) -> Optional[int]:
+    for field in (ch.get("requirement_ref"), ch.get("name")):
+        n = _parse_line_suffix_from_label(str(field or ""), ref)
+        if n is not None:
+            return n
+    return None
+
+
+def _missing_line_suffixes(
+    children: list[dict[str, Any]],
+    ref: Optional[str],
+    ctx: str,
+    parent_entry: dict[str, Any],
+) -> list[int]:
+    """Lücken in fortlaufender Fragenr.-Folge (z. B. 001,002,004 → 003 fehlt)."""
+    if not ref:
+        return []
+    found: set[int] = set()
+    for ch in children:
+        n = _parse_line_suffix_from_child(ch, ref)
+        if n is not None:
+            found.add(n)
+    if len(found) < 2:
+        return []
+
+    in_ctx: set[int] = set()
+    for label in _extract_line_numbers_from_text(ctx, ref):
+        n = _parse_line_suffix_from_label(label, ref)
+        if n is not None:
+            in_ctx.add(n)
+
+    universe = found | in_ctx
+    if not universe:
+        return []
+
+    lo, hi = min(universe), max(universe)
+    expected = parse_expected_child_count(
+        (parent_entry.get("description") or ""),
+        ref,
+    )
+    if expected and expected > hi - lo + 1:
+        hi = lo + expected - 1
+
+    if hi - lo + 1 <= len(found):
+        return []
+
+    missing: list[int] = []
+    for n in range(lo, hi + 1):
+        if n in found:
+            continue
+        label = _line_label_for_ref(ref, n)
+        if not re.search(_line_label_regex(label), ctx or "", re.I):
+            continue
+        missing.append(n)
+    return missing
+
+
+def _extract_line_block_from_context(
+    ctx: str,
+    line_label: str,
+    next_line_label: Optional[str],
+) -> Optional[str]:
+    """Anforderungstext zwischen zwei Fragennummern aus bereits abgerufenem Kontext."""
+    if not (ctx or "").strip() or not line_label:
+        return None
+    m_start = re.search(_line_label_regex(line_label), ctx, re.I)
+    if not m_start:
+        return None
+    start_pos = m_start.end()
+    if next_line_label:
+        m_end = re.search(_line_label_regex(next_line_label), ctx[start_pos:], re.I)
+        end_pos = start_pos + m_end.start() if m_end else len(ctx)
+    else:
+        block_m = re.match(
+            r"^([A-Z])(\d{2})-(\d{3})$",
+            (_normalize_line_ref(line_label) or line_label).upper(),
+        )
+        end_pos = len(ctx)
+        if block_m:
+            letter, block = block_m.group(1), int(block_m.group(2))
+            m_next = re.search(
+                rf"\b{letter}-?0*{block}-?0*\d+\b",
+                ctx[start_pos + 1:],
+                re.I,
+            )
+            if m_next:
+                end_pos = start_pos + 1 + m_next.start()
+    text = re.sub(r"^[\s:;.\-|]+", "", ctx[start_pos:end_pos]).strip()
+    if len(text) < 12:
+        return None
+    return text[:4000]
+
+
+def _fill_missing_line_children(
+    entry: dict[str, Any],
+    ctx: str,
+    ref: Optional[str],
+) -> int:
+    """Ergänzt fehlende Einzelzeilen deterministisch aus dem RAG-Kontext (Ticket 22)."""
+    children = list(entry.get("children") or [])
+    missing = _missing_line_suffixes(children, ref, ctx, entry)
+    if not missing:
+        return 0
+
+    known_suffixes: set[int] = set()
+    for ch in children:
+        n = _parse_line_suffix_from_child(ch, ref)
+        if n is not None:
+            known_suffixes.add(n)
+    for label in _extract_line_numbers_from_text(ctx, ref):
+        n = _parse_line_suffix_from_label(label, ref)
+        if n is not None:
+            known_suffixes.add(n)
+
+    filled = 0
+    for n in sorted(missing):
+        label = _line_label_for_ref(ref or "", n)
+        next_suffix = min((s for s in known_suffixes if s > n), default=None)
+        next_label = _line_label_for_ref(ref or "", next_suffix) if next_suffix else None
+        desc = _extract_line_block_from_context(ctx, label, next_label)
+        if not desc:
+            continue
+        children.append({
+            "name": label,
+            "description": desc,
+            "scale_max": 10,
+            "requirement_ref": _store_referenz(label),
+        })
+        known_suffixes.add(n)
+        filled += 1
+
+    if filled:
+        children.sort(
+            key=lambda ch: _parse_line_suffix_from_child(ch, ref) or 9999,
+        )
+        entry["children"] = children
+        _stamp_child_requirement_refs(entry["children"])
+    return filled
+
+
 def _child_duplicates_parent(child: dict[str, Any], parent_desc: str) -> bool:
     cd = (child.get("description") or "").strip()
     pd = (parent_desc or "").strip()
@@ -2991,6 +3168,11 @@ def _enrich_criteria_children_from_requirements(
             hints.append(f"{name}: {dropped} KI-Unterfragen verworfen (nicht im Vorgaben-Kontext)")
         if added > 0:
             hints.append(f"{name}: +{added} Unterfragen (KI/RAG, belegt)")
+        gap_filled = _fill_missing_line_children(entry, ctx, ref)
+        if gap_filled:
+            hints.append(
+                f"{name}: {gap_filled} fehlende Zeile(n) deterministisch aus Kontext ergänzt"
+            )
         _stamp_child_requirement_refs(entry.get("children") or [])
 
     return hints

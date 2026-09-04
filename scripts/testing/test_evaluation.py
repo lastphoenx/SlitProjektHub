@@ -1065,6 +1065,68 @@ def test_criterion_ref_prefix():
     assert _normalize_requirement_ref("W-01") == "W01"
 
 
+def test_missing_line_suffix_detection():
+    from src.m15_evaluation import _missing_line_suffixes
+
+    children = [
+        {"name": "T01-001", "description": "a"},
+        {"name": "T01-002", "description": "b"},
+        {"name": "T01-004", "description": "d"},
+        {"name": "T01-010", "description": "j"},
+    ]
+    ctx = (
+        "T01-001 Erste Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-002 Zweite Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-003 Dritte Anforderung fehlt in der KI-Liste aber steht im Kontext.\n"
+        "T01-004 Vierte Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-010 Zehnte Anforderung mit ausreichend langem Text für den Test."
+    )
+    missing = _missing_line_suffixes(children, "T01", ctx, {"description": ""})
+    assert missing == [3]
+
+
+def test_extract_line_block_from_context():
+    from src.m15_evaluation import _extract_line_block_from_context
+
+    ctx = (
+        "T01-002 Zweite Anforderung mit ausreichend langem Text.\n"
+        "T01-003 Dritte Anforderung: Der Lieferant muss X nachweisen und Y erfüllen.\n"
+        "T01-004 Vierte Anforderung mit ausreichend langem Text."
+    )
+    block = _extract_line_block_from_context(ctx, "T01-003", "T01-004")
+    assert block is not None
+    assert "Dritte Anforderung" in block
+    assert "T01-004" not in block
+
+
+def test_fill_missing_line_children():
+    from src.m15_evaluation import _fill_missing_line_children
+
+    ctx = (
+        "T01-001 Erste Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-002 Zweite Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-003 Dritte Anforderung: Der Lieferant muss X nachweisen und Y erfüllen.\n"
+        "T01-004 Vierte Anforderung mit ausreichend langem Text für den Test."
+    )
+    entry = {
+        "name": "Technische Anforderungen",
+        "requirement_ref": "T01",
+        "description": "",
+        "children": [
+            {"name": "T01-001", "description": "Erste", "scale_max": 10},
+            {"name": "T01-002", "description": "Zweite", "scale_max": 10},
+            {"name": "T01-004", "description": "Vierte", "scale_max": 10},
+        ],
+    }
+    filled = _fill_missing_line_children(entry, ctx, "T01")
+    assert filled == 1
+    names = [c["name"] for c in entry["children"]]
+    assert names == ["T01-001", "T01-002", "T01-003", "T01-004"]
+    t03 = next(c for c in entry["children"] if c["name"] == "T01-003")
+    assert "Dritte Anforderung" in t03["description"]
+    assert t03.get("requirement_ref") == "T01-003"
+
+
 def test_resolve_requirement_search():
     from src.m15_evaluation import _resolve_requirement_search
 
@@ -1242,6 +1304,9 @@ if __name__ == "__main__":
     test_flatten_eignung_payload()
     test_child_belongs_to_parent_ref()
     test_child_grounded_and_line_structure()
+    test_missing_line_suffix_detection()
+    test_extract_line_block_from_context()
+    test_fill_missing_line_children()
     test_resolve_requirement_search()
     test_retrieve_tender_context_respects_max_format_chunks()
     test_evaluation_config_extraction_roundtrip()
