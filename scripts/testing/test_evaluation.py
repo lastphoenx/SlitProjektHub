@@ -698,6 +698,79 @@ def test_build_evaluation_export_includes_justifications():
     auth14.engine = old_auth_engine
 
 
+def test_criterion_ref_prefix():
+    from src.m15_evaluation import _criterion_ref_prefix
+
+    assert _criterion_ref_prefix("F-01") == "F01"
+    assert _criterion_ref_prefix("F01") == "F01"
+    assert _criterion_ref_prefix("T-10") == "T10"
+    assert _criterion_ref_prefix("Preis") is None
+
+
+def test_criteria_editor_payload_and_save():
+    engine, _ = _setup_db()
+    project_key = "p-crit-edit"
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    from src.m15_evaluation import (
+        criteria_editor_payload,
+        create_criterion,
+        list_criteria,
+        save_criteria_editor_payload,
+    )
+
+    parent = create_criterion(
+        project_key, "zuschlag", "F-01", weight_pct=20, scale_max=10, description="Intro"
+    )
+    create_criterion(
+        project_key, "zuschlag", "F01-001", scale_max=10,
+        parent_id=parent.id, description="Alt",
+    )
+
+    payload = criteria_editor_payload(project_key)
+    assert len(payload["zuschlag"]) == 1
+    assert payload["zuschlag"][0]["name"] == "F-01"
+    assert len(payload["zuschlag"][0]["children"]) == 1
+    child_id = payload["zuschlag"][0]["children"][0]["id"]
+    parent_id = payload["zuschlag"][0]["id"]
+
+    payload["zuschlag"][0]["description"] = "Neue Intro"
+    payload["zuschlag"][0]["children"][0]["description"] = "Neuer Text"
+    payload["zuschlag"][0]["children"].append({
+        "name": "F01-002",
+        "description": "Zweite Frage",
+        "scale_max": 10,
+    })
+
+    stats = save_criteria_editor_payload(project_key, payload)
+    assert stats["updated"] >= 2
+    assert stats["created"] >= 1
+
+    again = criteria_editor_payload(project_key)
+    z = again["zuschlag"][0]
+    assert z["description"] == "Neue Intro"
+    assert len(z["children"]) == 2
+    names = {c["name"] for c in z["children"]}
+    assert names == {"F01-001", "F01-002"}
+
+    save_criteria_editor_payload(project_key, again, deleted_ids=[child_id])
+    remaining = list_criteria(project_key)
+    child_names = [c.name for c in remaining if c.parent_id == parent_id]
+    assert "F01-001" not in child_names
+    assert "F01-002" in child_names
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
 def test_compute_price_reciprocal():
     from src.m15_evaluation import compute_price_criterion_value
 
@@ -727,5 +800,7 @@ if __name__ == "__main__":
     test_score_justification_required()
     test_sync_price_criterion_scores_reciprocal_gate()
     test_build_evaluation_export_includes_justifications()
+    test_criterion_ref_prefix()
+    test_criteria_editor_payload_and_save()
     test_compute_price_reciprocal()
     print("OK")

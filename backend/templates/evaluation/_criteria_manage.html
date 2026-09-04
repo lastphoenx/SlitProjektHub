@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Kriterien verwalten — SlitProjektHub{% endblock %}
+{% block topbar_title %}Kriterien verwalten{% endblock %}
+
+{% block content %}
+<div style="max-width:1100px">
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Kriterien verwalten</h1>
+    <p class="page-subtitle">{{ project_title }} — Unterfragen bearbeiten, nachträglich ergänzen</p>
+  </div>
+  <a class="btn btn-secondary" href="/evaluation?project_key={{ project_key }}">← zurück zur Offertbeurteilung</a>
+</div>
+
+{% if request.query_params.get('saved') == '1' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Kriterien gespeichert.</p>
+</div>
+{% endif %}
+
+<div id="criteria-preview-app"
+     data-ranking-labels='{{ ranking_phase_labels | default({}) | tojson }}'
+     data-manage-mode="1">
+
+  <p class="text-muted" style="font-size:.75rem;margin:0 0 .75rem">
+    Top-Level-Kriterien und <strong>Unterfragen</strong> (z.&nbsp;B. F01-001…F01-008 unter F-01) —
+    Änderungen gelten sofort nach «Speichern». In der Matrix werden Unterfragen einzeln bewertet;
+    der Elternwert ist der Mittelwert.
+  </p>
+
+  <div id="criteria-alerts" style="margin-bottom:.75rem"></div>
+  <p id="criteria-counts" class="text-muted" style="font-size:.78rem;margin:0 0 .75rem"></p>
+
+  <form id="criteria-apply-form" method="post" action="/evaluation/criteria-save">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input type="hidden" name="criteria_json" id="criteria-json-hidden" value="" />
+    <input type="hidden" name="deleted_criterion_ids" id="criteria-deleted-ids" value="[]" />
+
+    <div class="card criteria-preview-section" style="margin-bottom:1rem">
+      <div class="criteria-section-header">
+        <h2 style="font-size:.9rem;font-weight:700;margin:0">Eignungskriterien (K.O.)</h2>
+        <button type="button" id="criteria-add-eignung" class="btn btn-secondary btn-sm">+ Kriterium</button>
+      </div>
+      <div class="table-wrap">
+        <table class="criteria-preview-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Anforderung / Beschreibung</th>
+              <th>Typ</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="criteria-eignung-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card criteria-preview-section" style="margin-bottom:1rem">
+      <div class="criteria-section-header">
+        <h2 style="font-size:.9rem;font-weight:700;margin:0">Zuschlagskriterien</h2>
+        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+          <span id="criteria-weight-sum" class="criteria-weight-sum">Summe Gewichtung: —</span>
+          <button type="button" id="criteria-add-zuschlag" class="btn btn-secondary btn-sm">+ Kriterium</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="criteria-preview-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Anforderung / Beschreibung</th>
+              <th>Gewicht %</th>
+              <th>Skala</th>
+              <th>Phase</th>
+              <th title="Punkte aus Preisblatt">Preis</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="criteria-zuschlag-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem">
+      <button type="submit" class="btn btn-primary">Änderungen speichern</button>
+      <a class="btn btn-secondary" href="/evaluation?project_key={{ project_key }}">Abbrechen</a>
+    </div>
+
+    <details style="font-size:.75rem;margin-bottom:1rem">
+      <summary class="text-muted" style="cursor:pointer">JSON anzeigen (Power-User)</summary>
+      <pre id="criteria-json-preview" class="criteria-json-preview"></pre>
+    </details>
+  </form>
+</div>
+
+<script type="application/json" id="criteria-payload-initial">{{ payload | tojson }}</script>
+<script src="/static/eval_criteria_preview.js?v={{ static_v }}"></script>
+
+</div>
+{% endblock %}

@@ -5,9 +5,11 @@
   const root = document.getElementById('criteria-preview-app');
   if (!root) return;
 
+  const manageMode = root.dataset.manageMode === '1';
   const rankingLabels = JSON.parse(root.dataset.rankingLabels || '{}');
   const initialEl = document.getElementById('criteria-payload-initial');
   let state = { eignung: [], zuschlag: [] };
+  let deletedIds = [];
 
   function esc(s) {
     return String(s || '')
@@ -18,11 +20,13 @@
 
   function normEignung(e) {
     return {
+      id: e && e.id != null ? e.id : null,
       name: (e && e.name) || '',
       description: (e && e.description) || '',
       scale_max: 1,
       children: ((e && e.children) || []).map(function (ch) {
         return {
+          id: ch.id != null ? ch.id : null,
           name: ch.name || '',
           description: ch.description || '',
           scale_max: 1,
@@ -33,6 +37,7 @@
 
   function normZuschlag(e) {
     return {
+      id: e && e.id != null ? e.id : null,
       name: (e && e.name) || '',
       description: (e && e.description) || '',
       weight_pct: Number(e && e.weight_pct != null ? e.weight_pct : 0),
@@ -41,6 +46,7 @@
       auto_price: !!(e && e.auto_price),
       children: ((e && e.children) || []).map(function (ch) {
         return {
+          id: ch.id != null ? ch.id : null,
           name: ch.name || '',
           description: ch.description || '',
           scale_max: Number(ch.scale_max != null ? ch.scale_max : 10),
@@ -95,23 +101,26 @@
   }
 
   function toPayload() {
+    function rowId(id) {
+      return id != null ? { id: id } : {};
+    }
     return {
       eignung: state.eignung.map(function (e) {
-        return {
+        return Object.assign(rowId(e.id), {
           name: e.name.trim(),
           description: e.description.trim(),
           scale_max: 1,
           children: (e.children || []).filter(function (ch) { return (ch.name || '').trim(); }).map(function (ch) {
-            return {
+            return Object.assign(rowId(ch.id), {
               name: ch.name.trim(),
               description: ch.description.trim(),
               scale_max: 1,
-            };
+            });
           }),
-        };
+        });
       }).filter(function (e) { return e.name; }),
       zuschlag: state.zuschlag.map(function (z) {
-        return {
+        return Object.assign(rowId(z.id), {
           name: z.name.trim(),
           description: z.description.trim(),
           weight_pct: parseFloat(z.weight_pct) || 0,
@@ -119,13 +128,13 @@
           ranking_phase: parseInt(z.ranking_phase, 10) || 1,
           auto_price: !!z.auto_price,
           children: (z.children || []).filter(function (ch) { return (ch.name || '').trim(); }).map(function (ch) {
-            return {
+            return Object.assign(rowId(ch.id), {
               name: ch.name.trim(),
               description: ch.description.trim(),
               scale_max: parseInt(ch.scale_max, 10) || 10,
-            };
+            });
           }),
-        };
+        });
       }).filter(function (z) { return z.name; }),
     };
   }
@@ -137,7 +146,15 @@
     if (hidden) hidden.value = json;
     const pre = document.getElementById('criteria-json-preview');
     if (pre) pre.textContent = json;
+    const del = document.getElementById('criteria-deleted-ids');
+    if (del) del.value = JSON.stringify(deletedIds);
     return payload;
+  }
+
+  function trackDelete(row) {
+    if (!manageMode || !row || row.id == null) return;
+    const id = parseInt(row.id, 10);
+    if (!isNaN(id) && deletedIds.indexOf(id) < 0) deletedIds.push(id);
   }
 
   function descClass(text) {
@@ -224,7 +241,16 @@
     }
     const counts = document.getElementById('criteria-counts');
     if (counts) {
-      counts.textContent = m.eignung_count + ' Eignungs- und ' + m.zuschlag_count + ' Zuschlagskriterien (bearbeitbar). Bestehende Namen im Projekt werden beim Übernehmen übersprungen.';
+      let childN = 0;
+      state.eignung.forEach(function (r) { childN += (r.children || []).length; });
+      state.zuschlag.forEach(function (r) { childN += (r.children || []).length; });
+      if (manageMode) {
+        counts.textContent = m.eignung_count + ' Eignungs- und ' + m.zuschlag_count
+          + ' Zuschlagskriterien, ' + childN + ' Unterfragen (speichern übernimmt Änderungen).';
+      } else {
+        counts.textContent = m.eignung_count + ' Eignungs- und ' + m.zuschlag_count
+          + ' Zuschlagskriterien (bearbeitbar). Bestehende Namen im Projekt werden beim Übernehmen übersprungen.';
+      }
     }
   }
 
@@ -303,16 +329,28 @@
       const tr = t.closest('tr');
       const kind = tr.dataset.kind;
       const idx = parseInt(tr.dataset.idx, 10);
-      if (kind === 'eignung') state.eignung.splice(idx, 1);
-      else state.zuschlag.splice(idx, 1);
+      if (kind === 'eignung') {
+        trackDelete(state.eignung[idx]);
+        (state.eignung[idx].children || []).forEach(trackDelete);
+        state.eignung.splice(idx, 1);
+      } else {
+        trackDelete(state.zuschlag[idx]);
+        (state.zuschlag[idx].children || []).forEach(trackDelete);
+        state.zuschlag.splice(idx, 1);
+      }
       renderAll();
     } else if (t.classList.contains('criteria-del-child')) {
       readFromDom();
       const tr = t.closest('tr');
       const idx = parseInt(tr.dataset.idx, 10);
       const cidx = parseInt(tr.dataset.cidx, 10);
-      if (tr.dataset.kind === 'eignung') state.eignung[idx].children.splice(cidx, 1);
-      else state.zuschlag[idx].children.splice(cidx, 1);
+      if (tr.dataset.kind === 'eignung') {
+        trackDelete(state.eignung[idx].children[cidx]);
+        state.eignung[idx].children.splice(cidx, 1);
+      } else {
+        trackDelete(state.zuschlag[idx].children[cidx]);
+        state.zuschlag[idx].children.splice(cidx, 1);
+      }
       renderAll();
     } else if (t.classList.contains('criteria-add-child')) {
       readFromDom();
@@ -331,8 +369,9 @@
   if (form) {
     form.addEventListener('submit', function (e) {
       readFromDom();
-      const m = meta();
       syncHidden();
+      if (manageMode) return;
+      const m = meta();
       const confirm = document.getElementById('criteria-confirm-apply');
       if (m.requires_confirm && confirm && !confirm.checked) {
         e.preventDefault();

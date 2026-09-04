@@ -15,6 +15,10 @@
     <div style="flex:1;min-height:0;overflow:auto">
       <div class="card" style="margin-bottom:.75rem;background:var(--color-surface-2)">
         <strong>Kriteriumswert (automatisch): {{ "%.2f"|format(official) if official is not none else "—" }}</strong>
+        <p style="font-size:.72rem;margin:.35rem 0 0">
+          <a href="/evaluation/criteria-manage?project_key={{ project_key }}">Kriterien verwalten</a>
+          — Unterfragen bearbeiten oder ergänzen
+        </p>
       </div>
 
       <div class="table-wrap">

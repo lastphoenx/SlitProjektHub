@@ -44,6 +44,7 @@ from src.m15_evaluation import (
     delete_price_item,
     extract_criteria_from_tender_docs,
     criteria_apply_requires_confirm,
+    criteria_editor_payload,
     criteria_preview_meta,
     extract_price_from_bidder_doc,
     extract_price_structure_from_tender,
@@ -72,6 +73,7 @@ from src.m15_evaluation import (
     resolve_vorgaben_ki,
     rolled_up_score,
     score_requires_justification,
+    save_criteria_editor_payload,
     save_evaluation_config,
     seed_price_structure_for_bidder,
     set_tender_doc_roles,
@@ -346,6 +348,55 @@ async def evaluation_create_criterion(
         ranking_phase=rp,
     )
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
+
+
+@router.get("/evaluation/criteria-manage", response_class=HTMLResponse)
+async def evaluation_criteria_manage_page(request: Request, project_key: str):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    if not project_key:
+        return RedirectResponse(url="/evaluation", status_code=303)
+    payload = criteria_editor_payload(project_key)
+    return templates.TemplateResponse(
+        "evaluation/_criteria_manage.html",
+        {
+            "request": request,
+            "project_key": project_key,
+            "project_title": _project_title(project_key),
+            "payload": payload,
+            "ranking_phase_labels": RANKING_PHASE_LABELS,
+            "ranking_phases": RANKING_PHASES,
+        },
+    )
+
+
+@router.post("/evaluation/criteria-save", response_class=HTMLResponse)
+async def evaluation_criteria_save(
+    request: Request,
+    project_key: str = Form(...),
+    criteria_json: str = Form(...),
+    deleted_criterion_ids: str = Form("[]"),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    try:
+        data = json.loads(criteria_json or "{}")
+    except json.JSONDecodeError:
+        return RedirectResponse(
+            url=f"/evaluation/criteria-manage?project_key={project_key}&error=invalid",
+            status_code=303,
+        )
+    try:
+        deleted = json.loads(deleted_criterion_ids or "[]")
+        if not isinstance(deleted, list):
+            deleted = []
+    except json.JSONDecodeError:
+        deleted = []
+    save_criteria_editor_payload(project_key, data, deleted_ids=deleted)
+    return RedirectResponse(
+        url=f"/evaluation/criteria-manage?project_key={project_key}&saved=1",
+        status_code=303,
+    )
 
 
 @router.post("/evaluation/criterion-phase", response_class=HTMLResponse)
