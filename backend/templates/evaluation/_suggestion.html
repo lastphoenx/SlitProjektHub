@@ -11,9 +11,15 @@
   {% if suggestion.value is not none %}
   <p style="margin:.35rem 0 0">Wert: <strong>{{ suggestion.value }}</strong></p>
 
+  {% if suggestion.justification_warning %}
+  <div class="card" style="margin:.5rem 0;padding:.45rem .55rem;border-color:#fbbf24;background:rgba(245,158,11,.08)">
+    <p style="font-size:.78rem;margin:0;color:#fcd34d">⚠ {{ suggestion.justification_warning }}</p>
+  </div>
+  {% endif %}
+
   <p class="eval-ki-suggestion-label">Begründung (warum diese Punktzahl)</p>
   {% if suggestion.justification %}
-  <p class="eval-ki-suggestion-text">{{ suggestion.justification }}</p>
+  <p class="eval-ki-suggestion-text" style="white-space:pre-wrap">{{ suggestion.justification }}</p>
   {% else %}
   <p class="text-muted" style="font-size:.82rem;margin:0">Keine Begründung vom Modell geliefert.</p>
   {% endif %}
