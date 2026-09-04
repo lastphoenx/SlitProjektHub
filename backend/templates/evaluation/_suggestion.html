@@ -1,4 +1,4 @@
-<div class="card" style="margin-top:.5rem;background:var(--color-surface-2)">
+<div class="card eval-ki-suggestion" style="margin-top:.5rem;background:var(--color-surface-2)">
   {% if gate_error == 'cloud_confirm' %}
   <strong>Cloud-Bestätigung erforderlich</strong>
   <p style="font-size:.85rem;margin:.4rem 0 0">
@@ -9,12 +9,31 @@
   {% else %}
   <strong>🤖 KI-Vorschlag</strong>
   {% if suggestion.value is not none %}
-  <p>Wert: <strong>{{ suggestion.value }}</strong></p>
-  <p style="font-size:.85rem">{{ suggestion.justification }}</p>
-  {% if suggestion.source_chunk_ref %}
-  <p style="font-size:.8rem;color:var(--color-text-muted)">{{ suggestion.source_chunk_ref[:400] }}</p>
+  <p style="margin:.35rem 0 0">Wert: <strong>{{ suggestion.value }}</strong></p>
+
+  <p class="eval-ki-suggestion-label">Begründung (warum diese Punktzahl)</p>
+  {% if suggestion.justification %}
+  <p class="eval-ki-suggestion-text">{{ suggestion.justification }}</p>
+  {% else %}
+  <p class="text-muted" style="font-size:.82rem;margin:0">Keine Begründung vom Modell geliefert.</p>
   {% endif %}
-  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
+
+  {% if suggestion.source_chunk_ref %}
+  <p class="eval-ki-suggestion-label">Angebotszitat (RAG-Quelle)</p>
+  <div class="eval-ki-suggestion-quote">
+    {% if suggestion.source_chunk_ref.startswith('chunk:') %}
+      {% set chunk_parts = suggestion.source_chunk_ref.split(' | ', 1) %}
+      <span class="badge badge-neutral eval-ki-suggestion-chunk-id">{{ chunk_parts[0] }}</span>
+      {% if chunk_parts|length > 1 %}
+      <div>{{ chunk_parts[1] }}</div>
+      {% endif %}
+    {% else %}
+      {{ suggestion.source_chunk_ref }}
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.65rem">
     <form method="post" action="/evaluation/score/ai" hx-post="/evaluation/score/ai" hx-target="#modal-slot" hx-swap="innerHTML">
       <input type="hidden" name="project_key" value="{{ project_key }}" />
       <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
@@ -34,7 +53,7 @@
       <button type="submit" class="btn btn-primary btn-sm">Als meine Bewertung übernehmen</button>
     </form>
   </div>
-  <p class="text-muted" style="font-size:.75rem;margin-top:.4rem">"Nur als KI-Vorschlag" bleibt als eigene Spalte sichtbar, ohne dir zugeschrieben zu sein. "Als meine Bewertung" zählt in deinen Ø-Wert.</p>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.4rem">«Nur als KI-Vorschlag» bleibt als eigene Spalte sichtbar, ohne dir zugeschrieben zu sein. «Als meine Bewertung» zählt in deinen Ø-Wert.</p>
   {% else %}
   <p class="text-muted">Kein Vorschlag — bitte manuell bewerten.</p>
   {% endif %}

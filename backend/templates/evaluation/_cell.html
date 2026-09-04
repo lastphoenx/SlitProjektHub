@@ -31,7 +31,23 @@
             <tr style="background:var(--color-surface-2)">
               <td>🤖 KI-Vorschlag</td>
               <td>{{ ("Ja" if ai_row.value == 1 else "Nein") if criterion.scale_max == 1 else ai_row.value }}</td>
-              <td style="font-size:.8rem">{{ ai_row.justification or "" }}{% if ai_row.source_chunk_ref %}<br><span class="text-muted">{{ ai_row.source_chunk_ref[:200] }}</span>{% endif %}</td>
+              <td style="font-size:.8rem">
+                {% if ai_row.justification %}
+                <div>{{ ai_row.justification }}</div>
+                {% endif %}
+                {% if ai_row.source_chunk_ref %}
+                <div class="eval-ki-suggestion-quote" style="margin-top:.35rem;max-height:6rem">
+                  {% if ai_row.source_chunk_ref.startswith('chunk:') %}
+                    {% set chunk_parts = ai_row.source_chunk_ref.split(' | ', 1) %}
+                    <span class="badge badge-neutral eval-ki-suggestion-chunk-id">{{ chunk_parts[0] }}</span>
+                    {% if chunk_parts|length > 1 %}<div>{{ chunk_parts[1] }}</div>{% endif %}
+                  {% else %}
+                    {{ ai_row.source_chunk_ref }}
+                  {% endif %}
+                </div>
+                {% endif %}
+                {% if not ai_row.justification and not ai_row.source_chunk_ref %}—{% endif %}
+              </td>
             </tr>
             {% endif %}
             {% for sc in user_rows %}

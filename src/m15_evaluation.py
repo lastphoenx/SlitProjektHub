@@ -2144,8 +2144,8 @@ def suggest_score_with_rag(
         f"{VERGABE_SYSTEM_RULES}\n"
         "Du bist Vergabesachverständiger. Vergleiche Ausschreibungs-Vorgaben mit dem Angebot "
         "des Bieters und bewerte ein Kriterium. "
-        "Antwort NUR als JSON mit keys: value (Zahl 0 bis scale_max), justification (kurz), "
-        "source_quote (Zitat aus dem Angebot), source_chunk_id (Zahl oder null)."
+        "Antwort NUR als JSON mit keys: value (Zahl 0 bis scale_max), justification (kurze Bewertungsbegründung — warum diese Punktzahl, nicht das Angebotszitat wiederholen), "
+        "source_quote (ein wörtliches Zitat aus dem Angebot als Beleg), source_chunk_id (Zahl oder null)."
     )
     if cfg.get("vergabe_notes"):
         system += f"\nProjekt-Hinweise: {cfg['vergabe_notes']}"
@@ -2162,7 +2162,7 @@ def suggest_score_with_rag(
         provider,
         system,
         messages,
-        max_tokens=800,
+        max_tokens=1200,
         temperature=0.2,
         model=model,
     )
@@ -2189,9 +2189,9 @@ def suggest_score_with_rag(
     if chunk_id:
         chunk_ref = f"chunk:{chunk_id}"
         if quote:
-            chunk_ref += f" | {quote[:500]}"
+            chunk_ref += f" | {quote[:1200]}"
     elif quote:
-        chunk_ref = quote[:500]
+        chunk_ref = quote[:1200]
 
     return {
         "value": value_f,
