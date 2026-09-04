@@ -101,6 +101,14 @@ RANKING_PHASE_LABELS = {
     2: "Präsentation (Phase 2)",
 }
 
+# Preis-Punkte: reciprocal = max × (günstigstes / Angebot) — Unisport-Vorgabe
+PRICE_FORMULAS = ("reciprocal", "linear_minmax")
+PRICE_FORMULA_LABELS = {
+    "reciprocal": "Reziprok: max × (günstigstes Angebot / dieses Angebot)",
+    "linear_minmax": "Linear: günstig = max, teuer = 0",
+}
+DEFAULT_PRICE_FORMULA = "reciprocal"
+
 
 class EvaluationProjectConfig(SQLModel, table=True):
     """Projekt-spezifische Offertbeurteilungs-Einstellungen."""
@@ -112,6 +120,10 @@ class EvaluationProjectConfig(SQLModel, table=True):
     )
     vergabe_notes: Optional[str] = Field(default=None, sa_column=Column(String))
     rag_chunks_per_role: int = Field(default=12, sa_column=Column(Integer, nullable=False, default=12))
+    price_formula: str = Field(
+        default=DEFAULT_PRICE_FORMULA,
+        sa_column=Column(String(20), nullable=False, default=DEFAULT_PRICE_FORMULA),
+    )
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -727,6 +739,7 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
             "price_years": list(DEFAULT_PRICE_YEARS),
             "vergabe_notes": "",
             "rag_chunks_per_role": 12,
+            "price_formula": DEFAULT_PRICE_FORMULA,
         }
     try:
         years = json.loads(row.price_years_json or "[]")
@@ -735,10 +748,14 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
         years = list(DEFAULT_PRICE_YEARS)
     if not years:
         years = list(DEFAULT_PRICE_YEARS)
+    formula = (row.price_formula or DEFAULT_PRICE_FORMULA).strip().lower()
+    if formula not in PRICE_FORMULAS:
+        formula = DEFAULT_PRICE_FORMULA
     return {
         "price_years": years,
         "vergabe_notes": (row.vergabe_notes or "").strip(),
         "rag_chunks_per_role": max(4, min(24, int(row.rag_chunks_per_role or 12))),
+        "price_formula": formula,
     }
 
 
@@ -748,6 +765,7 @@ def save_evaluation_config(
     price_years: list[int] | None = None,
     vergabe_notes: str | None = None,
     rag_chunks_per_role: int | None = None,
+    price_formula: str | None = None,
 ) -> None:
     cfg = get_evaluation_config(project_key)
     if price_years is not None:
@@ -756,6 +774,9 @@ def save_evaluation_config(
         cfg["vergabe_notes"] = vergabe_notes.strip()
     if rag_chunks_per_role is not None:
         cfg["rag_chunks_per_role"] = max(4, min(24, int(rag_chunks_per_role)))
+    if price_formula is not None:
+        pf = (price_formula or "").strip().lower()
+        cfg["price_formula"] = pf if pf in PRICE_FORMULAS else DEFAULT_PRICE_FORMULA
     with get_session() as session:
         row = session.get(EvaluationProjectConfig, project_key)
         if not row:
@@ -763,6 +784,7 @@ def save_evaluation_config(
         row.price_years_json = json.dumps(cfg["price_years"])
         row.vergabe_notes = cfg["vergabe_notes"] or None
         row.rag_chunks_per_role = cfg["rag_chunks_per_role"]
+        row.price_formula = cfg.get("price_formula", DEFAULT_PRICE_FORMULA)
         row.updated_at = _now()
         session.add(row)
         session.commit()
@@ -1034,14 +1056,39 @@ def compute_bidder_tco(bidder_id: int) -> dict[str, Any]:
     }
 
 
+def compute_price_criterion_value(
+    scale_max: int,
+    cheapest: float,
+    total: float,
+    *,
+    priciest: float | None = None,
+    formula: str = DEFAULT_PRICE_FORMULA,
+) -> float:
+    """
+    Preis-Punkte nach Projekt-Formel.
+    reciprocal: Punkte = max × (günstigstes Angebot / zu bewertendes Angebot)
+    linear_minmax: günstigstes = max, teuerstes = 0, dazwischen linear
+    """
+    scale_max = max(1, int(scale_max))
+    if total <= 0 or cheapest <= 0:
+        return 0.0
+    pf = (formula or DEFAULT_PRICE_FORMULA).strip().lower()
+    if pf == "linear_minmax" and priciest is not None and priciest > cheapest:
+        value = scale_max * (priciest - total) / (priciest - cheapest)
+    else:
+        value = scale_max * (cheapest / total)
+    return max(0.0, min(float(scale_max), round(value, 3)))
+
+
 def sync_price_criterion_scores(project_key: str) -> dict[str, Any]:
     """
     Schreibt für jedes auto_price-Kriterium den "system"-Score neu — nur wenn alle Bieter
-    ein Preisblatt haben. Formel (BöB/IVöB üblich): günstigstes Angebot = volle Punktzahl,
-    teuerstes = 0, dazwischen linear.
+    ein vollständiges Preisblatt haben.
     """
     criteria = [c for c in list_criteria(project_key) if c.auto_price]
     status = price_offers_status(project_key)
+    cfg = get_evaluation_config(project_key)
+    formula = cfg.get("price_formula", DEFAULT_PRICE_FORMULA)
     if not criteria:
         return {"synced": False, "reason": "no_auto_price_criterion", **status}
     if not status["ready"]:
@@ -1058,24 +1105,31 @@ def sync_price_criterion_scores(project_key: str) -> dict[str, Any]:
         scale_max = max(1, crit.scale_max)
         for bidder in bidders:
             total = totals[bidder.id]
-            if priciest > cheapest:
-                value = round(scale_max * (priciest - total) / (priciest - cheapest), 3)
+            value = compute_price_criterion_value(
+                scale_max, cheapest, total, priciest=priciest, formula=formula,
+            )
+            if formula == "linear_minmax":
+                formula_note = (
+                    f"linear min–max: günstigst CHF {cheapest:,.2f} → {scale_max} Pkt., "
+                    f"teuerst CHF {priciest:,.2f} → 0 Pkt."
+                )
             else:
-                value = float(scale_max)
-            value = max(0.0, min(float(scale_max), value))
+                formula_note = (
+                    f"reziprok: Punkte = {scale_max} × (günstigstes CHF {cheapest:,.2f} / "
+                    f"dieses CHF {total:,.2f})"
+                )
             upsert_score(
                 bidder.id,
                 crit.id,
                 evaluator_user_id=0,
                 value=value,
                 justification=(
-                    f"Automatisch (alle {len(bidders)} Offerten): "
-                    f"günstigstes TCO CHF {cheapest:,.2f}, teuerstes CHF {priciest:,.2f}, "
-                    f"dieses TCO CHF {total:,.2f} → {value:.2f}/{scale_max} Punkte."
+                    f"Automatisch (alle {len(bidders)} Offerten). {formula_note} "
+                    f"→ {value:.2f}/{scale_max} Punkte."
                 ),
                 as_source="system",
             )
-    return {"synced": True, "reason": None, **status}
+    return {"synced": True, "reason": None, "price_formula": formula, **status}
 
 
 # ── Rangfolge ───────────────────────────────────────────────────────────────
@@ -1766,6 +1820,124 @@ def merge_price_structure_for_bidder(bidder_id: int, structure: dict[str, Any]) 
     return {"created": created, "updated": updated}
 
 
+def _export_score_columns(
+    cell: list[Score],
+    evaluator_ids: list[int],
+) -> list[Any]:
+    """KI + Bewerter-Wert/Begründung-Spalten für Export."""
+    ai_row = next((s for s in cell if s.source_key == "ai"), None)
+    sys_row = next((s for s in cell if s.source_key == "system"), None)
+    by_uid = {s.evaluator_user_id: s for s in cell if s.source_key.startswith("user:")}
+    cols: list[Any] = [
+        ai_row.value if ai_row else "",
+        (ai_row.justification or "") if ai_row else "",
+        (ai_row.source_chunk_ref or "") if ai_row else "",
+    ]
+    for uid in evaluator_ids:
+        sc = by_uid.get(uid)
+        cols.extend([sc.value if sc else "", (sc.justification or "") if sc else ""])
+    cols.extend([
+        sys_row.value if sys_row else "",
+        (sys_row.justification or "") if sys_row else "",
+    ])
+    return cols
+
+
+def build_evaluation_export_sheets(
+    project_key: str,
+    *,
+    project_title: str = "",
+    may_see_evaluators: bool = True,
+) -> dict[str, tuple[list[str], list[list]]]:
+    """
+    Export-Daten für CSV/XLSX: Top-Level «Bewertungen» + «Einzelanforderungen» (Unterfragen).
+    Begründungen spaltenweise pro Bewerter (analog Werte), plus KI und System (Preis).
+    """
+    from .m14_auth import get_username_by_id
+
+    bidders = list_bidders(project_key)
+    all_criteria = list_criteria(project_key)
+    top_criteria = [c for c in all_criteria if c.parent_id is None]
+    child_criteria = [c for c in all_criteria if c.parent_id is not None]
+    parent_names = {c.id: c.name for c in all_criteria}
+    scores = list_scores_for_project(project_key)
+    scores_by_cell: dict[tuple[int, int], list[Score]] = {}
+    for s in scores:
+        scores_by_cell.setdefault((s.bidder_id, s.criterion_id), []).append(s)
+    rankings = {r["bidder_id"]: r for r in compute_rankings(project_key)}
+
+    evaluator_ids: list[int] = []
+    if may_see_evaluators:
+        seen: set[int] = set()
+        for s in scores:
+            if s.source_key.startswith("user:") and s.evaluator_user_id not in seen:
+                seen.add(s.evaluator_user_id)
+                evaluator_ids.append(s.evaluator_user_id)
+        evaluator_ids.sort()
+    evaluator_names = {uid: (get_username_by_id(uid) or f"User {uid}") for uid in evaluator_ids}
+
+    main_headers = [
+        "Projekt", "Bieter", "Kriterium", "Art", "Gewicht %", "Skala",
+        "KI-Wert", "KI-Begründung", "KI-Quelle",
+    ]
+    for uid in evaluator_ids:
+        name = evaluator_names[uid]
+        main_headers.extend([f"Bewerter: {name}", f"Begründung: {name}"])
+    main_headers += ["System-Wert", "System-Begründung", "Ø / Offiziell", "Rang", "Gesamt %"]
+
+    main_rows: list[list] = []
+    for crit in top_criteria:
+        for bidder in bidders:
+            cell = scores_by_cell.get((bidder.id, crit.id), [])
+            rank_row = rankings.get(bidder.id, {})
+            row = [
+                project_title,
+                bidder.name,
+                crit.name,
+                crit.kind,
+                crit.weight_pct if crit.kind == "zuschlag" else "",
+                crit.scale_max,
+            ]
+            row.extend(_export_score_columns(cell, evaluator_ids))
+            row += [
+                official_score(bidder.id, crit, cell),
+                rank_row.get("rank"),
+                rank_row.get("total_score"),
+            ]
+            main_rows.append(row)
+
+    detail_headers = [
+        "Projekt", "Bieter", "Übergeordnetes Kriterium", "Anforderung", "Art", "Skala",
+        "KI-Wert", "KI-Begründung", "KI-Quelle",
+    ]
+    for uid in evaluator_ids:
+        name = evaluator_names[uid]
+        detail_headers.extend([f"Bewerter: {name}", f"Begründung: {name}"])
+    detail_headers += ["System-Wert", "System-Begründung", "Offiziell"]
+
+    detail_rows: list[list] = []
+    for crit in child_criteria:
+        parent_name = parent_names.get(crit.parent_id or 0, "")
+        for bidder in bidders:
+            cell = scores_by_cell.get((bidder.id, crit.id), [])
+            row = [
+                project_title,
+                bidder.name,
+                parent_name,
+                crit.name,
+                crit.kind,
+                crit.scale_max,
+            ]
+            row.extend(_export_score_columns(cell, evaluator_ids))
+            row.append(official_score(bidder.id, crit, cell))
+            detail_rows.append(row)
+
+    return {
+        "Bewertungen": (main_headers, main_rows),
+        "Einzelanforderungen": (detail_headers, detail_rows),
+    }
+
+
 def migrate_evaluation_db() -> None:
     """Leichte SQLite-Migrationen für Evaluation-Tabellen."""
     with engine.begin() as conn:
@@ -1821,4 +1993,14 @@ def migrate_evaluation_db() -> None:
             conn.execute(text("CREATE INDEX ix_score_criterion_id ON score (criterion_id)"))
             conn.execute(text("CREATE INDEX ix_score_source_key ON score (source_key)"))
             conn.execute(text("CREATE INDEX ix_score_evaluator_user_id ON score (evaluator_user_id)"))
+
+        if "evaluation_project_config" in tables:
+            cfg_cols = {
+                r[1] for r in conn.execute(text("PRAGMA table_info(evaluation_project_config)")).fetchall()
+            }
+            if "price_formula" not in cfg_cols:
+                conn.execute(text(
+                    "ALTER TABLE evaluation_project_config "
+                    f"ADD COLUMN price_formula VARCHAR(20) NOT NULL DEFAULT '{DEFAULT_PRICE_FORMULA}'"
+                ))
         # zukünftige Spalten hier ergänzen

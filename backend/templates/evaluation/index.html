@@ -129,6 +129,16 @@
         <textarea class="form-input" name="vergabe_notes" rows="2">{{ eval_config.vergabe_notes }}</textarea>
       </div>
       <div>
+        <label class="form-label" style="font-size:.72rem">Preis-Punkte-Formel</label>
+        <select class="form-select" name="price_formula">
+          {% for pf in price_formulas %}
+          <option value="{{ pf }}" {% if eval_config.price_formula == pf %}selected{% endif %}>
+            {{ price_formula_labels[pf] }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
         <label class="form-label" style="font-size:.72rem">RAG-Chunks pro Rollen-Pass (4–24)</label>
         <input class="form-input" type="number" name="rag_chunks_per_role" min="4" max="24"
                value="{{ eval_config.rag_chunks_per_role }}" style="width:6rem" />
@@ -536,7 +546,7 @@
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Export</h2>
   <a class="btn btn-secondary" href="/evaluation/export.csv?project_key={{ project_key }}">CSV</a>
   <a class="btn btn-secondary" href="/evaluation/export.xlsx?project_key={{ project_key }}" style="margin-left:.5rem">Excel</a>
-  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Export enthält je eine Spalte pro Bewerter (falls deine Rolle das sehen darf) plus KI-Vorschlag und offiziellen Wert nebeneinander.</p>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Export enthält Werte und Begründungen je Bewerter (sowie KI/System), plus Blatt «Einzelanforderungen» für Unterfragen.</p>
 </div>
 
 <div id="modal-slot"></div>
