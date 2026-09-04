@@ -445,6 +445,110 @@ def rolled_up_score(
     return round(sum(answered) / len(answered), 3), len(answered), len(children)
 
 
+def score_requires_justification(criterion: Criterion, value: float) -> bool:
+    """Begründungspflicht: Eignung nicht erfüllt oder Zuschlag unter Maximalpunktzahl."""
+    if criterion.auto_price:
+        return False
+    scale_max = max(1, criterion.scale_max)
+    val = float(value)
+    if criterion.kind == "eignung":
+        return not _eignung_pass(val, scale_max)
+    if criterion.kind == "zuschlag":
+        return val < scale_max - 1e-6
+    return False
+
+
+def validate_score_justification(
+    criterion: Criterion,
+    value: float,
+    justification: str | None,
+    *,
+    as_source: str | None = None,
+) -> None:
+    """Wirft ValueError wenn Pflicht-Begründung fehlt (nur menschliche Bewertungen)."""
+    if as_source in ("ai", "system"):
+        return
+    if score_requires_justification(criterion, value) and not (justification or "").strip():
+        if criterion.kind == "eignung":
+            raise ValueError(
+                f"«{criterion.name}»: Begründung erforderlich — Kriterium nicht erfüllt (Ausschluss)."
+            )
+        raise ValueError(
+            f"«{criterion.name}»: Begründung erforderlich — Abzug von der Maximalpunktzahl "
+            f"({value} / {criterion.scale_max})."
+        )
+
+
+def list_missing_justifications(project_key: str) -> list[dict[str, Any]]:
+    """Offene Begründungspflichten (menschl. Bewertungen, inkl. Unterfragen)."""
+    bidders = {b.id: b for b in list_bidders(project_key)}
+    criteria = {c.id: c for c in list_criteria(project_key)}
+    missing: list[dict[str, Any]] = []
+    for score in list_scores_for_project(project_key):
+        if not score.source_key.startswith("user:"):
+            continue
+        crit = criteria.get(score.criterion_id)
+        bidder = bidders.get(score.bidder_id)
+        if not crit or not bidder:
+            continue
+        if score_requires_justification(crit, score.value) and not (score.justification or "").strip():
+            missing.append(
+                {
+                    "bidder_id": bidder.id,
+                    "bidder_name": bidder.name,
+                    "criterion_id": crit.id,
+                    "criterion_name": crit.name,
+                    "parent_id": crit.parent_id,
+                    "kind": crit.kind,
+                    "value": score.value,
+                    "scale_max": crit.scale_max,
+                }
+            )
+    return missing
+
+
+def price_offers_status(project_key: str) -> dict[str, Any]:
+    """
+    Preis-Punkte erst wenn alle Bieter ein vollständiges Preisblatt (TCO > 0) haben.
+  """
+    bidders = list_bidders(project_key)
+    totals: dict[int, float] = {}
+    missing: list[str] = []
+    for b in bidders:
+        tco = compute_bidder_tco(b.id)["total_inkl_mwst"]
+        totals[b.id] = tco
+        if not tco or tco <= 0:
+            missing.append(b.name)
+    ready = bool(bidders) and not missing
+    priced = [t for t in totals.values() if t and t > 0]
+    return {
+        "ready": ready,
+        "missing_bidders": missing,
+        "bidder_count": len(bidders),
+        "priced_count": len(priced),
+        "totals": totals,
+        "cheapest": min(priced) if priced else None,
+        "priciest": max(priced) if priced else None,
+    }
+
+
+def clear_price_system_scores(project_key: str) -> None:
+    """Entfernt automatische Preis-Scores (z. B. wenn nicht alle Offerten da sind)."""
+    crit_ids = [c.id for c in list_criteria(project_key) if c.auto_price]
+    if not crit_ids:
+        return
+    with get_session() as session:
+        rows = session.exec(
+            select(Score).where(
+                Score.criterion_id.in_(crit_ids),
+                Score.source_key == "system",
+            )
+        ).all()
+        for row in rows:
+            session.delete(row)
+        session.commit()
+
+
 def upsert_score(
     bidder_id: int,
     criterion_id: int,
@@ -472,6 +576,8 @@ def upsert_score(
         value = float(value)
         if value < 0 or value > scale_max:
             raise ValueError(f"Wert muss zwischen 0 und {scale_max} liegen")
+
+        validate_score_justification(crit, value, justification, as_source=as_source)
 
         source_key = as_source if as_source in ("ai", "system") else _user_source_key(evaluator_user_id)
 
@@ -928,39 +1034,48 @@ def compute_bidder_tco(bidder_id: int) -> dict[str, Any]:
     }
 
 
-def sync_price_criterion_scores(project_key: str) -> None:
+def sync_price_criterion_scores(project_key: str) -> dict[str, Any]:
     """
-    Schreibt für jedes auto_price-Kriterium den "system"-Score neu: linear zum
-    günstigsten Angebot (günstigstes TCO = volle Punktzahl). Aufrufen, wann immer
-    sich ein Preisblatt geändert hat.
+    Schreibt für jedes auto_price-Kriterium den "system"-Score neu — nur wenn alle Bieter
+    ein Preisblatt haben. Formel (BöB/IVöB üblich): günstigstes Angebot = volle Punktzahl,
+    teuerstes = 0, dazwischen linear.
     """
     criteria = [c for c in list_criteria(project_key) if c.auto_price]
+    status = price_offers_status(project_key)
     if not criteria:
-        return
+        return {"synced": False, "reason": "no_auto_price_criterion", **status}
+    if not status["ready"]:
+        clear_price_system_scores(project_key)
+        return {"synced": False, "reason": "incomplete_offers", **status}
+
     bidders = list_bidders(project_key)
-    if not bidders:
-        return
-    totals = {b.id: compute_bidder_tco(b.id)["total_inkl_mwst"] for b in bidders}
-    priced = {bid: t for bid, t in totals.items() if t and t > 0}
-    if not priced:
-        return
-    cheapest = min(priced.values())
+    totals = status["totals"]
+    cheapest = status["cheapest"]
+    priciest = status["priciest"]
+    assert cheapest is not None and priciest is not None
+
     for crit in criteria:
         scale_max = max(1, crit.scale_max)
         for bidder in bidders:
-            total = totals.get(bidder.id) or 0.0
-            if total <= 0:
-                continue
-            value = round(scale_max * (cheapest / total), 3)
+            total = totals[bidder.id]
+            if priciest > cheapest:
+                value = round(scale_max * (priciest - total) / (priciest - cheapest), 3)
+            else:
+                value = float(scale_max)
             value = max(0.0, min(float(scale_max), value))
             upsert_score(
                 bidder.id,
                 crit.id,
                 evaluator_user_id=0,
                 value=value,
-                justification=f"Automatisch: günstigstes TCO CHF {cheapest:,.2f} / dieses TCO CHF {total:,.2f}",
+                justification=(
+                    f"Automatisch (alle {len(bidders)} Offerten): "
+                    f"günstigstes TCO CHF {cheapest:,.2f}, teuerstes CHF {priciest:,.2f}, "
+                    f"dieses TCO CHF {total:,.2f} → {value:.2f}/{scale_max} Punkte."
+                ),
                 as_source="system",
             )
+    return {"synced": True, "reason": None, **status}
 
 
 # ── Rangfolge ───────────────────────────────────────────────────────────────

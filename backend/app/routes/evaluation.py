@@ -52,6 +52,7 @@ from src.m15_evaluation import (
     link_tender_doc,
     list_bidders,
     list_criteria,
+    list_missing_justifications,
     list_price_items,
     list_scores_for_cell,
     list_scores_for_project,
@@ -59,8 +60,10 @@ from src.m15_evaluation import (
     merge_price_structure_for_bidder,
     normalize_chunk_size,
     official_score,
+    price_offers_status,
     recommended_chunk_size,
     rolled_up_score,
+    score_requires_justification,
     save_evaluation_config,
     seed_price_structure_for_bidder,
     soft_delete_bidder,
@@ -250,6 +253,8 @@ async def evaluation_page(request: Request, project_key: str = ""):
         ) if project_key else False,
         "ranking_phase_labels": RANKING_PHASE_LABELS,
         "ranking_phases": RANKING_PHASES,
+        "missing_justifications": list_missing_justifications(project_key) if project_key else [],
+        "price_offers_status": price_offers_status(project_key) if project_key else {},
         "angebot_class": ANGEbot_CLASSIFICATION,
         "angebot_subtypes": ANGEbot_SUBTYPES,
         "may_evaluate": can_evaluate(who),
@@ -346,14 +351,25 @@ async def evaluation_save_score(
         if not is_super_user(who):
             raise HTTPException(403, "Nur Super-User dürfen fremde Bewertungen ändern")
         write_uid = int(target_user_id)
-    upsert_score(
-        bidder_id,
-        criterion_id,
-        write_uid,
-        value,
-        justification=justification or None,
-        source_chunk_ref=source_chunk_ref or None,
-    )
+    try:
+        upsert_score(
+            bidder_id,
+            criterion_id,
+            write_uid,
+            value,
+            justification=justification or None,
+            source_chunk_ref=source_chunk_ref or None,
+        )
+    except ValueError as exc:
+        if request.headers.get("hx-request"):
+            return await evaluation_cell(
+                request,
+                bidder_id=bidder_id,
+                criterion_id=criterion_id,
+                project_key=project_key,
+                score_error=str(exc),
+            )
+        raise HTTPException(400, str(exc)) from exc
     if request.headers.get("hx-request"):
         return await evaluation_cell(request, bidder_id=bidder_id, criterion_id=criterion_id, project_key=project_key)
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
@@ -389,7 +405,13 @@ async def evaluation_save_ai_score(
 
 
 @router.get("/evaluation/cell", response_class=HTMLResponse)
-async def evaluation_cell(request: Request, bidder_id: int, criterion_id: int, project_key: str = ""):
+async def evaluation_cell(
+    request: Request,
+    bidder_id: int,
+    criterion_id: int,
+    project_key: str = "",
+    score_error: str = "",
+):
     """Detail-Panel einer Matrix-Zelle: KI-Vorschlag + jede Bewerter-Zeile einzeln,
     plus Formular fuer die eigene Bewertung. Das ist die 'mehrere Spalten'-Ansicht."""
     from src.m15_evaluation import Criterion, Bidder
@@ -458,6 +480,8 @@ async def evaluation_cell(request: Request, bidder_id: int, criterion_id: int, p
         "super_user": is_super_user(who),
         "my_user_id": uid,
         "has_bidder_docs": bool(get_bidder_document_ids(bidder_id)),
+        "score_error": score_error,
+        "requires_justification": score_requires_justification,
     }
     ctx.update(_llm_picker_context())
     return templates.TemplateResponse("evaluation/_cell.html", ctx)
@@ -793,6 +817,7 @@ async def evaluation_price_page(request: Request, project_key: str, bidder_id: i
     ) if project_key else False
     has_bidder_preisblatt = bool(get_bidder_preisblatt_doc_ids(bidder_id)) if bidder_id else False
     eval_config = get_evaluation_config(project_key) if project_key else {}
+    price_status = price_offers_status(project_key) if project_key else {}
     price_page_ctx = {
             "request": request,
             "project_key": project_key,
@@ -808,6 +833,7 @@ async def evaluation_price_page(request: Request, project_key: str, bidder_id: i
             "price_message": request.query_params.get("price_msg"),
             "eval_config": eval_config,
             "price_years": eval_config.get("price_years", []),
+            "price_offers_status": price_status,
     }
     return templates.TemplateResponse("evaluation/_price.html", price_page_ctx)
 
@@ -841,8 +867,14 @@ async def evaluation_save_price_item(
         referenz=referenz or None,
         bemerkung=bemerkung or None,
     )
-    sync_price_criterion_scores(project_key)
-    return RedirectResponse(url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}", status_code=303)
+    sync_result = sync_price_criterion_scores(project_key)
+    extra = ""
+    if not sync_result.get("synced"):
+        extra = "&price_msg=offers_incomplete"
+    return RedirectResponse(
+        url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}{extra}",
+        status_code=303,
+    )
 
 
 @router.post("/evaluation/price-item/delete", response_class=HTMLResponse)
@@ -852,8 +884,14 @@ async def evaluation_delete_price_item(
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
     delete_price_item(item_id)
-    sync_price_criterion_scores(project_key)
-    return RedirectResponse(url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}", status_code=303)
+    sync_result = sync_price_criterion_scores(project_key)
+    extra = ""
+    if not sync_result.get("synced"):
+        extra = "&price_msg=offers_incomplete"
+    return RedirectResponse(
+        url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}{extra}",
+        status_code=303,
+    )
 
 
 @router.post("/evaluation/price-template/seed", response_class=HTMLResponse)
@@ -885,8 +923,10 @@ async def evaluation_price_template_seed(
         stats = seed_price_structure_for_bidder(
             bidder_id, extracted.get("structure") or {}, only_if_empty=True
         )
-        sync_price_criterion_scores(project_key)
+        sync_result = sync_price_criterion_scores(project_key)
         msg = f"seed_ok_{stats['created']}"
+        if not sync_result.get("synced"):
+            msg = "offers_incomplete"
     return RedirectResponse(
         url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}&price_msg={msg}",
         status_code=303,
@@ -922,8 +962,10 @@ async def evaluation_price_template_parse(
         msg = "parse_error"
     else:
         stats = merge_price_structure_for_bidder(bidder_id, extracted.get("structure") or {})
-        sync_price_criterion_scores(project_key)
+        sync_result = sync_price_criterion_scores(project_key)
         msg = f"parse_ok_{stats['created']}_{stats['updated']}"
+        if not sync_result.get("synced"):
+            msg = "offers_incomplete"
     return RedirectResponse(
         url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}&price_msg={msg}",
         status_code=303,

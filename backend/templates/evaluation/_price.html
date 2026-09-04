@@ -46,6 +46,27 @@
 <div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
   <p style="font-size:.85rem;margin:0">Bieter-Preisblatt konnte nicht gelesen werden — Subtyp «Preisblatt» prüfen.</p>
 </div>
+{% elif price_message == 'offers_incomplete' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">Preis gespeichert — Punkte werden erst berechnet, wenn alle Bieter ein vollständiges Preisblatt haben.</p>
+</div>
+{% endif %}
+
+{% if price_offers_status and not price_offers_status.get('ready') and price_offers_status.get('bidder_count', 0) > 0 %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.8rem;margin:0">
+    <strong>Preis-Punkte gesperrt</strong> ({{ price_offers_status.priced_count }}/{{ price_offers_status.bidder_count }} Offerten vollständig).
+    Formel: günstigstes TCO = volle Punktzahl, teuerstes = 0, dazwischen linear.
+    {% if price_offers_status.missing_bidders %}Fehlend: {{ price_offers_status.missing_bidders | join(', ') }}.{% endif %}
+  </p>
+</div>
+{% elif price_offers_status and price_offers_status.get('ready') %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.8rem;margin:0">
+    Alle Offerten erfasst — Preis-Punkte berechnet (TCO min CHF {{ '%.2f'|format(price_offers_status.cheapest) }},
+    max CHF {{ '%.2f'|format(price_offers_status.priciest) }}).
+  </p>
+</div>
 {% endif %}
 
 {% if may_evaluate %}

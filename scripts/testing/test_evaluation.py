@@ -16,6 +16,7 @@ from src.m15_evaluation import (
     EvaluationProjectConfig,
     EvaluationTenderDoc,
     PriceItem,
+    PriceItem,
     Score,
     compute_rankings,
     create_bidder,
@@ -464,6 +465,77 @@ def test_evaluation_config_roundtrip():
     ev.engine = old_engine
 
 
+def test_score_justification_required():
+    from src.m15_evaluation import (
+        Criterion,
+        score_requires_justification,
+        validate_score_justification,
+    )
+
+    eign = Criterion(id=1, project_key="p", kind="eignung", name="E1", scale_max=1)
+    assert score_requires_justification(eign, 0) is True
+    assert score_requires_justification(eign, 1) is False
+    zus = Criterion(id=2, project_key="p", kind="zuschlag", name="Z1", scale_max=10)
+    assert score_requires_justification(zus, 8) is True
+    assert score_requires_justification(zus, 10) is False
+    try:
+        validate_score_justification(zus, 7, "")
+    except ValueError as exc:
+        assert "Begründung" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_sync_price_criterion_scores_min_max_gate():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-price"
+    with Session(engine) as session:
+        b1 = Bidder(project_key=project_key, name="Günstig")
+        b2 = Bidder(project_key=project_key, name="Teuer")
+        session.add(b1)
+        session.add(b2)
+        session.commit()
+        session.refresh(b1)
+        session.refresh(b2)
+        crit = Criterion(
+            project_key=project_key, kind="zuschlag", name="Preis", weight_pct=30,
+            scale_max=10, auto_price=True,
+        )
+        session.add(crit)
+        session.add(PriceItem(bidder_id=b1.id, category="einmalig", leistungsbeschreibung="A", anzahl=1, kosten_pro_einheit=100))
+        session.commit()
+        session.refresh(crit)
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    from src.m15_evaluation import get_score, sync_price_criterion_scores, price_offers_status
+
+    status = price_offers_status(project_key)
+    assert status["ready"] is False
+    result = sync_price_criterion_scores(project_key)
+    assert result["synced"] is False
+
+    with Session(engine) as session:
+        session.add(PriceItem(bidder_id=b2.id, category="einmalig", leistungsbeschreibung="B", anzahl=1, kosten_pro_einheit=200))
+        session.commit()
+
+    result = sync_price_criterion_scores(project_key)
+    assert result["synced"] is True
+    cheap_score = get_score(b1.id, crit.id, "system")
+    dear_score = get_score(b2.id, crit.id, "system")
+    assert cheap_score and cheap_score.value == 10.0
+    assert dear_score and dear_score.value == 0.0
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
 if __name__ == "__main__":
     test_create_bidder_and_criterion()
     test_ranking_ko_and_weighted_sum()
@@ -478,4 +550,6 @@ if __name__ == "__main__":
     test_validate_tender_cloud_gate()
     test_suggest_tender_role_and_validate_criteria()
     test_evaluation_config_roundtrip()
+    test_score_justification_required()
+    test_sync_price_criterion_scores_min_max_gate()
     print("OK")

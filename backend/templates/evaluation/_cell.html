@@ -51,21 +51,27 @@
       </div>
 
       {% if may_evaluate %}
-      <form method="post" action="/evaluation/score" style="display:grid;gap:.5rem" {% if request.headers.get('hx-request') %}hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML"{% endif %}>
+      {% if score_error %}
+      <div class="card" style="margin-bottom:.5rem;border-color:var(--color-danger)">
+        <p style="font-size:.8rem;margin:0;color:var(--color-danger)">{{ score_error }}</p>
+      </div>
+      {% endif %}
+      <form method="post" action="/evaluation/score" style="display:grid;gap:.5rem" id="eval-score-form" {% if request.headers.get('hx-request') %}hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML"{% endif %}>
         <input type="hidden" name="project_key" value="{{ project_key }}" />
         <input type="hidden" name="bidder_id" value="{{ bidder.id }}" />
         <input type="hidden" name="criterion_id" value="{{ criterion.id }}" />
         <label class="form-label">{{ "Deine Bewertung ändern" if my_user_id in user_rows|map(attribute='evaluator_user_id')|list else "Deine Bewertung" }}</label>
         {% if criterion.scale_max == 1 %}
-        <select class="form-select" name="value" required>
+        <select class="form-select" name="value" id="eval-score-value" required onchange="syncJustificationRequired()">
           <option value="">— wählen —</option>
           <option value="1">Ja / erfüllt</option>
           <option value="0">Nein / nicht erfüllt</option>
         </select>
         {% else %}
-        <input class="form-input" name="value" type="number" step="0.5" min="0" max="{{ criterion.scale_max }}" required />
+        <input class="form-input" name="value" id="eval-score-value" type="number" step="0.5" min="0" max="{{ criterion.scale_max }}" required oninput="syncJustificationRequired()" />
         {% endif %}
-        <textarea class="form-input" name="justification" rows="2" placeholder="Begründung"></textarea>
+        <textarea class="form-input" name="justification" id="eval-score-justification" rows="2"
+                  placeholder="Begründung (Pflicht bei «Nein» / Abzug von Maximalpunktzahl)"></textarea>
         <textarea class="form-input" name="source_chunk_ref" rows="2" placeholder="Zitat/Quelle aus dem Angebot"></textarea>
         <div id="cell-llm-picker" style="margin:.25rem 0">
           {% set form_id = 'eval-cell-' ~ bidder.id ~ '-' ~ criterion.id %}
@@ -98,6 +104,24 @@
   </div>
 </div>
 <script>
+function syncJustificationRequired() {
+  const valEl = document.getElementById('eval-score-value');
+  const justEl = document.getElementById('eval-score-justification');
+  if (!valEl || !justEl) return;
+  const scaleMax = {{ criterion.scale_max }};
+  const kind = {{ criterion.kind | tojson }};
+  const raw = valEl.value;
+  if (raw === '' || raw === null) { justEl.required = false; return; }
+  const v = parseFloat(raw);
+  let need = false;
+  if (kind === 'eignung') {
+    need = scaleMax === 1 ? v < 1 : v < scaleMax / 2;
+  } else if (kind === 'zuschlag') {
+    need = v < scaleMax - 0.0001;
+  }
+  justEl.required = need;
+}
+syncJustificationRequired();
 (function() {
   const picker = document.querySelector('#cell-llm-picker select[name="visual_llm_provider"]');
   const wrap = document.getElementById('eval-cloud-gate-wrap');

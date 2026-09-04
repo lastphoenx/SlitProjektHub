@@ -126,6 +126,16 @@ voller Punktzahl in Phase 2 nicht mehr aufholen können, als «keine Einladung»
 
 ---
 
+## Ticket 6 — Begründungspflicht & Preis-Punkte-Gate — **erledigt**
+
+**a) Begründungen:** Pflicht bei Eignung «Nein» und Zuschlag &lt; Maximalpunktzahl (inkl. Unterfragen).
+Server-Validierung in `upsert_score`, UI-Hinweis + Liste offener Pflichten auf `/evaluation`.
+
+**b) Preis:** `sync_price_criterion_scores` nur wenn alle Bieter TCO &gt; 0; Formel min–max linear
+(günstigster = volle Punktzahl, teuerster = 0). Bis dahin keine System-Preis-Scores.
+
+---
+
 ## Ticket 4 — Zwei-Stufen-KI-Auswahl (Input-KI / Output-KI) für Offertbeurteilung
 
 **Ziel:** Gleiches Auswahlmuster wie Projektideen/Visual-Lab statt des heutigen

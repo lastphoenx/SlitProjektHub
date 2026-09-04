@@ -26,6 +26,30 @@
 {% include 'partials/_ki_model_hint.html' %}
 {% include 'partials/_pii_cloud_hint.html' %}
 
+{% if price_offers_status and not price_offers_status.get('ready') and price_offers_status.get('bidder_count', 0) > 0 %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.8rem;margin:0">
+    <strong>Preis-Punkte noch nicht berechnet</strong> — erst wenn alle {{ price_offers_status.bidder_count }} Bieter ein vollständiges Preisblatt haben
+    (günstigster = volle Punktzahl, teuerster = 0). Fehlend:
+    {{ price_offers_status.missing_bidders | join(', ') }}.
+    <a href="/evaluation/price?project_key={{ project_key }}">Preisblatt</a>
+  </p>
+</div>
+{% endif %}
+
+{% if missing_justifications %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.8rem;margin:0 0 .35rem"><strong>Offene Begründungspflichten ({{ missing_justifications|length }})</strong></p>
+  <ul style="font-size:.75rem;margin:0;padding-left:1.1rem;max-height:8rem;overflow:auto">
+    {% for m in missing_justifications[:12] %}
+    <li>{{ m.bidder_name }} — {{ m.criterion_name }} ({{ m.value }}/{{ m.scale_max }})</li>
+    {% endfor %}
+    {% if missing_justifications|length > 12 %}<li class="text-muted">… und {{ missing_justifications|length - 12 }} weitere</li>{% endif %}
+  </ul>
+  <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0">Eignung «Nein» und Zuschlags-Abzüge müssen pro Kriterium begründet werden (auch Unterfragen).</p>
+</div>
+{% endif %}
+
 {% if not may_evaluate %}
 <div class="card" style="margin-bottom:1rem">
   <p class="text-muted">Du siehst Rangfolge und Matrix. Bewertungen erfassen nur Super-User, PL intern und Product Owner.</p>
