@@ -169,6 +169,8 @@ class Criterion(SQLModel, table=True):
     auto_price: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, default=False))
     # Zuschlags-Ranking: 1 = ZK (Zwischenrang), 2 = Präsentation nach Einladung (z. B. A-01)
     ranking_phase: int = Field(default=1, sa_column=Column(Integer, nullable=False, default=1))
+    # Referenzschlüssel aus Pflichtenheft: EK1, F01, T01, F01-001 (name bleibt lesbares Label)
+    referenz: Optional[str] = Field(default=None, sa_column=Column(String(16)))
     sort_order: int = 0
     is_deleted: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -339,6 +341,7 @@ def create_criterion(
     auto_price: bool = False,
     description: Optional[str] = None,
     ranking_phase: int | None = None,
+    referenz: Optional[str] = None,
 ) -> Criterion:
     kind = (kind or "").strip().lower()
     if kind not in CRITERION_KINDS:
@@ -367,6 +370,7 @@ def create_criterion(
             kind=kind,
             name=name,
             description=(description or "").strip() or None,
+            referenz=_store_referenz(referenz),
             weight_pct=float(weight_pct) if kind == "zuschlag" else 0.0,
             parent_id=parent_id,
             scale_max=scale_max,
@@ -398,6 +402,7 @@ def update_criterion(
     scale_max: int | None = None,
     ranking_phase: int | None = None,
     auto_price: bool | None = None,
+    referenz: str | None = None,
 ) -> Criterion:
     with get_session() as session:
         crit = session.get(Criterion, criterion_id)
@@ -421,6 +426,8 @@ def update_criterion(
                 crit.ranking_phase = max(1, min(2, int(ranking_phase)))
             if auto_price is not None:
                 crit.auto_price = bool(auto_price)
+        if referenz is not None:
+            crit.referenz = _store_referenz(referenz)
         session.add(crit)
         session.commit()
         session.refresh(crit)
@@ -432,12 +439,14 @@ def _criterion_to_editor_dict(criterion: Criterion, children: list[Criterion]) -
         "id": criterion.id,
         "name": criterion.name,
         "description": criterion.description or "",
+        "requirement_ref": criterion.referenz or "",
         "scale_max": criterion.scale_max,
         "children": [
             {
                 "id": ch.id,
                 "name": ch.name,
                 "description": ch.description or "",
+                "requirement_ref": ch.referenz or "",
                 "scale_max": ch.scale_max,
             }
             for ch in children
@@ -528,6 +537,7 @@ def save_criteria_editor_payload(
                         if not is_child and kind == "zuschlag"
                         else None
                     ),
+                    referenz=_entry_referenz(entry) or (entry.get("requirement_ref") or None),
                 )
                 stats["updated"] += 1
                 row_id = int(cid)
@@ -548,6 +558,7 @@ def save_criteria_editor_payload(
                     if not is_child and entry.get("ranking_phase") is not None
                     else None
                 ),
+                referenz=_entry_referenz(entry) or (entry.get("requirement_ref") or None),
             )
             stats["created"] += 1
             row_id = crit.id
@@ -2245,6 +2256,7 @@ def import_criteria_payload(
                         if entry.get("ranking_phase") is not None
                         else None
                     ),
+                    referenz=_entry_referenz(entry),
                 )
                 existing_names.add(name)
                 parent_id = parent.id
@@ -2269,6 +2281,7 @@ def import_criteria_payload(
                     scale_max=int(child.get("scale_max") or (1 if kind == "eignung" else 10)),
                     parent_id=parent_id,
                     description=child.get("description"),
+                    referenz=_entry_referenz(child),
                 )
                 existing_names.add(cname)
                 created += 1
@@ -2293,6 +2306,85 @@ def _normalize_requirement_ref(raw: str) -> Optional[str]:
     if re.match(r"^[A-Za-z]{1,4}\d+", s):
         return s.upper().replace("-", "")
     return None
+
+
+def _normalize_line_ref(raw: str) -> Optional[str]:
+    """Einzelzeile: F01-001, F-01-001 → F01-001."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    m = re.match(r"^([A-Za-z])-?0*(\d+)-0*(\d+)\b", s, re.I)
+    if m:
+        return f"{m.group(1).upper()}{int(m.group(2)):02d}-{int(m.group(3)):03d}"
+    return None
+
+
+def _store_referenz(raw: Optional[str]) -> Optional[str]:
+    """Kanonicalisierter DB-Wert für Criterion.referenz."""
+    if not raw or not str(raw).strip():
+        return None
+    s = str(raw).strip()
+    line = _normalize_line_ref(s)
+    if line:
+        return line
+    norm = _normalize_requirement_ref(s)
+    return norm or s.upper()
+
+
+def format_requirement_ref_display(ref: Optional[str]) -> str:
+    """Anzeige: F01 → F-01, EK1 bleibt EK1, F01-001 → F-01-001."""
+    s = (ref or "").strip()
+    if not s:
+        return ""
+    if re.match(r"^EK\d+$", s, re.I):
+        return s.upper()
+    line = _normalize_line_ref(s)
+    if line:
+        m = re.match(r"^([A-Z])(\d{2})-(\d{3})$", line)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        return line
+    norm = _normalize_requirement_ref(s)
+    if norm and re.match(r"^[A-Z]\d{2}$", norm):
+        return f"{norm[0]}-{norm[1:]}"
+    return s.upper()
+
+
+def _entry_referenz(entry: dict[str, Any]) -> Optional[str]:
+    """requirement_ref aus Payload oder Name/Beschreibung."""
+    raw = (entry.get("requirement_ref") or "").strip()
+    if raw:
+        stored = _store_referenz(raw)
+        if stored:
+            return stored
+    for text in (entry.get("name") or "", entry.get("description") or ""):
+        line = _normalize_line_ref(text)
+        if line:
+            return line
+        ref = _requirement_ref_from_text(text)
+        if ref:
+            return ref
+    return None
+
+
+def _ensure_criteria_refs(payload: dict[str, Any]) -> list[str]:
+    """Fehlende requirement_ref ergänzen (EK1… für Eignung, Regex für Zuschlag)."""
+    hints: list[str] = []
+    for i, entry in enumerate(payload.get("eignung") or [], 1):
+        ref = _entry_referenz(entry)
+        if not ref:
+            ref = f"EK{i}"
+            hints.append(f"Eignung «{(entry.get('name') or '?').strip()}»: requirement_ref {ref} ergänzt")
+        entry["requirement_ref"] = ref
+    for entry in payload.get("zuschlag") or []:
+        ref = _entry_referenz(entry)
+        if ref:
+            entry["requirement_ref"] = ref
+        for child in entry.get("children") or []:
+            cref = _entry_referenz(child)
+            if cref:
+                child["requirement_ref"] = cref
+    return hints
 
 
 def _criterion_ref_prefix(name: str) -> Optional[str]:
@@ -2801,7 +2893,7 @@ def extract_criteria_from_tender_docs(
         "Extrahiere strukturierte Bewertungskriterien aus Ausschreibungsunterlagen. "
         "Antwort NUR als JSON mit keys eignung und zuschlag (Listen von Objekten). "
         "Jedes Objekt: name (kurz), description (Kapitel-Einleitung / Aufgabenstellung), "
-        "requirement_ref (PFLICHT für Zuschlag: F01, T01, W01, … — unabhängig vom name-Text). "
+        "requirement_ref (PFLICHT: Eignung EK1/EK2/EK3; Zuschlag F01, T01, W01, … — unabhängig vom name-Text). "
         "Eignung: NUR flache Top-Level-K.O.-Kriterien — KEINE children, KEINE Unterfragen; "
         "gesamter Nachweistext in description. "
         "Zuschlag: optional children nur in Schritt 2 (Anforderungsblätter F/T). "
@@ -2817,6 +2909,7 @@ def extract_criteria_from_tender_docs(
         max_tokens=4000, temperature=0.1, model=model,
     )
     payload = _parse_llm_json_object(raw)
+    ref_hints = _ensure_criteria_refs(payload)
     hints_pre = _flatten_eignung_payload(payload)
     child_hints = _enrich_criteria_children_from_requirements(
         project_key, payload, provider, model,
@@ -2824,7 +2917,7 @@ def extract_criteria_from_tender_docs(
         enrich_threshold=ENRICH_CHILDREN_RAG_THRESHOLD,
     )
     warnings = validate_criteria_payload(payload)
-    warnings = list(hints_pre) + list(warnings) + child_hints
+    warnings = list(ref_hints) + list(hints_pre) + list(warnings) + child_hints
     warnings.extend(criteria_completeness_warnings(criteria_child_completeness(payload)))
     if not payload.get("eignung") and not payload.get("zuschlag"):
         return {
@@ -3197,6 +3290,8 @@ def migrate_evaluation_db() -> None:
             conn.execute(text("ALTER TABLE criterion ADD COLUMN description VARCHAR"))
         if "ranking_phase" not in crit_cols:
             conn.execute(text("ALTER TABLE criterion ADD COLUMN ranking_phase INTEGER NOT NULL DEFAULT 1"))
+        if "referenz" not in crit_cols:
+            conn.execute(text("ALTER TABLE criterion ADD COLUMN referenz VARCHAR(16)"))
 
         if "price_item" in tables:
             price_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(price_item)")).fetchall()}

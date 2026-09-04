@@ -23,12 +23,14 @@
       id: e && e.id != null ? e.id : null,
       name: (e && e.name) || '',
       description: (e && e.description) || '',
+      requirement_ref: (e && e.requirement_ref) || '',
       scale_max: 1,
       children: ((e && e.children) || []).map(function (ch) {
         return {
           id: ch.id != null ? ch.id : null,
           name: ch.name || '',
           description: ch.description || '',
+          requirement_ref: (ch.requirement_ref) || '',
           scale_max: 1,
         };
       }),
@@ -50,6 +52,7 @@
           id: ch.id != null ? ch.id : null,
           name: ch.name || '',
           description: ch.description || '',
+          requirement_ref: (ch.requirement_ref) || '',
           scale_max: Number(ch.scale_max != null ? ch.scale_max : 10),
         };
       }),
@@ -144,11 +147,13 @@
         return Object.assign(rowId(e.id), {
           name: e.name.trim(),
           description: e.description.trim(),
+          requirement_ref: (e.requirement_ref || '').trim(),
           scale_max: 1,
           children: (e.children || []).filter(function (ch) { return (ch.name || '').trim(); }).map(function (ch) {
             return Object.assign(rowId(ch.id), {
               name: ch.name.trim(),
               description: ch.description.trim(),
+              requirement_ref: (ch.requirement_ref || '').trim(),
               scale_max: 1,
             });
           }),
@@ -158,6 +163,7 @@
         return Object.assign(rowId(z.id), {
           name: z.name.trim(),
           description: z.description.trim(),
+          requirement_ref: (z.requirement_ref || '').trim(),
           weight_pct: parseFloat(z.weight_pct) || 0,
           scale_max: parseInt(z.scale_max, 10) || 10,
           ranking_phase: parseInt(z.ranking_phase, 10) || 1,
@@ -166,6 +172,7 @@
             return Object.assign(rowId(ch.id), {
               name: ch.name.trim(),
               description: ch.description.trim(),
+              requirement_ref: (ch.requirement_ref || '').trim(),
               scale_max: parseInt(ch.scale_max, 10) || 10,
             });
           }),
@@ -204,12 +211,32 @@
     }).join('');
   }
 
+  function displayRef(ref) {
+    const s = String(ref || '').trim();
+    if (!s) return '';
+    if (/^EK\d+$/i.test(s)) return s.toUpperCase();
+    const line = s.match(/^([A-Za-z])-?0*(\d+)-0*(\d+)$/i);
+    if (line) {
+      return line[1].toUpperCase() + '-' + String(line[2]).padStart(2, '0')
+        + '-' + String(line[3]).padStart(3, '0');
+    }
+    const blk = s.match(/^([A-Za-z])0*(\d+)$/i);
+    if (blk) return blk[1].toUpperCase() + '-' + String(blk[2]).padStart(2, '0');
+    return s;
+  }
+
+  function refInput(value, cls) {
+    return '<input class="form-input ' + cls + '" value="' + esc(displayRef(value)) + '" '
+      + 'placeholder="EK1 / F-01" title="Referenzschlüssel aus Pflichtenheft" style="width:4.5rem;font-size:.75rem" />';
+  }
+
   function renderEignung() {
     const tbody = document.getElementById('criteria-eignung-body');
     if (!tbody) return;
     let html = '';
     state.eignung.forEach(function (row, idx) {
       html += '<tr class="criteria-row" data-kind="eignung" data-idx="' + idx + '">';
+      html += '<td style="width:4.75rem">' + refInput(row.requirement_ref, 'criteria-in-ref') + '</td>';
       html += '<td><input class="form-input criteria-in-name" value="' + esc(row.name) + '" placeholder="Kriterium" /></td>';
       html += '<td><textarea class="form-input criteria-in-desc' + descClass(row.description) + '" rows="2" placeholder="Anforderungstext (Pflichtenheft)">' + esc(row.description) + '</textarea></td>';
       html += '<td style="width:3.5rem;text-align:center">K.O.</td>';
@@ -217,14 +244,15 @@
       html += '</tr>';
       (row.children || []).forEach(function (ch, cidx) {
         html += '<tr class="criteria-row criteria-child-row" data-kind="eignung" data-idx="' + idx + '" data-cidx="' + cidx + '">';
+        html += '<td style="padding-left:.5rem">' + refInput(ch.requirement_ref, 'criteria-in-cref') + '</td>';
         html += '<td style="padding-left:1.25rem"><input class="form-input criteria-in-cname" value="' + esc(ch.name) + '" placeholder="Unterfrage" /></td>';
         html += '<td><textarea class="form-input criteria-in-cdesc' + descClass(ch.description) + '" rows="2">' + esc(ch.description) + '</textarea></td>';
         html += '<td></td><td><button type="button" class="btn btn-ghost btn-sm criteria-del-child">×</button></td>';
         html += '</tr>';
       });
-      html += '<tr class="criteria-add-child-row" data-kind="eignung" data-idx="' + idx + '"><td colspan="4"><button type="button" class="btn btn-ghost btn-sm criteria-add-child">+ Unterfrage</button></td></tr>';
+      html += '<tr class="criteria-add-child-row" data-kind="eignung" data-idx="' + idx + '"><td colspan="5"><button type="button" class="btn btn-ghost btn-sm criteria-add-child">+ Unterfrage</button></td></tr>';
     });
-    tbody.innerHTML = html || '<tr><td colspan="4" class="text-muted" style="font-size:.78rem">Noch keine Eignungskriterien — Zeile hinzufügen oder KI erneut starten.</td></tr>';
+    tbody.innerHTML = html || '<tr><td colspan="5" class="text-muted" style="font-size:.78rem">Noch keine Eignungskriterien — Zeile hinzufügen oder KI erneut starten.</td></tr>';
   }
 
   function renderZuschlag() {
@@ -233,6 +261,7 @@
     let html = '';
     state.zuschlag.forEach(function (row, idx) {
       html += '<tr class="criteria-row" data-kind="zuschlag" data-idx="' + idx + '">';
+      html += '<td style="width:4.75rem">' + refInput(row.requirement_ref, 'criteria-in-ref') + '</td>';
       html += '<td><input class="form-input criteria-in-name" value="' + esc(row.name) + '" /></td>';
       html += '<td><textarea class="form-input criteria-in-desc' + descClass(row.description) + '" rows="2">' + esc(row.description) + '</textarea></td>';
       html += '<td style="width:4.5rem"><input class="form-input criteria-in-weight" type="number" step="1" min="0" max="100" value="' + esc(row.weight_pct) + '" /></td>';
@@ -243,14 +272,15 @@
       html += '</tr>';
       (row.children || []).forEach(function (ch, cidx) {
         html += '<tr class="criteria-row criteria-child-row" data-kind="zuschlag" data-idx="' + idx + '" data-cidx="' + cidx + '">';
+        html += '<td style="padding-left:.5rem">' + refInput(ch.requirement_ref, 'criteria-in-cref') + '</td>';
         html += '<td style="padding-left:1.25rem"><input class="form-input criteria-in-cname" value="' + esc(ch.name) + '" /></td>';
         html += '<td><textarea class="form-input criteria-in-cdesc' + descClass(ch.description) + '" rows="2">' + esc(ch.description) + '</textarea></td>';
         html += '<td colspan="4"></td><td><button type="button" class="btn btn-ghost btn-sm criteria-del-child">×</button></td>';
         html += '</tr>';
       });
-      html += '<tr class="criteria-add-child-row" data-kind="zuschlag" data-idx="' + idx + '"><td colspan="7"><button type="button" class="btn btn-ghost btn-sm criteria-add-child">+ Unterfrage</button></td></tr>';
+      html += '<tr class="criteria-add-child-row" data-kind="zuschlag" data-idx="' + idx + '"><td colspan="8"><button type="button" class="btn btn-ghost btn-sm criteria-add-child">+ Unterfrage</button></td></tr>';
     });
-    tbody.innerHTML = html || '<tr><td colspan="7" class="text-muted" style="font-size:.78rem">Noch keine Zuschlagskriterien.</td></tr>';
+    tbody.innerHTML = html || '<tr><td colspan="8" class="text-muted" style="font-size:.78rem">Noch keine Zuschlagskriterien.</td></tr>';
   }
 
   function renderAlerts(m) {
@@ -301,6 +331,7 @@
       if (isNaN(idx) || !state.eignung[idx]) return;
       state.eignung[idx].name = tr.querySelector('.criteria-in-name')?.value || '';
       state.eignung[idx].description = tr.querySelector('.criteria-in-desc')?.value || '';
+      state.eignung[idx].requirement_ref = tr.querySelector('.criteria-in-ref')?.value || '';
     });
     document.querySelectorAll('#criteria-eignung-body tr.criteria-child-row[data-kind="eignung"]').forEach(function (tr) {
       const idx = parseInt(tr.dataset.idx, 10);
@@ -308,12 +339,14 @@
       if (!state.eignung[idx] || !state.eignung[idx].children[cidx]) return;
       state.eignung[idx].children[cidx].name = tr.querySelector('.criteria-in-cname')?.value || '';
       state.eignung[idx].children[cidx].description = tr.querySelector('.criteria-in-cdesc')?.value || '';
+      state.eignung[idx].children[cidx].requirement_ref = tr.querySelector('.criteria-in-cref')?.value || '';
     });
     document.querySelectorAll('#criteria-zuschlag-body tr.criteria-row[data-kind="zuschlag"]:not(.criteria-child-row)').forEach(function (tr) {
       const idx = parseInt(tr.dataset.idx, 10);
       if (isNaN(idx) || !state.zuschlag[idx]) return;
       state.zuschlag[idx].name = tr.querySelector('.criteria-in-name')?.value || '';
       state.zuschlag[idx].description = tr.querySelector('.criteria-in-desc')?.value || '';
+      state.zuschlag[idx].requirement_ref = tr.querySelector('.criteria-in-ref')?.value || '';
       state.zuschlag[idx].weight_pct = parseFloat(tr.querySelector('.criteria-in-weight')?.value) || 0;
       state.zuschlag[idx].scale_max = parseInt(tr.querySelector('.criteria-in-scale')?.value, 10) || 10;
       state.zuschlag[idx].ranking_phase = parseInt(tr.querySelector('.criteria-in-phase')?.value, 10) || 1;
@@ -325,6 +358,7 @@
       if (!state.zuschlag[idx] || !state.zuschlag[idx].children[cidx]) return;
       state.zuschlag[idx].children[cidx].name = tr.querySelector('.criteria-in-cname')?.value || '';
       state.zuschlag[idx].children[cidx].description = tr.querySelector('.criteria-in-cdesc')?.value || '';
+      state.zuschlag[idx].children[cidx].requirement_ref = tr.querySelector('.criteria-in-cref')?.value || '';
     });
   }
 
