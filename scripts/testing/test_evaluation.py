@@ -16,7 +16,6 @@ from src.m15_evaluation import (
     EvaluationProjectConfig,
     EvaluationTenderDoc,
     PriceItem,
-    PriceItem,
     Score,
     compute_rankings,
     create_bidder,
@@ -505,6 +504,7 @@ def test_sync_price_criterion_scores_min_max_gate():
         session.add(PriceItem(bidder_id=b1.id, category="einmalig", leistungsbeschreibung="A", anzahl=1, kosten_pro_einheit=100))
         session.commit()
         session.refresh(crit)
+        b1_id, b2_id, crit_id = b1.id, b2.id, crit.id
 
     import src.m15_evaluation as ev
     import src.m03_db as db
@@ -522,13 +522,13 @@ def test_sync_price_criterion_scores_min_max_gate():
     assert result["synced"] is False
 
     with Session(engine) as session:
-        session.add(PriceItem(bidder_id=b2.id, category="einmalig", leistungsbeschreibung="B", anzahl=1, kosten_pro_einheit=200))
+        session.add(PriceItem(bidder_id=b2_id, category="einmalig", leistungsbeschreibung="B", anzahl=1, kosten_pro_einheit=200))
         session.commit()
 
     result = sync_price_criterion_scores(project_key)
     assert result["synced"] is True
-    cheap_score = get_score(b1.id, crit.id, "system")
-    dear_score = get_score(b2.id, crit.id, "system")
+    cheap_score = get_score(b1_id, crit_id, "system")
+    dear_score = get_score(b2_id, crit_id, "system")
     assert cheap_score and cheap_score.value == 10.0
     assert dear_score and dear_score.value == 0.0
 
