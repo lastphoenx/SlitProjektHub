@@ -267,6 +267,14 @@ F01-Leak-Filter, `auto_price` ohne Unterfragen.
 
 ---
 
+## Ticket 21 — Literal-Chunk-Scan für Unterfragen-RAG ✅ erledigt
+
+**Ziel:** Wenn Hybrid-RAG &lt;2 Zeilennummern liefert, alle Vorgaben-Chunks nach `F02-001`/`T01-001` durchsuchen und passende Chunks in den Kontext mergen.
+
+**Umsetzung:** `_literal_chunks_for_requirement_ref()` + Diagnose-Hinweise (`im Kontext: F02-001, …` vs. `T01-001 nicht wörtlich im Kontext`) + Server-Log bei rotem Gate.
+
+---
+
 ## Ticket 18 — Vollständigkeits-Badge für Einzelanforderungen ✅ erledigt
 
 **Ziel:** Nach KI-Extraktion sichtbar machen, wenn weniger Unterfragen erkannt wurden als im Pflichtenheft angekündigt (z. B. «5 von 18 Einzelanforderungen»).
