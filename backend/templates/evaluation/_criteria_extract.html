@@ -3,7 +3,7 @@
 {% block topbar_title %}Kriterien-Vorschau{% endblock %}
 
 {% block content %}
-<div style="max-width:900px">
+<div style="max-width:1100px">
 
 <div class="page-header">
   <div>
@@ -13,16 +13,21 @@
   <a class="btn btn-secondary" href="/evaluation?project_key={{ project_key }}">← zurück</a>
 </div>
 
+{% include 'partials/_eval_ki_busy.html' %}
+
 {% if error == 'cloud_confirm' %}
 <div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
   <p style="font-size:.85rem;margin:0">Cloud-KI mit Vorgabe-Dokumenten: Bestätigung erforderlich.</p>
-  <form method="post" action="/evaluation/extract-criteria" style="margin-top:.5rem">
+  <form method="post" action="/evaluation/extract-criteria" data-eval-ki-form="1" style="margin-top:.5rem">
     <input type="hidden" name="project_key" value="{{ project_key }}" />
     <label style="font-size:.78rem;display:flex;gap:.35rem;align-items:center">
       <input type="checkbox" name="cloud_confirm" value="true" />
       PII-Sanitizer bestätigen (Vorgaben an Cloud-KI)
     </label>
-    <button type="submit" class="btn btn-primary btn-sm" style="margin-top:.35rem">Erneut extrahieren</button>
+    <button type="submit" class="btn btn-primary btn-sm eval-ki-submit" style="margin-top:.35rem">
+      <span class="ki-btn-idle">Erneut extrahieren</span>
+      <span class="ki-btn-busy" hidden><svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg> KI läuft …</span>
+    </button>
   </form>
 </div>
 {% elif error %}
@@ -30,22 +35,102 @@
   <p style="font-size:.85rem;margin:0">{{ error }}</p>
 </div>
 {% else %}
-<div class="card" style="margin-bottom:1rem">
-  {% if warnings %}
-  <ul style="font-size:.75rem;margin:0 0 .5rem;padding-left:1.1rem;color:var(--color-warning, #fbbf24)">
-    {% for w in warnings %}<li>{{ w }}</li>{% endfor %}
-  </ul>
+
+<div id="criteria-preview-app"
+     data-ranking-labels='{{ ranking_phase_labels | default({}) | tojson }}'>
+
+  {% if apply_error == 'confirm_required' %}
+  <div class="criteria-alert criteria-alert-critical" style="margin-bottom:.75rem">
+    <strong>Übernahme abgebrochen</strong> — bitte offene Hinweise prüfen und bestätigen oder in den Tabellen korrigieren.
+  </div>
   {% endif %}
-  <p style="font-size:.78rem;margin:0 0 .5rem">
-    {{ (payload.eignung or [])|length }} Eignungs- und {{ (payload.zuschlag or [])|length }} Zuschlagskriterien erkannt.
-    JSON prüfen/anpassen, dann übernehmen (bestehende Namen werden übersprungen).
-  </p>
-  <form method="post" action="/evaluation/apply-criteria">
+
+  <div id="criteria-alerts" style="margin-bottom:.75rem"></div>
+
+  {% if warnings %}
+  <details style="margin-bottom:.75rem;font-size:.75rem">
+    <summary class="text-muted" style="cursor:pointer">Weitere KI-Hinweise ({{ warnings|length }})</summary>
+    <ul style="margin:.35rem 0 0;padding-left:1.1rem;color:var(--color-text-muted)">
+      {% for w in warnings %}<li>{{ w }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+
+  <p id="criteria-counts" class="text-muted" style="font-size:.78rem;margin:0 0 .75rem"></p>
+
+  <form id="criteria-apply-form" method="post" action="/evaluation/apply-criteria">
     <input type="hidden" name="project_key" value="{{ project_key }}" />
-    <textarea class="form-input" name="criteria_json" rows="22" style="font-size:.72rem;font-family:monospace">{{ criteria_json }}</textarea>
-    <button type="submit" class="btn btn-primary" style="margin-top:.5rem">In Projekt übernehmen</button>
+    <input type="hidden" name="criteria_json" id="criteria-json-hidden" value="" />
+
+    <div class="card criteria-preview-section" style="margin-bottom:1rem">
+      <div class="criteria-section-header">
+        <h2 style="font-size:.9rem;font-weight:700;margin:0">Eignungskriterien (K.O.)</h2>
+        <button type="button" id="criteria-add-eignung" class="btn btn-secondary btn-sm">+ Kriterium</button>
+      </div>
+      <div class="table-wrap">
+        <table class="criteria-preview-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Anforderung / Beschreibung</th>
+              <th>Typ</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="criteria-eignung-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card criteria-preview-section" style="margin-bottom:1rem">
+      <div class="criteria-section-header">
+        <h2 style="font-size:.9rem;font-weight:700;margin:0">Zuschlagskriterien</h2>
+        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+          <span id="criteria-weight-sum" class="criteria-weight-sum">Summe Gewichtung: —</span>
+          <button type="button" id="criteria-add-zuschlag" class="btn btn-secondary btn-sm">+ Kriterium</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="criteria-preview-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Anforderung / Beschreibung</th>
+              <th>Gewicht %</th>
+              <th>Skala</th>
+              <th>Phase</th>
+              <th title="Punkte aus Preisblatt">Preis</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="criteria-zuschlag-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="criteria-confirm-block" class="card" style="margin-bottom:1rem;padding:.65rem .85rem;border-color:var(--color-warning, #fbbf24)" hidden>
+      <label style="display:flex;align-items:flex-start;gap:.45rem;font-size:.78rem;cursor:pointer">
+        <input type="checkbox" name="confirm_apply" value="true" id="criteria-confirm-apply" style="margin-top:.15rem" />
+        <span>Ich habe die Hinweise geprüft (fehlende Eignung und/oder Gewichtung ≠ 100%) und möchte die Kriterien trotzdem ins Projekt übernehmen.</span>
+      </label>
+    </div>
+
+    <p id="criteria-apply-error" class="criteria-alert criteria-alert-critical" hidden style="margin-bottom:.75rem"></p>
+
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem">
+      <button type="submit" class="btn btn-primary">In Projekt übernehmen</button>
+      <a class="btn btn-secondary" href="/evaluation?project_key={{ project_key }}">Abbrechen</a>
+    </div>
+
+    <details style="font-size:.75rem;margin-bottom:1rem">
+      <summary class="text-muted" style="cursor:pointer">JSON anzeigen / für Power-User (nicht zur Pflichtprüfung)</summary>
+      <pre id="criteria-json-preview" class="criteria-json-preview"></pre>
+    </details>
   </form>
 </div>
+
+<script type="application/json" id="criteria-payload-initial">{{ payload | tojson }}</script>
+<script src="/static/eval_criteria_preview.js?v={{ static_v }}"></script>
 {% endif %}
 
 </div>

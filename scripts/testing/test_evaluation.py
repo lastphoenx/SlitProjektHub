@@ -483,6 +483,28 @@ def test_evaluation_config_roundtrip():
     ev.engine = old_engine
 
 
+def test_criteria_preview_meta():
+    from src.m15_evaluation import criteria_apply_requires_confirm, criteria_preview_meta
+
+    data = {
+        "eignung": [],
+        "zuschlag": [{"name": "A", "weight_pct": 30, "description": "x"}, {"name": "B", "weight_pct": 30}],
+    }
+    meta = criteria_preview_meta(data)
+    assert meta["missing_eignung"] is True
+    assert meta["weight_ok"] is False
+    assert meta["requires_confirm"] is True
+    assert criteria_apply_requires_confirm(data) is True
+
+    ok = {
+        "eignung": [{"name": "K1", "description": "ok"}],
+        "zuschlag": [{"name": "Z", "weight_pct": 100, "description": "z"}],
+    }
+    meta2 = criteria_preview_meta(ok)
+    assert meta2["weight_ok"] is True
+    assert meta2["requires_confirm"] is False
+
+
 def test_ki_busy_hint():
     from unittest.mock import patch
 
@@ -644,6 +666,7 @@ if __name__ == "__main__":
     test_validate_tender_cloud_gate()
     test_suggest_tender_role_and_validate_criteria()
     test_evaluation_config_roundtrip()
+    test_criteria_preview_meta()
     test_ki_busy_hint()
     test_score_justification_required()
     test_sync_price_criterion_scores_reciprocal_gate()
