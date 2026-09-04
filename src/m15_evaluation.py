@@ -8,9 +8,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from uuid import uuid4
 
 from sqlalchemy import Boolean, Column, Float, Integer, String, UniqueConstraint, text
 from sqlmodel import Field, Session, SQLModel, select
@@ -22,6 +24,9 @@ from .m09_rag import retrieve_relevant_chunks_hybrid
 from .m16_idea_visual import is_cloud_llm_provider, sanitize_for_cloud_text
 
 log = logging.getLogger(__name__)
+
+_CRITERIA_PREVIEW_CACHE: dict[str, dict[str, Any]] = {}
+_CRITERIA_PREVIEW_TTL_SEC = 3600
 
 CRITERION_KINDS = ("eignung", "zuschlag")
 ANGEbot_CLASSIFICATION = "Angebot (Bieter)"
@@ -964,6 +969,35 @@ def criteria_preview_meta(data: dict[str, Any]) -> dict[str, Any]:
         "empty_descriptions": empty_descriptions,
         "requires_confirm": requires_confirm,
     }
+
+
+def store_criteria_preview(project_key: str, body: dict[str, Any]) -> str:
+    """Kriterien-Vorschau zwischenlagern (Post-Redirect-Get, Reload-sicher)."""
+    _purge_stale_criteria_previews()
+    preview_id = uuid4().hex[:12]
+    _CRITERIA_PREVIEW_CACHE[preview_id] = {
+        "project_key": project_key,
+        "stored_at": time.time(),
+        **body,
+    }
+    return preview_id
+
+
+def load_criteria_preview(preview_id: str, project_key: str) -> dict[str, Any] | None:
+    row = _CRITERIA_PREVIEW_CACHE.get((preview_id or "").strip())
+    if not row or row.get("project_key") != project_key:
+        return None
+    if time.time() - float(row.get("stored_at") or 0) > _CRITERIA_PREVIEW_TTL_SEC:
+        _CRITERIA_PREVIEW_CACHE.pop(preview_id, None)
+        return None
+    return row
+
+
+def _purge_stale_criteria_previews() -> None:
+    now = time.time()
+    for pid, row in list(_CRITERIA_PREVIEW_CACHE.items()):
+        if now - float(row.get("stored_at") or 0) > _CRITERIA_PREVIEW_TTL_SEC:
+            _CRITERIA_PREVIEW_CACHE.pop(pid, None)
 
 
 def criteria_apply_requires_confirm(data: dict[str, Any]) -> bool:

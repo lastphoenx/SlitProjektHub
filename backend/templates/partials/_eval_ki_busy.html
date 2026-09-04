@@ -26,6 +26,7 @@
   function setFormControlsDisabled(form, on) {
     if (!form) return;
     form.querySelectorAll('select, input, button, textarea').forEach(function(el) {
+      if (el.type === 'hidden') return;
       if (on) {
         el.dataset.kiWasDisabled = el.disabled ? '1' : '0';
         el.disabled = true;

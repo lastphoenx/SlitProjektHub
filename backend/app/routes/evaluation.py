@@ -63,6 +63,8 @@ from src.m15_evaluation import (
     list_scores_for_cell,
     list_scores_for_project,
     list_tender_docs,
+    load_criteria_preview,
+    store_criteria_preview,
     merge_price_structure_for_bidder,
     normalize_chunk_size,
     official_score,
@@ -135,6 +137,28 @@ def _llm_picker_context() -> dict:
         "form_input_provider": "",
         "form_input_model": "",
     }
+
+
+def _criteria_preview_template_ctx(request: Request, project_key: str, body: dict) -> dict:
+    ctx = {
+        "request": request,
+        "project_key": project_key,
+        "project_title": _project_title(project_key),
+        "may_evaluate": True,
+        "ranking_phase_labels": RANKING_PHASE_LABELS,
+        "ranking_phases": RANKING_PHASES,
+        **body,
+    }
+    ctx.update(_llm_picker_context())
+    return ctx
+
+
+def _criteria_preview_redirect(project_key: str, **body) -> RedirectResponse:
+    preview_id = store_criteria_preview(project_key, body)
+    return RedirectResponse(
+        url=f"/evaluation/criteria-preview?project_key={project_key}&preview_id={preview_id}",
+        status_code=303,
+    )
 
 
 @router.get("/evaluation/ki-hint")
@@ -734,6 +758,34 @@ async def evaluation_rechunk_doc(
     )
 
 
+@router.get("/evaluation/extract-criteria")
+async def evaluation_extract_criteria_get(project_key: str = ""):
+    """GET auf POST-URL (Lesezeichen/Reload) → zurück zur Offert-Seite."""
+    url = f"/evaluation?project_key={project_key}" if project_key else "/evaluation"
+    return RedirectResponse(url=url, status_code=303)
+
+
+@router.get("/evaluation/criteria-preview", response_class=HTMLResponse)
+async def evaluation_criteria_preview_page(
+    request: Request,
+    project_key: str,
+    preview_id: str,
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    body = load_criteria_preview(preview_id, project_key)
+    if not body:
+        return RedirectResponse(
+            url=f"/evaluation?project_key={project_key}&criteria_preview=expired",
+            status_code=303,
+        )
+    display = {k: v for k, v in body.items() if k not in ("project_key", "stored_at")}
+    return templates.TemplateResponse(
+        "evaluation/_criteria_extract.html",
+        _criteria_preview_template_ctx(request, project_key, display),
+    )
+
+
 @router.post("/evaluation/extract-criteria", response_class=HTMLResponse)
 async def evaluation_extract_criteria(
     request: Request,
@@ -754,25 +806,16 @@ async def evaluation_extract_criteria(
         global_provider=gp, global_model=gm,
     )
     gate = validate_tender_cloud_gate(ap, project_key, cloud_confirm in ("true", "on", "1", "yes"))
-    extract_ctx = {
-        "request": request,
-        "project_key": project_key,
-        "project_title": _project_title(project_key),
-        "may_evaluate": True,
-    }
-    extract_ctx.update(_llm_picker_context())
     if gate:
-        extract_ctx.update({
-            "error": "cloud_confirm",
-            "payload": {},
-            "criteria_json": "{}",
-            "warnings": [],
-            "preview_meta": {},
-            "ranking_phase_labels": RANKING_PHASE_LABELS,
-            "ranking_phases": RANKING_PHASES,
-            "apply_error": None,
-        })
-        return templates.TemplateResponse("evaluation/_criteria_extract.html", extract_ctx)
+        return _criteria_preview_redirect(
+            project_key,
+            error="cloud_confirm",
+            payload={},
+            criteria_json="{}",
+            warnings=[],
+            preview_meta={},
+            apply_error=None,
+        )
     result = await asyncio.to_thread(
         extract_criteria_from_tender_docs, project_key, ap, am or None
     )
@@ -781,18 +824,16 @@ async def evaluation_extract_criteria(
     if not warnings and payload:
         from src.m15_evaluation import validate_criteria_payload
         warnings = validate_criteria_payload(payload)
-    extract_ctx.update({
-        "error": result.get("error"),
-        "payload": payload,
-        "criteria_json": json.dumps(payload, ensure_ascii=False, indent=2),
-        "warnings": warnings,
-        "preview_meta": criteria_preview_meta(payload) if payload else {},
-        "ranking_phase_labels": RANKING_PHASE_LABELS,
-        "ranking_phases": RANKING_PHASES,
-        "apply_error": None,
-        "raw_llm": result.get("raw_llm"),
-    })
-    return templates.TemplateResponse("evaluation/_criteria_extract.html", extract_ctx)
+    return _criteria_preview_redirect(
+        project_key,
+        error=result.get("error"),
+        payload=payload,
+        criteria_json=json.dumps(payload, ensure_ascii=False, indent=2),
+        warnings=warnings,
+        preview_meta=criteria_preview_meta(payload) if payload else {},
+        apply_error=None,
+        raw_llm=result.get("raw_llm"),
+    )
 
 
 @router.post("/evaluation/apply-criteria", response_class=HTMLResponse)
@@ -816,22 +857,14 @@ async def evaluation_apply_criteria(
     warnings = validate_criteria_payload(data)
     confirmed = confirm_apply in ("true", "on", "1", "yes")
     if criteria_apply_requires_confirm(data) and not confirmed:
-        return templates.TemplateResponse(
-            "evaluation/_criteria_extract.html",
-            {
-                "request": request,
-                "project_key": project_key,
-                "project_title": _project_title(project_key),
-                "error": None,
-                "apply_error": "confirm_required",
-                "payload": data,
-                "criteria_json": json.dumps(data, ensure_ascii=False, indent=2),
-                "warnings": warnings,
-                "preview_meta": criteria_preview_meta(data),
-                "ranking_phase_labels": RANKING_PHASE_LABELS,
-                "ranking_phases": RANKING_PHASES,
-                "may_evaluate": True,
-            },
+        return _criteria_preview_redirect(
+            project_key,
+            error=None,
+            apply_error="confirm_required",
+            payload=data,
+            criteria_json=json.dumps(data, ensure_ascii=False, indent=2),
+            warnings=warnings,
+            preview_meta=criteria_preview_meta(data),
         )
     stats = import_criteria_payload(project_key, data, skip_existing=True)
     warn_q = ""

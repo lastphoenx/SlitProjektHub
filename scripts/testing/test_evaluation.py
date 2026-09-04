@@ -483,6 +483,16 @@ def test_evaluation_config_roundtrip():
     ev.engine = old_engine
 
 
+def test_criteria_preview_cache():
+    from src.m15_evaluation import load_criteria_preview, store_criteria_preview
+
+    pid = store_criteria_preview("TEST", {"payload": {"eignung": []}, "error": None})
+    row = load_criteria_preview(pid, "TEST")
+    assert row is not None
+    assert row["payload"] == {"eignung": []}
+    assert load_criteria_preview(pid, "OTHER") is None
+
+
 def test_criteria_preview_meta():
     from src.m15_evaluation import criteria_apply_requires_confirm, criteria_preview_meta
 
@@ -666,6 +676,7 @@ if __name__ == "__main__":
     test_validate_tender_cloud_gate()
     test_suggest_tender_role_and_validate_criteria()
     test_evaluation_config_roundtrip()
+    test_criteria_preview_cache()
     test_criteria_preview_meta()
     test_ki_busy_hint()
     test_score_justification_required()
