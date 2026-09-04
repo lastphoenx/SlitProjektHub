@@ -136,6 +136,9 @@ class EvaluationProjectConfig(SQLModel, table=True):
     # Default KI für Phase ② Kriterien-Extraktion und ③ Preisblatt (Picker pro Lauf überschreibbar)
     vorgaben_ki_provider: Optional[str] = Field(default=None, sa_column=Column(String(40)))
     vorgaben_ki_model: Optional[str] = Field(default=None, sa_column=Column(String(80)))
+    # Default KI für Phase ④ Matrix-Bewertungsvorschlag (ein LLM-Call — nur Output-Rolle)
+    bewertung_ki_provider: Optional[str] = Field(default=None, sa_column=Column(String(40)))
+    bewertung_ki_model: Optional[str] = Field(default=None, sa_column=Column(String(80)))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -1229,6 +1232,8 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
             "price_formula": DEFAULT_PRICE_FORMULA,
             "vorgaben_ki_provider": "",
             "vorgaben_ki_model": "",
+            "bewertung_ki_provider": "",
+            "bewertung_ki_model": "",
         }
     try:
         years = json.loads(row.price_years_json or "[]")
@@ -1250,6 +1255,8 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
         "price_formula": formula,
         "vorgaben_ki_provider": (row.vorgaben_ki_provider or "").strip(),
         "vorgaben_ki_model": (row.vorgaben_ki_model or "").strip(),
+        "bewertung_ki_provider": (getattr(row, "bewertung_ki_provider", None) or "").strip(),
+        "bewertung_ki_model": (getattr(row, "bewertung_ki_model", None) or "").strip(),
     }
 
 
@@ -1295,6 +1302,23 @@ def resolve_vorgaben_ki(
     return resolve_visual_llm(form_provider, form_model, fallback_p, fallback_m)
 
 
+def resolve_bewertung_ki(
+    project_key: str,
+    form_provider: str = "",
+    form_model: str = "",
+    *,
+    global_provider: str = "openai",
+    global_model: str = "",
+) -> tuple[str, str]:
+    """KI für ④ Matrix-Bewertungsvorschlag: Picker > Projekt-Default > globale KI-Einstellungen."""
+    from .m16_idea_visual import resolve_visual_llm
+
+    cfg = get_evaluation_config(project_key)
+    fallback_p = (cfg.get("bewertung_ki_provider") or "").strip() or (global_provider or "openai").strip()
+    fallback_m = (cfg.get("bewertung_ki_model") or "").strip() or (global_model or "").strip()
+    return resolve_visual_llm(form_provider, form_model, fallback_p, fallback_m)
+
+
 def save_evaluation_config(
     project_key: str,
     *,
@@ -1305,6 +1329,8 @@ def save_evaluation_config(
     price_formula: str | None = None,
     vorgaben_ki_provider: str | None = None,
     vorgaben_ki_model: str | None = None,
+    bewertung_ki_provider: str | None = None,
+    bewertung_ki_model: str | None = None,
 ) -> None:
     cfg = get_evaluation_config(project_key)
     if price_years is not None:
@@ -1322,6 +1348,10 @@ def save_evaluation_config(
         cfg["vorgaben_ki_provider"] = (vorgaben_ki_provider or "").strip()
     if vorgaben_ki_model is not None:
         cfg["vorgaben_ki_model"] = (vorgaben_ki_model or "").strip()
+    if bewertung_ki_provider is not None:
+        cfg["bewertung_ki_provider"] = (bewertung_ki_provider or "").strip()
+    if bewertung_ki_model is not None:
+        cfg["bewertung_ki_model"] = (bewertung_ki_model or "").strip()
     with get_session() as session:
         row = session.get(EvaluationProjectConfig, project_key)
         if not row:
@@ -1333,6 +1363,8 @@ def save_evaluation_config(
         row.price_formula = cfg.get("price_formula", DEFAULT_PRICE_FORMULA)
         row.vorgaben_ki_provider = cfg.get("vorgaben_ki_provider") or None
         row.vorgaben_ki_model = cfg.get("vorgaben_ki_model") or None
+        row.bewertung_ki_provider = cfg.get("bewertung_ki_provider") or None
+        row.bewertung_ki_model = cfg.get("bewertung_ki_model") or None
         row.updated_at = _now()
         session.add(row)
         session.commit()
@@ -1388,6 +1420,66 @@ def recommended_chunk_size(
     if classification == ANGEbot_CLASSIFICATION or "angebot" in fn:
         return CHUNK_SIZE_HINTS["angebot"]
     return CHUNK_SIZE_HINTS["default"]
+
+
+def parse_expected_child_count(text: str, ref: Optional[str] = None) -> Optional[int]:
+    """Range-Hint aus Pflichtenheft: «18 Einzelanforderungen», «F01-001 bis F01-008»."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    m = re.search(r"(\d+)\s+Einzelanforderungen", t, re.I)
+    if m:
+        return int(m.group(1))
+    m = re.search(
+        r"([A-Za-z])-?0*(\d+)\s*(?:bis|–|-|to)\s*\1-?0*(\d+)",
+        t,
+        re.I,
+    )
+    if m:
+        return max(1, int(m.group(3)) - int(m.group(2)) + 1)
+    if ref:
+        nums = _extract_line_numbers_from_text(t, ref)
+        if len(nums) >= 2:
+            return len(nums)
+    return None
+
+
+def criteria_child_completeness(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Vergleich erkannte vs. erwartete Unterfragen (nur Zuschlag mit Range-Hint)."""
+    out: list[dict[str, Any]] = []
+    for entry in payload.get("zuschlag") or []:
+        if entry.get("auto_price"):
+            continue
+        name = (entry.get("name") or "").strip()
+        if not name:
+            continue
+        children = list(entry.get("children") or [])
+        ref, _ = _resolve_requirement_search(entry)
+        expected = parse_expected_child_count(entry.get("description") or "", ref)
+        if expected is None:
+            expected = parse_expected_child_count(name, ref)
+        found = len(children)
+        if expected is not None:
+            out.append({
+                "name": name,
+                "ref": ref or "",
+                "found": found,
+                "expected": expected,
+                "complete": found >= expected,
+            })
+    return out
+
+
+def criteria_completeness_warnings(items: list[dict[str, Any]]) -> list[str]:
+    warnings: list[str] = []
+    for x in items:
+        if x.get("complete"):
+            continue
+        warnings.append(
+            f"«{x['name']}» ({x.get('ref') or '?'}): "
+            f"{x['found']} von {x['expected']} Einzelanforderungen erkannt"
+        )
+    return warnings
 
 
 def validate_criteria_payload(data: dict[str, Any]) -> list[str]:
@@ -1450,6 +1542,7 @@ def criteria_preview_meta(data: dict[str, Any]) -> dict[str, Any]:
                     empty_descriptions.append(cname)
     missing_eignung = not eignung
     requires_confirm = missing_eignung or not weight_ok
+    completeness = criteria_child_completeness(data)
     return {
         "eignung_count": len(eignung),
         "zuschlag_count": len(zuschlag),
@@ -1458,6 +1551,7 @@ def criteria_preview_meta(data: dict[str, Any]) -> dict[str, Any]:
         "missing_eignung": missing_eignung,
         "empty_descriptions": empty_descriptions,
         "requires_confirm": requires_confirm,
+        "completeness": completeness,
     }
 
 
@@ -2731,6 +2825,7 @@ def extract_criteria_from_tender_docs(
     )
     warnings = validate_criteria_payload(payload)
     warnings = list(hints_pre) + list(warnings) + child_hints
+    warnings.extend(criteria_completeness_warnings(criteria_child_completeness(payload)))
     if not payload.get("eignung") and not payload.get("zuschlag"):
         return {
             "error": "KI konnte keine Kriterien extrahieren — Vorgaben prüfen oder manuell anlegen.",
@@ -3165,6 +3260,14 @@ def migrate_evaluation_db() -> None:
                 conn.execute(text(
                     f"ALTER TABLE evaluation_project_config "
                     f"ADD COLUMN rag_chunks_extraction INTEGER NOT NULL DEFAULT {DEFAULT_RAG_CHUNKS_EXTRACTION}"
+                ))
+            if "bewertung_ki_provider" not in cfg_cols:
+                conn.execute(text(
+                    "ALTER TABLE evaluation_project_config ADD COLUMN bewertung_ki_provider VARCHAR(40)"
+                ))
+            if "bewertung_ki_model" not in cfg_cols:
+                conn.execute(text(
+                    "ALTER TABLE evaluation_project_config ADD COLUMN bewertung_ki_model VARCHAR(80)"
                 ))
 
         if "evaluation_tender_doc" in tables:

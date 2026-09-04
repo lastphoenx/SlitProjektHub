@@ -139,37 +139,18 @@ Server-Validierung in `upsert_score`, UI-Hinweis + Liste offener Pflichten auf `
 
 ---
 
-## Ticket 4 — Zwei-Stufen-KI-Auswahl (Input-KI / Output-KI) für Offertbeurteilung
+## Ticket 4 — Zwei-Stufen-KI-Auswahl (Input-KI / Output-KI) für Offertbeurteilung ✅ erledigt
 
 **Ziel:** Gleiches Auswahlmuster wie Projektideen/Visual-Lab statt des heutigen
 Einzel-Providers.
 
-**Aktueller Stand:**
-- `POST /evaluation/suggest` nimmt aktuell nur ein Provider/Model-Paar
-  (`provider: str = Form("openai")`, `model: str = Form("")`,
-  `backend/app/routes/evaluation.py:367-368`) — ein einzelner Picker, kein
-  Input-KI/Output-KI-Konzept.
-- Referenz-Implementierung: `_llm_picker.html`-Partial mit `llm_role='input'|'output'`
-  (bereits produktiv in Projektideen/Visual-Lab) plus
-  `resolve_vision_provider_model()`-artige Auflösung in `src/m17_visual_lab_refs.py`.
+**Umsetzung:**
+- `_llm_picker.html` in Projekt-Einstellungen: **②③** (`vorgaben_ki_*`) und **④** (`bewertung_ki_*`) als getrennte Projekt-Defaults.
+- Matrix-Zelle (`_cell.html`): Picker mit Auflösung via `resolve_bewertung_ki()` (Picker > Projekt-Default > globale KI-Einstellungen).
+- `POST /evaluation/suggest` nutzt `resolve_bewertung_ki()`; ein LLM-Call pro Vorschlag (kein künstlicher Input/Output-Split).
+- DB-Migration `bewertung_ki_provider` / `bewertung_ki_model` in `evaluation_project_config`.
 
-**Aufgabe:**
-1. `_llm_picker.html`-Partial unverändert in `backend/templates/evaluation/index.html`
-   einbinden (zweimal: `llm_role='input'` für die RAG-Anfrage-Formulierung/Retrieval-seitige
-   Modellwahl, `llm_role='output'` für die eigentliche Bewertungsgenerierung — Rollenzuschnitt
-   ggf. mit UX abgleichen, da `suggest_score_with_rag()` aktuell nur einen LLM-Call macht).
-2. `suggest_score_with_rag()`-Signatur um zweites Provider/Model-Paar erweitern, falls die
-   Rollentrennung tatsächlich zwei LLM-Aufrufe ergibt (z. B. Query-Reformulierung vs.
-   Bewertungs-Generierung) — falls nicht, mit dem Entwickler klären, ob hier nur *eine*
-   Rolle sinnvoll ist und das Picker-Partial entsprechend einfach mit einem Slot verwendet
-   wird (nicht künstlich zwei Rollen erzwingen, wo nur ein Cloud-Call stattfindet).
-3. Gleiche Provider-Konstanten/Settings-Quelle wiederverwenden wie in Projektideen
-   (`load_user_settings()`, `CLOUD_LLM_PROVIDERS`) — keine Parallel-Konfiguration.
-
-**Akzeptanzkriterien:**
-- UI-Konsistenz: Offertbeurteilung nutzt dieselbe Picker-Komponente wie Projektideen/Visual-Lab.
-- Kein Duplicate-Code für Provider-Resolution.
-- Ticket 3 (PII-Gate) gilt unverändert für beide Rollen, sobald ein Cloud-Provider gewählt ist.
+**Akzeptanzkriterien:** erfüllt — gleiche Picker-Komponente, keine parallele Provider-Logik, PII-Gate unverändert.
 
 ---
 
@@ -259,4 +240,16 @@ F01-Leak-Filter, `auto_price` ohne Unterfragen.
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → ~~13–17~~ → 4
+## Ticket 18 — Vollständigkeits-Badge für Einzelanforderungen ✅ erledigt
+
+**Ziel:** Nach KI-Extraktion sichtbar machen, wenn weniger Unterfragen erkannt wurden als im Pflichtenheft angekündigt (z. B. «5 von 18 Einzelanforderungen»).
+
+**Umsetzung:**
+- `parse_expected_child_count()`, `criteria_child_completeness()`, `criteria_completeness_warnings()` in `m15_evaluation.py`.
+- Range-Hints: «18 Einzelanforderungen», «F01-001 bis F01-008» in Name/Beschreibung.
+- Warnungen in `extract_criteria_from_tender_docs()` + `criteria_preview_meta()`.
+- UI: `eval_criteria_preview.js` `renderAlerts()` zeigt gelbe Hinweise pro Zuschlagskriterium.
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → ~~13–17~~ → ~~4~~ → ~~18~~

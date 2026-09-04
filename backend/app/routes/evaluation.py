@@ -73,6 +73,7 @@ from src.m15_evaluation import (
     price_offers_status,
     recommended_chunk_size,
     project_evaluation_started,
+    resolve_bewertung_ki,
     resolve_vorgaben_ki,
     rolled_up_score,
     score_requires_justification,
@@ -630,6 +631,10 @@ async def evaluation_cell(
         "requires_justification": score_requires_justification,
     }
     ctx.update(_llm_picker_context())
+    if project_key:
+        eval_cfg = get_evaluation_config(project_key)
+        ctx["form_visual_provider"] = eval_cfg.get("bewertung_ki_provider") or ""
+        ctx["form_visual_model"] = eval_cfg.get("bewertung_ki_model") or ""
     return templates.TemplateResponse("evaluation/_cell.html", ctx)
 
 
@@ -649,17 +654,19 @@ async def evaluation_suggest(
         raise HTTPException(403, "Keine Berechtigung")
     from src.m15_evaluation import Criterion
     from src.m03_db import get_session
-    from src.m16_idea_visual import resolve_visual_llm
-
     with get_session() as session:
         crit = session.get(Criterion, criterion_id)
     if not crit:
         raise HTTPException(404, "Kriterium nicht gefunden")
 
     settings = load_user_settings()
-    fallback_p = (provider or "").strip() or settings.get("provider", "openai")
-    fallback_m = (model or "").strip() or settings.get("model", "")
-    ap, am = resolve_visual_llm(visual_llm_provider, visual_llm_model, fallback_p, fallback_m)
+    ap, am = resolve_bewertung_ki(
+        project_key,
+        visual_llm_provider,
+        visual_llm_model,
+        global_provider=settings.get("provider", "openai"),
+        global_model=settings.get("model", ""),
+    )
     gate_err = validate_evaluation_cloud_gate(
         ap, bidder_id, cloud_confirm in ("1", "true", "on", "yes")
     )
@@ -861,6 +868,8 @@ async def evaluation_save_config(
     price_formula: str = Form("reciprocal"),
     visual_llm_provider: str = Form(""),
     visual_llm_model: str = Form(""),
+    bewertung_ki_provider: str = Form(""),
+    bewertung_ki_model: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -878,6 +887,8 @@ async def evaluation_save_config(
         price_formula=price_formula,
         vorgaben_ki_provider=visual_llm_provider,
         vorgaben_ki_model=visual_llm_model,
+        bewertung_ki_provider=bewertung_ki_provider,
+        bewertung_ki_model=bewertung_ki_model,
     )
     return RedirectResponse(url=f"/evaluation?project_key={project_key}&config_saved=1", status_code=303)
 

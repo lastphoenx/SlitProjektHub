@@ -44,6 +44,7 @@
       scale_max: Number(e && e.scale_max != null ? e.scale_max : 10),
       ranking_phase: Number(e && e.ranking_phase != null ? e.ranking_phase : 1),
       auto_price: !!(e && e.auto_price),
+      requirement_ref: (e && e.requirement_ref) || '',
       children: ((e && e.children) || []).map(function (ch) {
         return {
           id: ch.id != null ? ch.id : null,
@@ -69,6 +70,39 @@
     return state.zuschlag.reduce(function (sum, row) {
       return sum + (parseFloat(row.weight_pct) || 0);
     }, 0);
+  }
+
+  function parseExpectedChildCount(text, ref) {
+    const t = String(text || '').trim();
+    if (!t) return null;
+    let m = t.match(/(\d+)\s+Einzelanforderungen/i);
+    if (m) return parseInt(m[1], 10);
+    m = t.match(/([A-Za-z])-?0*(\d+)\s*(?:bis|–|-|to)\s*\1-?0*(\d+)/i);
+    if (m) return Math.max(1, parseInt(m[3], 10) - parseInt(m[2], 10) + 1);
+    return null;
+  }
+
+  function childCompleteness() {
+    const out = [];
+    state.zuschlag.forEach(function (row) {
+      if (row.auto_price) return;
+      const name = (row.name || '').trim();
+      if (!name) return;
+      const ref = (row.requirement_ref || '').trim();
+      let expected = parseExpectedChildCount(row.description, ref);
+      if (expected == null) expected = parseExpectedChildCount(name, ref);
+      const found = (row.children || []).length;
+      if (expected != null) {
+        out.push({
+          name: name,
+          ref: ref,
+          found: found,
+          expected: expected,
+          complete: found >= expected,
+        });
+      }
+    });
+    return out;
   }
 
   function meta() {
@@ -97,6 +131,7 @@
       missing_eignung: state.eignung.length === 0,
       empty_descriptions: emptyDesc,
       requires_confirm: state.eignung.length === 0 || !weightOk,
+      completeness: childCompleteness(),
     };
   }
 
@@ -231,6 +266,12 @@
     if (m.empty_descriptions.length) {
       html += '<div class="criteria-alert criteria-alert-warn"><strong>Unvollständige Beschreibungen (' + m.empty_descriptions.length + ')</strong>: ' + esc(m.empty_descriptions.slice(0, 6).join(', ')) + (m.empty_descriptions.length > 6 ? ' …' : '') + '. Gelb markierte Felder bitte ergänzen.</div>';
     }
+    (m.completeness || []).forEach(function (c) {
+      if (c.complete) return;
+      html += '<div class="criteria-alert criteria-alert-warn"><strong>' + esc(c.name) + '</strong>'
+        + (c.ref ? ' (' + esc(c.ref) + ')' : '')
+        + ': ' + c.found + ' von ' + c.expected + ' Einzelanforderungen erkannt</div>';
+    });
     box.innerHTML = html;
     const confirmBlock = document.getElementById('criteria-confirm-block');
     if (confirmBlock) confirmBlock.hidden = !m.requires_confirm;
