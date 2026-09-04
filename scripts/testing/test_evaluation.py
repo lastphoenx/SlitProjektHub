@@ -729,7 +729,7 @@ def test_user_score_rejects_blind_ai_copy():
     from types import SimpleNamespace
     from src.m15_evaluation import validate_user_score_not_blind_ai_copy
 
-    crit = SimpleNamespace(kind="zuschlag", scale_max=10, name="F01-001")
+    crit = SimpleNamespace(kind="zuschlag", scale_max=10, name="F01-001", auto_price=False)
     ai_text = "Positiv: gut.\n\nAbzüge (2 P. unter Max. 10): fehlt X."
     try:
         validate_user_score_not_blind_ai_copy(
