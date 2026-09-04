@@ -7,7 +7,7 @@ import io
 import json
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from backend.app.jinja_env import templates
 
 from src.m07_projects import list_projects_df
@@ -48,6 +48,7 @@ from src.m15_evaluation import (
     criteria_preview_meta,
     extract_price_from_bidder_doc,
     extract_price_structure_from_tender,
+    format_requirement_ref_display,
     get_bidder_document_ids,
     get_bidder_doc_subtypes,
     get_bidder_preisblatt_doc_ids,
@@ -206,6 +207,7 @@ async def evaluation_page(request: Request, project_key: str = ""):
             "id": crit.id,
             "name": crit.name,
             "kind": crit.kind,
+            "referenz": format_requirement_ref_display(crit.referenz),
             "auto_price": crit.auto_price,
             "has_children": crit.id in has_children,
             "weight": crit.weight_pct if crit.kind == "zuschlag" else None,
@@ -595,19 +597,26 @@ async def evaluation_cell(
                 }
             )
         rollup_val, answered, total = rolled_up_score(bidder_id, crit, all_criteria, scores_by_cell)
+        parent_ctx = {
+            "request": request,
+            "project_key": project_key,
+            "bidder": bidder,
+            "criterion": crit,
+            "child_rows": child_rows,
+            "official": rollup_val,
+            "answered": answered,
+            "total": total,
+            "may_evaluate": can_evaluate(who),
+            "has_bidder_docs": bool(get_bidder_document_ids(bidder_id)),
+        }
+        parent_ctx.update(_llm_picker_context())
+        if project_key:
+            eval_cfg = get_evaluation_config(project_key)
+            parent_ctx["form_visual_provider"] = eval_cfg.get("bewertung_ki_provider") or ""
+            parent_ctx["form_visual_model"] = eval_cfg.get("bewertung_ki_model") or ""
         return templates.TemplateResponse(
             "evaluation/_cell_parent.html",
-            {
-                "request": request,
-                "project_key": project_key,
-                "bidder": bidder,
-                "criterion": crit,
-                "child_rows": child_rows,
-                "official": rollup_val,
-                "answered": answered,
-                "total": total,
-                "may_evaluate": can_evaluate(who),
-            },
+            parent_ctx,
         )
 
     cell_scores = list_scores_for_cell(bidder_id, criterion_id)
@@ -692,6 +701,76 @@ async def evaluation_suggest(
     tpl_ctx["suggestion"] = suggestion
     tpl_ctx["gate_error"] = None
     return templates.TemplateResponse("evaluation/_suggestion.html", tpl_ctx)
+
+
+@router.post("/evaluation/suggest-batch-step")
+async def evaluation_suggest_batch_step(
+    request: Request,
+    project_key: str = Form(...),
+    bidder_id: int = Form(...),
+    criterion_id: int = Form(...),
+    visual_llm_provider: str = Form(""),
+    visual_llm_model: str = Form(""),
+    cloud_confirm: str = Form(""),
+):
+    """Ein Schritt der KI-Stapelverarbeitung: RAG-Vorschlag + Speichern als source=ai (JSON)."""
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    from src.m15_evaluation import Criterion
+    from src.m03_db import get_session
+
+    with get_session() as session:
+        crit = session.get(Criterion, criterion_id)
+    if not crit:
+        raise HTTPException(404, "Kriterium nicht gefunden")
+
+    settings = load_user_settings()
+    ap, am = resolve_bewertung_ki(
+        project_key,
+        visual_llm_provider,
+        visual_llm_model,
+        global_provider=settings.get("provider", "openai"),
+        global_model=settings.get("model", ""),
+    )
+    gate_err = validate_evaluation_cloud_gate(
+        ap, bidder_id, cloud_confirm in ("1", "true", "on", "yes")
+    )
+    if gate_err:
+        return JSONResponse({
+            "ok": False,
+            "name": crit.name,
+            "error": gate_err,
+            "needs_cloud_confirm": gate_err == "cloud_confirm",
+        })
+
+    suggestion = suggest_score_with_rag(
+        project_key,
+        bidder_id,
+        crit,
+        provider=ap,
+        model=am or None,
+    )
+    if suggestion.get("value") is None:
+        return JSONResponse({
+            "ok": False,
+            "name": crit.name,
+            "error": "Kein KI-Vorschlag",
+        })
+
+    upsert_score(
+        bidder_id,
+        criterion_id,
+        evaluator_user_id=0,
+        value=float(suggestion["value"]),
+        justification=suggestion.get("justification") or None,
+        source_chunk_ref=suggestion.get("source_chunk_ref") or None,
+        as_source="ai",
+    )
+    return JSONResponse({
+        "ok": True,
+        "name": crit.name,
+        "value": suggestion["value"],
+    })
 
 
 @router.post("/evaluation/tender-doc", response_class=HTMLResponse)
