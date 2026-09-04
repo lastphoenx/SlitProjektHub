@@ -1038,14 +1038,20 @@ def test_flatten_eignung_payload():
 
     payload = {
         "eignung": [
-            {"name": "EK1", "description": "Text", "children": [{"name": "EK1-01", "description": "x"}]},
-            {"name": "EK2", "description": "y", "children": []},
+            {
+                "name": "EK1",
+                "description": "Text",
+                "scale_max": 10,
+                "children": [{"name": "EK1-01", "description": "x"}],
+            },
         ],
         "zuschlag": [],
     }
     hints = _flatten_eignung_payload(payload)
-    assert len(payload["eignung"][0]["children"]) == 0
-    assert any("EK1" in h for h in hints)
+    assert hints == []
+    assert payload["eignung"][0]["scale_max"] == 1
+    assert len(payload["eignung"][0]["children"]) == 1
+    assert payload["eignung"][0]["children"][0]["scale_max"] == 1
 
 
 def test_child_belongs_to_parent_ref():
@@ -1154,6 +1160,7 @@ def test_suggestion_justification_requires_deductions():
     from types import SimpleNamespace
     from src.m15_evaluation import (
         _compose_suggestion_justification,
+        _suggestion_deduction_grounding_issues,
         _suggestion_missing_deduction_rationale,
     )
 
@@ -1170,6 +1177,23 @@ def test_suggestion_justification_requires_deductions():
 
     praise_only = "Das Angebot zeigt ein gutes Verständnis des Projekts."
     assert _suggestion_missing_deduction_rationale(crit, 8.0, praise_only)
+
+    positiv = (
+        "Positiv: asynchrone Verarbeitung über Job-Queue mit Retry-Logik.\n\n"
+        "Abzüge (2 P. unter Max. 10): Fehlende Gegenmaßnahmen und Herausforderungen."
+    )
+    offer = "Zentrale Herausforderung ist die Integration; Job-Queue mit Retry-Logik."
+    issues = _suggestion_deduction_grounding_issues(positiv, offer, "")
+    assert any("herausforderung" in i.lower() or "job-queue" in i.lower() for i in issues)
+
+
+def test_extract_ek_line_numbers():
+    from src.m15_evaluation import _extract_line_numbers_from_text, _normalize_line_ref
+
+    ctx = "EK2-01 Personalressourcen\nEK2-02 Kapazität\nEK2-03 Entwickler"
+    assert _normalize_line_ref("EK2-06") == "EK2-06"
+    found = _extract_line_numbers_from_text(ctx, "EK2")
+    assert found >= {"EK2-01", "EK2-02", "EK2-03"}
 
 
 def test_resolve_requirement_search():
@@ -1354,6 +1378,7 @@ if __name__ == "__main__":
     test_extract_line_block_from_context()
     test_fill_missing_line_children()
     test_suggestion_justification_requires_deductions()
+    test_extract_ek_line_numbers()
     test_resolve_requirement_search()
     test_retrieve_tender_context_respects_max_format_chunks()
     test_evaluation_config_extraction_roundtrip()

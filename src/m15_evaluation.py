@@ -1471,6 +1471,13 @@ def parse_expected_child_count(text: str, ref: Optional[str] = None) -> Optional
     if m:
         return int(m.group(1))
     m = re.search(
+        r"(EK\d+)-0*(\d+)\s*(?:bis|–|-|to)\s*\1-?0*(\d+)",
+        t,
+        re.I,
+    )
+    if m:
+        return max(1, int(m.group(3)) - int(m.group(2)) + 1)
+    m = re.search(
         r"([A-Za-z])-?0*(\d+)-0*(\d+)\s*(?:bis|–|-|to)\s*\1-?0*(\d+)-0*(\d+)",
         t,
         re.I,
@@ -2229,6 +2236,107 @@ def _suggestion_missing_deduction_rationale(
     return False
 
 
+_DEDUCTION_MISSING_CLAIM_RE = re.compile(
+    r"(fehlt|fehlen|keine[n]?\s+(?:ausführliche|detaillierte)?|nicht\s+"
+    r"(?:erwähnt|belegt|nachgewiesen|beschrieben|genannt))",
+    re.I,
+)
+
+_DEDUCTION_TOPIC_PHRASES = (
+    "herausforderung",
+    "gegenmaßnahme",
+    "gegenmassnahme",
+    "erfolgsfaktor",
+    "mehrwert",
+    "innovativ",
+    "job-queue",
+    "job queue",
+    "retry",
+    "asynchron",
+    "integration",
+    "escada",
+)
+
+
+def _positiv_text_from_justification(justification: str, strengths: str = "") -> str:
+    positiv_m = re.search(
+        r"positiv:\s*(.+?)(?=\n\nabzüge|\Z)",
+        justification or "",
+        re.I | re.S,
+    )
+    if positiv_m:
+        return positiv_m.group(1).strip()
+    return (strengths or "").strip()
+
+
+def _deductions_text_from_justification(justification: str) -> str:
+    ded_m = re.search(r"abzüge[^:]*:\s*(.+)", justification or "", re.I | re.S)
+    return ded_m.group(1).strip() if ded_m else ""
+
+
+def _suggestion_deduction_grounding_issues(
+    justification: str,
+    offer_context: str,
+    strengths: str = "",
+) -> list[str]:
+    """Ticket 23: Abzugs-Claims gegen Positiv + Angebotskontext (Groundedness light)."""
+    deductions = _deductions_text_from_justification(justification)
+    if not deductions or not _DEDUCTION_MISSING_CLAIM_RE.search(deductions):
+        return []
+
+    positiv = _positiv_text_from_justification(justification, strengths)
+    offer_lo = (offer_context or "").lower()
+    positiv_lo = positiv.lower()
+    deductions_lo = deductions.lower()
+    issues: list[str] = []
+
+    for phrase in _DEDUCTION_TOPIC_PHRASES:
+        if phrase not in deductions_lo:
+            continue
+        in_offer = phrase in offer_lo or phrase.replace("-", " ") in offer_lo
+        in_positiv = phrase in positiv_lo or phrase.replace("-", " ") in positiv_lo
+        if in_offer or in_positiv:
+            issues.append(
+                f"«{phrase}» in Positiv/Angebot belegt, im Abzug aber als fehlend behauptet"
+            )
+
+    for tok in re.findall(r"[a-zäöüß]{6,}", positiv_lo):
+        if tok in deductions_lo and tok in offer_lo:
+            issues.append(f"Begriff «{tok}» in Positiv und Angebot, Abzug widerspricht")
+
+    return list(dict.fromkeys(issues))[:5]
+
+
+def _llm_deduction_contradiction_check(
+    provider: str,
+    model: str | None,
+    justification: str,
+    offer_context: str,
+) -> bool:
+    """Ticket 23 Stufe 3: günstiger Konsistenz-Check (nur bei Heuristik-Treffer)."""
+    if not (justification or "").strip() or not (offer_context or "").strip():
+        return False
+    system = (
+        "Prüfe, ob der Absatz «Abzüge» Fakten behauptet, die im «Positiv»-Teil oder im "
+        "Angebotsauszug bereits belegt sind. Antwort NUR als JSON: "
+        '{"contradiction": true/false, "reason": "kurz"}'
+    )
+    user = (
+        f"Begründung:\n{justification}\n\n"
+        f"Angebotsauszug:\n{(offer_context or '')[:3500]}\n\nJSON:"
+    )
+    raw = try_models_with_messages(
+        provider,
+        system,
+        [{"role": "user", "content": user}],
+        max_tokens=220,
+        temperature=0.0,
+        model=model,
+    )
+    parsed = _parse_suggestion_llm_json(raw)
+    return bool(parsed.get("contradiction"))
+
+
 def _parse_suggestion_llm_json(raw: str | None) -> dict[str, Any]:
     if not raw:
         return {}
@@ -2333,7 +2441,9 @@ def suggest_score_with_rag(
         "Du bist Vergabesachverständiger. Vergleiche Ausschreibungs-Vorgaben mit dem Angebot "
         "des Bieters und bewerte ein Kriterium. Begründungen müssen rekursfähig sein (BöB/IVöB): "
         "bei jeder Punktzahl unter dem Maximum präzise benennen, welche Vorgaben im Angebot "
-        "fehlen, unklar oder unzureichend belegt sind — nicht nur Lob wiederholen.\n"
+        "fehlen, unklar oder unzureichend belegt sind — nicht nur Lob wiederholen. "
+        "Vor «Abzüge:» den «Positiv»-Text und den Angebotsauszug gegenprüfen: nichts als fehlend "
+        "behaupten, was dort bereits belegt ist (kein Selbstwiderspruch).\n"
         + _suggestion_json_keys_instruction(scale_max, criterion.kind)
     )
     if cfg.get("vergabe_notes"):
@@ -2402,6 +2512,63 @@ def suggest_score_with_rag(
             f"Abzugsbegründung unvollständig für {value_f}/{scale_max} — bitte manuell ergänzen "
             "oder KI-Vorschlag erneut anstossen."
         )
+
+    grounding_issues = _suggestion_deduction_grounding_issues(
+        justification,
+        offer_context,
+        str(parsed.get("strengths") or ""),
+    )
+    if (
+        grounding_issues
+        and value_f is not None
+        and criterion.kind == "zuschlag"
+        and float(value_f) < scale_max - 1e-6
+    ):
+        retry_ground = (
+            system
+            + "\n\nKORREKTUR (Abzugs-Beleg): Folgende Abzugsbehauptungen widersprechen Positiv "
+            "oder Angebotsauszug — entfernen oder präzisieren: "
+            + "; ".join(grounding_issues)
+        )
+        raw_ground = try_models_with_messages(
+            provider,
+            retry_ground,
+            messages,
+            max_tokens=1500,
+            temperature=0.1,
+            model=model,
+        )
+        parsed_ground = _parse_suggestion_llm_json(raw_ground)
+        value_ground = _parse_suggestion_value(parsed_ground, scale_max)
+        justification_ground = _compose_suggestion_justification(
+            criterion, value_ground or value_f, parsed_ground or parsed
+        )
+        issues_ground = _suggestion_deduction_grounding_issues(
+            justification_ground,
+            offer_context,
+            str((parsed_ground or parsed).get("strengths") or ""),
+        )
+        if not issues_ground:
+            parsed = parsed_ground or parsed
+            value_f = value_ground if value_ground is not None else value_f
+            justification = justification_ground
+            raw = raw_ground
+            grounding_issues = []
+        else:
+            justification = justification_ground or justification
+            grounding_issues = issues_ground
+
+    if grounding_issues:
+        if _llm_deduction_contradiction_check(provider, model, justification, offer_context):
+            warn = (
+                "Abzugsbegründung widerspricht Angebot/Positiv (KI-Check): "
+                + "; ".join(grounding_issues[:3])
+            )
+            justification_warning = (
+                f"{justification_warning} {warn}".strip()
+                if justification_warning
+                else warn
+            )
 
     chunk_ref = _build_suggestion_chunk_ref(parsed)
 
@@ -2529,10 +2696,13 @@ def _normalize_requirement_ref(raw: str) -> Optional[str]:
 
 
 def _normalize_line_ref(raw: str) -> Optional[str]:
-    """Einzelzeile: F01-001, F-01-001 → F01-001."""
+    """Einzelzeile: F01-001, EK1-01, F-01-001 → kanonisch."""
     s = (raw or "").strip()
     if not s:
         return None
+    m = re.match(r"^(EK\d+)-0*(\d+)\b", s, re.I)
+    if m:
+        return f"{m.group(1).upper()}-{int(m.group(2)):02d}"
     m = re.match(r"^([A-Za-z])-?0*(\d+)-0*(\d+)\b", s, re.I)
     if m:
         return f"{m.group(1).upper()}{int(m.group(2)):02d}-{int(m.group(3)):03d}"
@@ -2558,6 +2728,9 @@ def format_requirement_ref_display(ref: Optional[str]) -> str:
         return ""
     if re.match(r"^EK\d+$", s, re.I):
         return s.upper()
+    m_ek_line = re.match(r"^(EK\d+)-(\d{2})$", s.upper())
+    if m_ek_line:
+        return f"{m_ek_line.group(1)}-{m_ek_line.group(2)}"
     line = _normalize_line_ref(s)
     if line:
         m = re.match(r"^([A-Z])(\d{2})-(\d{3})$", line)
@@ -2651,20 +2824,16 @@ def _resolve_requirement_search(entry: dict[str, Any]) -> tuple[Optional[str], s
 
 
 def _flatten_eignung_payload(payload: dict[str, Any]) -> list[str]:
-    """Eignung: keine Unterfragen — K.O. bleibt flach (3 Gates, nicht N Einzel-K.O.)."""
-    hints: list[str] = []
+    """Eignung: scale_max=1 für Parent + Kinder (Unterfragen EK1-01… in Schritt 2)."""
     for entry in payload.get("eignung") or []:
-        removed = list(entry.get("children") or [])
-        if removed:
-            ename = (entry.get("name") or "").strip() or "?"
-            hints.append(
-                f"«{ename}»: {len(removed)} Eignungs-Unterfragen entfernt "
-                "(K.O. wird nur auf Top-Level bewertet)"
-            )
-        entry["children"] = []
-        if int(entry.get("scale_max") or 1) != 1:
-            entry["scale_max"] = 1
-    return hints
+        entry["scale_max"] = 1
+        for ch in entry.get("children") or []:
+            ch["scale_max"] = 1
+    return []
+
+
+def _is_ek_parent_ref(ref: Optional[str]) -> bool:
+    return bool(re.match(r"^EK\d+$", (_normalize_requirement_ref(ref or "") or "").upper()))
 
 
 def _child_ref_prefix_from_name(child_name: str) -> Optional[str]:
@@ -2678,16 +2847,25 @@ def _child_ref_prefix_from_name(child_name: str) -> Optional[str]:
 def _child_belongs_to_parent_ref(child_name: str, parent_ref: Optional[str]) -> bool:
     if not parent_ref:
         return True
+    parent_norm = (_normalize_requirement_ref(parent_ref) or "").upper()
+    child_name = (child_name or "").strip()
+    m_ek = re.match(r"^(EK\d+)-", child_name, re.I)
+    if m_ek and parent_norm.startswith("EK"):
+        return m_ek.group(1).upper() == parent_norm
     child_prefix = _child_ref_prefix_from_name(child_name)
     if not child_prefix:
         return False
-    return child_prefix == _normalize_requirement_ref(parent_ref)
+    return child_prefix == parent_norm
 
 
 def _extract_line_numbers_from_text(text: str, ref: Optional[str]) -> set[str]:
-    """Zählt unterscheidbare Zeilennummern (z. B. F01-001) im RAG-Kontext."""
+    """Zählt unterscheidbare Zeilennummern (F01-001, EK1-01) im RAG-Kontext."""
     ref_norm = (ref or "").upper().replace("-", "")
     found: set[str] = set()
+    for m in re.finditer(r"\b(EK\d+)-0*(\d+)\b", text or "", re.I):
+        label = f"{m.group(1).upper()}-{int(m.group(2)):02d}"
+        if not ref_norm or m.group(1).upper() == ref_norm:
+            found.add(label)
     for m in re.finditer(r"\b([A-Za-z])-?0*(\d+)-0*(\d+)\b", text or ""):
         prefix = f"{m.group(1).upper()}{int(m.group(2)):02d}"
         label = f"{prefix}-{int(m.group(3)):03d}"
@@ -2697,8 +2875,10 @@ def _extract_line_numbers_from_text(text: str, ref: Optional[str]) -> set[str]:
 
 
 def _line_label_for_ref(ref: str, line_suffix: int) -> str:
-    """F01 + 3 → F01-003 (kanonisches Label)."""
+    """F01 + 3 → F01-003; EK1 + 3 → EK1-03 (kanonisches Label)."""
     norm = (_normalize_requirement_ref(ref) or ref or "").upper().replace("-", "")
+    if re.match(r"^EK\d+$", norm):
+        return f"{norm}-{line_suffix:02d}"
     m = re.match(r"^([A-Z])(\d{2})$", norm)
     if not m:
         return f"{norm}-{line_suffix:03d}"
@@ -2706,8 +2886,12 @@ def _line_label_for_ref(ref: str, line_suffix: int) -> str:
 
 
 def _line_label_regex(label: str) -> str:
-    """Regex-Fragment für F01-003 / F-01-003 / T01-003 im Fliesstext."""
+    """Regex-Fragment für F01-003 / EK1-03 im Fliesstext."""
     line = _normalize_line_ref(label) or (label or "").strip().upper()
+    m_ek = re.match(r"^(EK\d+)-(\d{2})$", line)
+    if m_ek:
+        ek, num = m_ek.group(1), int(m_ek.group(2))
+        return rf"\b{re.escape(ek)}-?0*{num}\b"
     m = re.match(r"^([A-Z])(\d{2})-(\d{3})$", line)
     if not m:
         return re.escape(label)
@@ -2723,6 +2907,13 @@ def _parse_line_suffix_from_label(label: str, ref: Optional[str]) -> Optional[in
     line = _normalize_line_ref(raw) or _store_referenz(raw)
     if not line or "-" not in line:
         return None
+    m_ek = re.match(r"^(EK\d+)-(\d{2})$", line.upper())
+    if m_ek:
+        block = m_ek.group(1)
+        ref_norm = (_normalize_requirement_ref(ref or "") or "").upper()
+        if ref_norm and block != ref_norm:
+            return None
+        return int(m_ek.group(2))
     m = re.match(r"^([A-Z])(\d{2})-(\d{3})$", line.upper())
     if not m:
         return None
@@ -2820,6 +3011,20 @@ def _extract_line_block_from_context(
             )
             if m_next:
                 end_pos = start_pos + 1 + m_next.start()
+        else:
+            ek_m = re.match(
+                r"^(EK\d+)-(\d{2})$",
+                (_normalize_line_ref(line_label) or line_label).upper(),
+            )
+            if ek_m:
+                ek = ek_m.group(1)
+                m_next = re.search(
+                    rf"\b{re.escape(ek)}-0*\d+\b",
+                    ctx[start_pos + 1:],
+                    re.I,
+                )
+                if m_next:
+                    end_pos = start_pos + 1 + m_next.start()
     text = re.sub(r"^[\s:;.\-|]+", "", ctx[start_pos:end_pos]).strip()
     if len(text) < 12:
         return None
@@ -3244,49 +3449,47 @@ def _merge_criteria_children(
     return merged
 
 
-def _enrich_criteria_children_from_requirements(
+def _enrich_single_criteria_entry_children(
     project_key: str,
-    payload: dict[str, Any],
+    entry: dict[str, Any],
+    *,
+    kind: str,
     provider: str,
     model: str | None,
-    *,
-    enrich_limit: int = ENRICH_CHILDREN_RAG_LIMIT,
-    enrich_threshold: float = ENRICH_CHILDREN_RAG_THRESHOLD,
+    doc_ids: tuple[int, ...],
+    enrich_limit: int,
+    enrich_threshold: float,
 ) -> list[str]:
-    """Schritt 2: Unterfragen nur für Zuschlag — mit Struktur-Nachweis und Groundedness-Filter."""
+    """Schritt 2 für ein Top-Level-Kriterium (Eignung oder Zuschlag)."""
     hints: list[str] = []
-    hints.extend(_flatten_eignung_payload(payload))
+    name = (entry.get("name") or "").strip()
+    if not name:
+        return hints
+    ref, search_term = _resolve_requirement_search(entry)
+    if ref and not entry.get("requirement_ref"):
+        entry["requirement_ref"] = ref
+    parent_desc = (entry.get("description") or "").strip()
+    step1_removed = len(entry.get("children") or [])
 
-    roles = ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben")
-    doc_ids = get_tender_document_ids(project_key, roles=roles)
-    if not doc_ids:
+    if kind == "zuschlag" and entry.get("auto_price"):
+        if step1_removed:
+            hints.append(f"{name}: Preis-Kriterium — {step1_removed} Unterfragen verworfen (auto_price)")
+        entry["children"] = []
         return hints
 
-    for entry in payload.get("zuschlag") or []:
-        name = (entry.get("name") or "").strip()
-        if not name:
-            continue
-        ref, search_term = _resolve_requirement_search(entry)
-        if ref and not entry.get("requirement_ref"):
-            entry["requirement_ref"] = ref
-        parent_desc = (entry.get("description") or "").strip()
-        step1_removed = len(entry.get("children") or [])
+    entry["children"] = []
 
-        if entry.get("auto_price"):
-            if step1_removed:
-                hints.append(f"{name}: Preis-Kriterium — {step1_removed} Unterfragen verworfen (auto_price)")
-            entry["children"] = []
-            continue
+    structured = _enrich_children_from_structured_tender_docs(
+        project_key, entry, kind=kind, ref=ref, search_term=search_term,
+    )
+    if structured:
+        entry["children"] = _merge_criteria_children([], structured, kind=kind)
+        hints.append(f"{name}: {len(structured)} Unterfragen aus strukturierter Vorgabe")
 
-        entry["children"] = []
-
-        structured = _enrich_children_from_structured_tender_docs(
-            project_key, entry, kind="zuschlag", ref=ref, search_term=search_term,
-        )
-        if structured:
-            entry["children"] = _merge_criteria_children([], structured, kind="zuschlag")
-            hints.append(f"{name}: {len(structured)} Unterfragen aus strukturierter Vorgabe")
-
+    if kind == "eignung":
+        query_parts = [search_term, ref or "", "Fragenkatalog Eignungskriterien Selbstdeklaration"]
+        query_parts.append("Referenz Frage Antwort ja nein Kommentar EK1-01 EK2-06")
+    else:
         query_parts = [search_term]
         if ref and ref != search_term:
             query_parts.append(ref)
@@ -3294,49 +3497,58 @@ def _enrich_criteria_children_from_requirements(
             "Einzelanforderungen Fragenr Referenz Anforderung Lieferant "
             "Ja Nein Teilweise Begründung Pflicht Kapitel Anforderungen"
         )
-        query = " ".join(query_parts)
-        ctx = _retrieve_enrichment_context(
-            project_key,
-            query=query,
-            ref=ref,
-            name=name,
-            doc_ids=tuple(doc_ids),
-            limit=enrich_limit,
-            threshold=enrich_threshold,
-        )
-        if is_cloud_llm_provider(provider) and ctx.strip():
-            ctx = sanitize_for_cloud_text(ctx)
+    query = " ".join(p for p in query_parts if p)
+    ctx = _retrieve_enrichment_context(
+        project_key,
+        query=query,
+        ref=ref,
+        name=name,
+        doc_ids=doc_ids,
+        limit=enrich_limit,
+        threshold=enrich_threshold,
+    )
+    if is_cloud_llm_provider(provider) and ctx.strip():
+        ctx = sanitize_for_cloud_text(ctx)
 
-        existing = list(entry.get("children") or [])
-        if existing:
-            filtered, dropped = _filter_grounded_children(existing, ctx, ref, parent_desc)
-            if dropped:
-                hints.append(f"{name}: {dropped} strukturierte Unterfragen nicht im Kontext belegt")
-            entry["children"] = filtered
+    existing = list(entry.get("children") or [])
+    if existing:
+        filtered, dropped = _filter_grounded_children(existing, ctx, ref, parent_desc)
+        if dropped:
+            hints.append(f"{name}: {dropped} strukturierte Unterfragen nicht im Kontext belegt")
+        entry["children"] = filtered
 
-        if not _zuschlag_has_line_structure_evidence(list(entry.get("children") or []), ctx, ref):
-            diag = _enrichment_ref_diag(ctx, ref)
-            if step1_removed:
-                hints.append(
-                    f"{name}: {step1_removed} Schritt-1-Unterfragen verworfen "
-                    f"({diag})"
-                )
-            elif not entry.get("children"):
-                hints.append(f"{name}: keine Unterfragen — {diag}")
-            log.info(
-                "[criteria-enrich] Gate rot für «%s» (%s): %s",
-                name, ref or search_term, diag,
+    if not _zuschlag_has_line_structure_evidence(list(entry.get("children") or []), ctx, ref):
+        diag = _enrichment_ref_diag(ctx, ref)
+        if step1_removed:
+            hints.append(
+                f"{name}: {step1_removed} Schritt-1-Unterfragen verworfen ({diag})"
             )
-            entry["children"] = []
-            continue
+        elif not entry.get("children"):
+            hints.append(f"{name}: keine Unterfragen — {diag}")
+        log.info(
+            "[criteria-enrich] Gate rot für «%s» (%s, %s): %s",
+            name, kind, ref or search_term, diag,
+        )
+        entry["children"] = []
+        return hints
 
-        if len(entry.get("children") or []) >= 30:
-            continue
+    if len(entry.get("children") or []) >= 30:
+        return hints
 
-        if not ctx.strip():
-            continue
+    if not ctx.strip():
+        return hints
 
-        ref_hint = f"Referenz-Gruppe: {ref}" if ref else f"Suchbegriff: {search_term}"
+    ref_hint = f"Referenz-Gruppe: {ref}" if ref else f"Suchbegriff: {search_term}"
+    if kind == "eignung":
+        system = (
+            "Extrahiere alle Fragen aus dem Eignungs-Fragenkatalog / Selbstdeklaration für "
+            f"ein Eignungskriterium — NICHT nur die Kapitel-Einleitung. {ref_hint} "
+            "(Fragen z. B. EK1-01, EK2-06). Antwort NUR als JSON mit key children (Liste). "
+            "Jedes Kind: name (exakte Referenznummer), description (voller Fragetext). "
+            "Nur Zeilen, die im Ausschreibungsauszug wörtlich vorkommen — nichts erfinden."
+        )
+        user = f"Top-Kriterium (eignung): {name}\n\nAusschreibungsauszug:\n{ctx}\n\nJSON:"
+    else:
         system = (
             "Extrahiere alle Einzelanforderungen (Unterfragen) für ein Zuschlagskriterium aus "
             "dem Kapitel «Anforderungen» / Anforderungsblatt — NICHT nur die Kapitel-Einleitung. "
@@ -3346,47 +3558,86 @@ def _enrich_criteria_children_from_requirements(
             "Nur Zeilen, die im Ausschreibungsauszug wörtlich vorkommen — nichts erfinden."
         )
         user = f"Top-Kriterium (zuschlag): {name}\n\nAusschreibungsauszug:\n{ctx}\n\nJSON:"
-        raw = try_models_with_messages(
-            provider,
-            system,
-            [{"role": "user", "content": user}],
-            max_tokens=4500,
-            temperature=0.1,
-            model=model,
+
+    raw = try_models_with_messages(
+        provider,
+        system,
+        [{"role": "user", "content": user}],
+        max_tokens=4500,
+        temperature=0.1,
+        model=model,
+    )
+    sub = _parse_llm_json_object(raw)
+    children = sub.get("children") if isinstance(sub, dict) else []
+    if not children and isinstance(sub, list):
+        children = sub
+
+    default_scale = 1 if kind == "eignung" else 10
+    llm_children: list[dict[str, Any]] = []
+    for ch in children or []:
+        cname = (ch.get("name") or "").strip()
+        if not cname:
+            continue
+        llm_children.append({
+            "name": cname,
+            "description": (ch.get("description") or "").strip(),
+            "scale_max": int(ch.get("scale_max") or default_scale),
+            "requirement_ref": (ch.get("requirement_ref") or "").strip()
+            or _entry_referenz({"name": cname, "description": ch.get("description")}),
+        })
+
+    before = len(entry.get("children") or [])
+    merged = _merge_criteria_children(list(entry.get("children") or []), llm_children, kind=kind)
+    filtered, dropped = _filter_grounded_children(merged, ctx, ref, parent_desc)
+    entry["children"] = filtered
+    added = len(filtered) - before
+    if dropped:
+        hints.append(f"{name}: {dropped} KI-Unterfragen verworfen (nicht im Vorgaben-Kontext)")
+    if added > 0:
+        hints.append(f"{name}: +{added} Unterfragen (KI/RAG, belegt)")
+    gap_filled = _fill_missing_line_children(entry, ctx, ref)
+    if gap_filled:
+        hints.append(
+            f"{name}: {gap_filled} fehlende Zeile(n) deterministisch aus Kontext ergänzt"
         )
-        sub = _parse_llm_json_object(raw)
-        children = sub.get("children") if isinstance(sub, dict) else []
-        if not children and isinstance(sub, list):
-            children = sub
+    _stamp_child_requirement_refs(entry.get("children") or [])
+    return hints
 
-        llm_children: list[dict[str, Any]] = []
-        for ch in children or []:
-            cname = (ch.get("name") or "").strip()
-            if not cname:
-                continue
-            llm_children.append({
-                "name": cname,
-                "description": (ch.get("description") or "").strip(),
-                "scale_max": int(ch.get("scale_max") or 10),
-                "requirement_ref": (ch.get("requirement_ref") or "").strip()
-                or _entry_referenz({"name": cname, "description": ch.get("description")}),
-            })
 
-        before = len(entry.get("children") or [])
-        merged = _merge_criteria_children(list(entry.get("children") or []), llm_children, kind="zuschlag")
-        filtered, dropped = _filter_grounded_children(merged, ctx, ref, parent_desc)
-        entry["children"] = filtered
-        added = len(filtered) - before
-        if dropped:
-            hints.append(f"{name}: {dropped} KI-Unterfragen verworfen (nicht im Vorgaben-Kontext)")
-        if added > 0:
-            hints.append(f"{name}: +{added} Unterfragen (KI/RAG, belegt)")
-        gap_filled = _fill_missing_line_children(entry, ctx, ref)
-        if gap_filled:
-            hints.append(
-                f"{name}: {gap_filled} fehlende Zeile(n) deterministisch aus Kontext ergänzt"
+def _enrich_criteria_children_from_requirements(
+    project_key: str,
+    payload: dict[str, Any],
+    provider: str,
+    model: str | None,
+    *,
+    enrich_limit: int = ENRICH_CHILDREN_RAG_LIMIT,
+    enrich_threshold: float = ENRICH_CHILDREN_RAG_THRESHOLD,
+) -> list[str]:
+    """Schritt 2: Unterfragen für Eignung + Zuschlag — mit Struktur-Nachweis und Groundedness."""
+    hints: list[str] = []
+    hints.extend(_flatten_eignung_payload(payload))
+
+    kind_roles = (
+        ("eignung", ("eignungskriterien", "ausschreibungsunterlage", "bewertungsvorgaben")),
+        ("zuschlag", ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben")),
+    )
+    for kind, roles in kind_roles:
+        doc_ids = get_tender_document_ids(project_key, roles=roles)
+        if not doc_ids:
+            continue
+        for entry in payload.get(kind) or []:
+            hints.extend(
+                _enrich_single_criteria_entry_children(
+                    project_key,
+                    entry,
+                    kind=kind,
+                    provider=provider,
+                    model=model,
+                    doc_ids=tuple(doc_ids),
+                    enrich_limit=enrich_limit,
+                    enrich_threshold=enrich_threshold,
+                )
             )
-        _stamp_child_requirement_refs(entry.get("children") or [])
 
     return hints
 
@@ -3424,6 +3675,10 @@ def extract_criteria_from_tender_docs(
     extraction_limit = cfg.get("rag_chunks_extraction", DEFAULT_RAG_CHUNKS_EXTRACTION)
     role_queries = [
         (("eignungskriterien", "ausschreibungsunterlage"), "Eignungskriterien K.O. Mindestanforderungen Bieter"),
+        (
+            ("eignungskriterien", "ausschreibungsunterlage", "bewertungsvorgaben"),
+            "Fragenkatalog Eignungskriterien Selbstdeklaration EK1-01 EK2-06 Referenz Frage Antwort",
+        ),
         (("zuschlagskriterien", "bewertungsvorgaben"), "Zuschlagskriterien Gewichtung Punkte Bewertungsmatrix Übersicht"),
         (
             ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben"),
@@ -3447,8 +3702,8 @@ def extract_criteria_from_tender_docs(
         "Antwort NUR als JSON mit keys eignung und zuschlag (Listen von Objekten). "
         "Jedes Objekt: name (kurz), description (Kapitel-Einleitung / Aufgabenstellung), "
         "requirement_ref (PFLICHT: Eignung EK1/EK2/EK3; Zuschlag F01, T01, W01, … — unabhängig vom name-Text). "
-        "Eignung: NUR flache Top-Level-K.O.-Kriterien — KEINE children, KEINE Unterfragen; "
-        "gesamter Nachweistext in description. "
+        "Eignung Schritt 1: nur Top-Level EK1/EK2/EK3 ohne children; Nachweistext in description "
+        "(z. B. «Referenznummern EK2-01 bis EK2-06»). Unterfragen EK1-01… kommen in Schritt 2. "
         "Zuschlag: optional children nur in Schritt 2 (Anforderungsblätter F/T). "
         "Zuschlag: weight_pct, scale_max (default 10), auto_price true nur für reines Preis-Kriterium, "
         "ranking_phase 1 (ZK) oder 2 (Präsentation nach Einladung, z. B. A-01). "

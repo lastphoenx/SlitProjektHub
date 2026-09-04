@@ -228,14 +228,20 @@
   }
 
   function inferChildRef(name) {
-    const m = String(name || '').trim().match(/^([A-Za-z])-?0*(\d+)-0*(\d+)$/i);
+    const s = String(name || '').trim();
+    const ek = s.match(/^(EK\d+)-0*(\d+)$/i);
+    if (ek) {
+      return ek[1].toUpperCase() + '-' + String(ek[2]).padStart(2, '0');
+    }
+    const m = s.match(/^([A-Za-z])-?0*(\d+)-0*(\d+)$/i);
     if (!m) return '';
     return m[1].toUpperCase() + '-' + String(m[2]).padStart(2, '0')
       + '-' + String(m[3]).padStart(3, '0');
   }
 
-  function refInput(value, cls, isChild) {
-    const ph = isChild ? 'F01-001' : 'EK1 / F-01';
+  function refInput(value, cls, isChild, childKind) {
+    let ph = 'EK1 / F-01';
+    if (isChild) ph = (childKind === 'eignung') ? 'EK1-01' : 'F01-001';
     return '<input class="form-input ' + cls + '" value="' + esc(displayRef(value)) + '" '
       + 'placeholder="' + ph + '" title="Referenzschlüssel aus Pflichtenheft" style="width:4.5rem;font-size:.75rem" />';
   }
@@ -254,7 +260,7 @@
       html += '</tr>';
       (row.children || []).forEach(function (ch, cidx) {
         html += '<tr class="criteria-row criteria-child-row" data-kind="eignung" data-idx="' + idx + '" data-cidx="' + cidx + '">';
-        html += '<td style="padding-left:.5rem">' + refInput(ch.requirement_ref, 'criteria-in-cref', true) + '</td>';
+        html += '<td style="padding-left:.5rem">' + refInput(ch.requirement_ref, 'criteria-in-cref', true, 'eignung') + '</td>';
         html += '<td style="padding-left:1.25rem"><input class="form-input criteria-in-cname" value="' + esc(ch.name) + '" placeholder="Unterfrage" /></td>';
         html += '<td><textarea class="form-input criteria-in-cdesc' + descClass(ch.description) + '" rows="2">' + esc(ch.description) + '</textarea></td>';
         html += '<td></td><td><button type="button" class="btn btn-ghost btn-sm criteria-del-child">×</button></td>';
@@ -282,7 +288,7 @@
       html += '</tr>';
       (row.children || []).forEach(function (ch, cidx) {
         html += '<tr class="criteria-row criteria-child-row" data-kind="zuschlag" data-idx="' + idx + '" data-cidx="' + cidx + '">';
-        html += '<td style="padding-left:.5rem">' + refInput(ch.requirement_ref, 'criteria-in-cref', true) + '</td>';
+        html += '<td style="padding-left:.5rem">' + refInput(ch.requirement_ref, 'criteria-in-cref', true, 'zuschlag') + '</td>';
         html += '<td style="padding-left:1.25rem"><input class="form-input criteria-in-cname" value="' + esc(ch.name) + '" /></td>';
         html += '<td><textarea class="form-input criteria-in-cdesc' + descClass(ch.description) + '" rows="2">' + esc(ch.description) + '</textarea></td>';
         html += '<td colspan="4"></td><td><button type="button" class="btn btn-ghost btn-sm criteria-del-child">×</button></td>';
