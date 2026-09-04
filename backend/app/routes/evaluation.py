@@ -43,6 +43,8 @@ from src.m15_evaluation import (
     create_criterion,
     delete_price_item,
     extract_criteria_from_tender_docs,
+    criteria_apply_requires_confirm,
+    criteria_preview_meta,
     extract_price_from_bidder_doc,
     extract_price_structure_from_tender,
     get_bidder_document_ids,
@@ -760,21 +762,34 @@ async def evaluation_extract_criteria(
     }
     extract_ctx.update(_llm_picker_context())
     if gate:
-        extract_ctx.update({
+    extract_ctx.update({
             "error": "cloud_confirm",
             "payload": {},
             "criteria_json": "{}",
+            "warnings": [],
+            "preview_meta": {},
+            "ranking_phase_labels": RANKING_PHASE_LABELS,
+            "ranking_phases": RANKING_PHASES,
+            "apply_error": None,
         })
         return templates.TemplateResponse("evaluation/_criteria_extract.html", extract_ctx)
     result = await asyncio.to_thread(
         extract_criteria_from_tender_docs, project_key, ap, am or None
     )
     payload = result.get("payload") or {}
+    warnings = result.get("warnings") or []
+    if not warnings and payload:
+        from src.m15_evaluation import validate_criteria_payload
+        warnings = validate_criteria_payload(payload)
     extract_ctx.update({
         "error": result.get("error"),
         "payload": payload,
         "criteria_json": json.dumps(payload, ensure_ascii=False, indent=2),
-        "warnings": result.get("warnings") or [],
+        "warnings": warnings,
+        "preview_meta": criteria_preview_meta(payload) if payload else {},
+        "ranking_phase_labels": RANKING_PHASE_LABELS,
+        "ranking_phases": RANKING_PHASES,
+        "apply_error": None,
         "raw_llm": result.get("raw_llm"),
     })
     return templates.TemplateResponse("evaluation/_criteria_extract.html", extract_ctx)
@@ -785,6 +800,7 @@ async def evaluation_apply_criteria(
     request: Request,
     project_key: str = Form(...),
     criteria_json: str = Form(...),
+    confirm_apply: str = Form("false"),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -794,6 +810,28 @@ async def evaluation_apply_criteria(
         return RedirectResponse(
             url=f"/evaluation?project_key={project_key}&criteria_apply=invalid",
             status_code=303,
+        )
+    from src.m15_evaluation import validate_criteria_payload
+
+    warnings = validate_criteria_payload(data)
+    confirmed = confirm_apply in ("true", "on", "1", "yes")
+    if criteria_apply_requires_confirm(data) and not confirmed:
+        return templates.TemplateResponse(
+            "evaluation/_criteria_extract.html",
+            {
+                "request": request,
+                "project_key": project_key,
+                "project_title": _project_title(project_key),
+                "error": None,
+                "apply_error": "confirm_required",
+                "payload": data,
+                "criteria_json": json.dumps(data, ensure_ascii=False, indent=2),
+                "warnings": warnings,
+                "preview_meta": criteria_preview_meta(data),
+                "ranking_phase_labels": RANKING_PHASE_LABELS,
+                "ranking_phases": RANKING_PHASES,
+                "may_evaluate": True,
+            },
         )
     stats = import_criteria_payload(project_key, data, skip_existing=True)
     warn_q = ""

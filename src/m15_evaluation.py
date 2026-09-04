@@ -924,10 +924,50 @@ def validate_criteria_payload(data: dict[str, Any]) -> list[str]:
         warnings.append("Preis-Kriterium erkannt, aber auto_price nicht gesetzt — ggf. manuell aktivieren.")
     for kind, entries in (("eignung", eignung), ("zuschlag", zuschlag)):
         for e in entries:
+            ename = (e.get("name") or "").strip()
+            if ename and not (e.get("description") or "").strip():
+                warnings.append(f"«{ename}»: Beschreibung fehlt — bitte ergänzen oder in Vorgaben nachziehen.")
             for ch in e.get("children") or []:
+                cname = (ch.get("name") or "").strip()
+                if cname and not (ch.get("description") or "").strip():
+                    warnings.append(f"«{cname}» (Unterkriterium): Beschreibung fehlt.")
                 if kind == "eignung" and int(ch.get("scale_max") or 10) != 1:
-                    warnings.append(f"Eignungs-Unterkriterium «{ch.get('name')}»: scale_max sollte 1 sein.")
+                    warnings.append(f"Eignungs-Unterkriterium «{cname}»: scale_max sollte 1 sein.")
     return warnings
+
+
+def criteria_preview_meta(data: dict[str, Any]) -> dict[str, Any]:
+    """Zusammenfassung für die Kriterien-Vorschau (Tabellen-UI)."""
+    eignung = data.get("eignung") or []
+    zuschlag = data.get("zuschlag") or []
+    top_weights = [float(e.get("weight_pct") or 0) for e in zuschlag]
+    weight_total = sum(top_weights)
+    weight_ok = not top_weights or abs(weight_total - 100.0) <= 1.0
+    empty_descriptions: list[str] = []
+    for kind, entries in (("eignung", eignung), ("zuschlag", zuschlag)):
+        for e in entries:
+            ename = (e.get("name") or "").strip()
+            if ename and not (e.get("description") or "").strip():
+                empty_descriptions.append(ename)
+            for ch in e.get("children") or []:
+                cname = (ch.get("name") or "").strip()
+                if cname and not (ch.get("description") or "").strip():
+                    empty_descriptions.append(cname)
+    missing_eignung = not eignung
+    requires_confirm = missing_eignung or not weight_ok
+    return {
+        "eignung_count": len(eignung),
+        "zuschlag_count": len(zuschlag),
+        "weight_total": round(weight_total, 1),
+        "weight_ok": weight_ok,
+        "missing_eignung": missing_eignung,
+        "empty_descriptions": empty_descriptions,
+        "requires_confirm": requires_confirm,
+    }
+
+
+def criteria_apply_requires_confirm(data: dict[str, Any]) -> bool:
+    return bool(criteria_preview_meta(data).get("requires_confirm"))
 
 
 def _dedupe_rag_docs(docs: list[dict]) -> list[dict]:
