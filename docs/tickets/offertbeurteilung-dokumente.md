@@ -251,4 +251,12 @@ kind-agnostisches Enrichment (Eignung + Zuschlag), CSV/XLSX-Zeilen.
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → ~~13–16~~ → 4
+## Ticket 17 — Groundedness & flache Eignung ✅ erledigt
+
+Siehe **`docs/tickets/ki-kriterien-extraktion-13-16.md`** (Abschnitt Ticket 17) —
+Eignung ohne `children`, Zuschlag nur mit Zeilenstruktur-Nachweis, Schritt-1-Artefakte verwerfen,
+F01-Leak-Filter, `auto_price` ohne Unterfragen.
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → ~~13–17~~ → 4
