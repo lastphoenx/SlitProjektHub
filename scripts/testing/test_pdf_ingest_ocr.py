@@ -48,7 +48,10 @@ def test_extract_pdf_ocr_fallback(tmp_path):
     pdf = tmp_path / "scan.pdf"
     pdf.write_bytes(b"%PDF scan")
     sparse = "ab"
-    ocr_text = "Nach OCR ist hier genug Text für die Volltextsuche im Dokument vorhanden."
+    ocr_text = (
+        "Nach OCR ist hier genug Text für die Volltextsuche im Dokument vorhanden. "
+        "Dieser Satz ist absichtlich lang genug für MIN_PDF_TEXT_CHARS."
+    )
     state = {"pass": 0}
 
     def fake_extract(path, **kwargs):
