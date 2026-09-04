@@ -12,16 +12,15 @@ from src.m09_docs import (
     IngestResult,
     extract_pdf_text_with_fallback,
     _ingest_status_from_meta,
-    pdf_extracted_text_is_sparse,
 )
-from src.m11_vision import pdf_extracted_text_is_sparse as vision_sparse
+from src.m11_vision import pdf_extracted_text_is_sparse
 
 
 def test_pdf_extracted_text_is_sparse():
     assert pdf_extracted_text_is_sparse("")
     assert pdf_extracted_text_is_sparse("kurz")
     assert not pdf_extracted_text_is_sparse("x" * 100)
-    assert vision_sparse("x" * 50, min_chars=80)
+    assert pdf_extracted_text_is_sparse("x" * 50, min_chars=80)
 
 
 def test_ingest_status_from_meta():

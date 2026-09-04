@@ -490,6 +490,16 @@ def test_evaluation_config_roundtrip():
     assert p2 == "openai"
     assert m2 == "gpt-4o"
 
+    from src.m15_evaluation import resolve_bewertung_ki
+
+    save_evaluation_config("p1", bewertung_ki_provider="ollama", bewertung_ki_model="qwen3:32b")
+    cfg3 = get_evaluation_config("p1")
+    assert cfg3["bewertung_ki_provider"] == "ollama"
+    assert cfg3["bewertung_ki_model"] == "qwen3:32b"
+    p3, m3 = resolve_bewertung_ki("p1", "", "", global_provider="openai", global_model="gpt-4o-mini")
+    assert p3 == "ollama"
+    assert m3 == "qwen3:32b"
+
     db.engine = old_engine
     ev.engine = old_engine
 
@@ -557,6 +567,37 @@ def test_criteria_preview_meta():
     meta2 = criteria_preview_meta(ok)
     assert meta2["weight_ok"] is True
     assert meta2["requires_confirm"] is False
+
+
+def test_parse_expected_child_count_and_completeness():
+    from src.m15_evaluation import (
+        criteria_child_completeness,
+        criteria_completeness_warnings,
+        criteria_preview_meta,
+        parse_expected_child_count,
+    )
+
+    assert parse_expected_child_count("18 Einzelanforderungen im Kapitel 7") == 18
+    assert parse_expected_child_count("F01-001 bis F01-008") == 8
+    assert parse_expected_child_count("F-01-001 bis F-01-008") == 8
+    assert parse_expected_child_count("Kein Hinweis") is None
+
+    payload = {
+        "zuschlag": [{
+            "name": "F-01 Funktionalität",
+            "description": "18 Einzelanforderungen",
+            "children": [{"name": "F01-001"}, {"name": "F01-002"}],
+        }],
+    }
+    comp = criteria_child_completeness(payload)
+    assert len(comp) == 1
+    assert comp[0]["found"] == 2
+    assert comp[0]["expected"] == 18
+    assert comp[0]["complete"] is False
+    warns = criteria_completeness_warnings(comp)
+    assert "2 von 18" in warns[0]
+    meta = criteria_preview_meta(payload)
+    assert meta["completeness"][0]["expected"] == 18
 
 
 def test_ki_busy_hint():
@@ -1101,6 +1142,7 @@ if __name__ == "__main__":
     test_retrieve_tender_context_multi_fair_pass_budget()
     test_criteria_preview_cache()
     test_criteria_preview_meta()
+    test_parse_expected_child_count_and_completeness()
     test_ki_busy_hint()
     test_score_justification_required()
     test_sync_price_criterion_scores_reciprocal_gate()

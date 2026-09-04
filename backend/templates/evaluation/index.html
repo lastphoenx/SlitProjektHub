@@ -211,6 +211,13 @@
       {% set form_visual_provider = eval_config.vorgaben_ki_provider or '' %}
       {% set form_visual_model = eval_config.vorgaben_ki_model or '' %}
       {% include 'partials/_llm_picker.html' %}
+      {% set form_id = 'bewertung-config' %}
+      {% set llm_field_prefix = 'bewertung_ki' %}
+      {% set picker_title = 'KI-Default für Matrix-Bewertung (④)' %}
+      {% set picker_hint = 'Startwert für KI-Vorschlag pro Matrix-Zelle (Dual-RAG Vorgabe + Angebot). Leer = globale KI-Einstellungen. Pro Zelle im Picker änderbar.' %}
+      {% set form_visual_provider = eval_config.bewertung_ki_provider or '' %}
+      {% set form_visual_model = eval_config.bewertung_ki_model or '' %}
+      {% include 'partials/_llm_picker.html' %}
       <button type="submit" class="btn btn-secondary btn-sm" style="justify-self:start">Speichern</button>
     </form>
   </details>

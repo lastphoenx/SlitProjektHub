@@ -1,6 +1,6 @@
 {# Provider/Modell-Auswahl — role: input | output #}
 {% set role = llm_role or 'output' %}
-{% set prefix = 'input_llm' if role == 'input' else 'visual_llm' %}
+{% set prefix = llm_field_prefix or ('input_llm' if role == 'input' else 'visual_llm') %}
 {% set fid = form_id or 'default' %}
 {% set sel_provider = form_input_provider if role == 'input' else form_visual_provider %}
 {% set sel_model = form_input_model if role == 'input' else form_visual_model %}
