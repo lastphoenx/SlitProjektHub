@@ -2079,6 +2079,165 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 
 
+def _suggestion_json_keys_instruction(scale_max: int, kind: str) -> str:
+    """LLM-JSON-Schema für rekursfähige Bewertungsvorschläge."""
+    parts = [
+        "Antwort NUR als JSON mit keys:",
+        "value (Zahl 0 bis scale_max),",
+        "strengths (konkret: was im Angebot gut belegt/erfüllt ist),",
+    ]
+    if kind == "zuschlag" and scale_max > 1:
+        parts.append(
+            f"deductions (PFLICHT wenn value < {scale_max}: jeder Punktabzug präzise — "
+            "welche Vorgabe fehlt oder im Angebot unzureichend; bei voller Punktzahl leerer String),"
+        )
+        parts.append(
+            "justification (zwei Absätze mit exakt diesen Präfixen: «Positiv: …» und "
+            f"«Abzüge ({scale_max} − value P. unter Max.): …»; bei Maximalpunktzahl «Abzüge: keine»),"
+        )
+    elif kind == "eignung":
+        parts.append(
+            "deductions (PFLICHT bei Nicht-Erfüllung: konkreter Ausschlussgrund; bei erfüllt leer),"
+        )
+        parts.append(
+            "justification (rekursfähig; bei Nein Abschnitt «Nicht erfüllt: …»),"
+        )
+    else:
+        parts.append("justification (warum diese Punktzahl),")
+    parts.append(
+        "source_quote (ein wörtliches Angebotszitat als Beleg), "
+        "source_chunk_id (Zahl oder null)."
+    )
+    return " ".join(parts)
+
+
+def _compose_suggestion_justification(
+    criterion: Criterion,
+    value: float | None,
+    parsed: dict[str, Any],
+) -> str:
+    """Baut strukturierte Begründung aus strengths/deductions oder Plain-Text."""
+    scale_max = max(1, criterion.scale_max)
+    strengths = str(parsed.get("strengths") or parsed.get("positiv") or "").strip()
+    deductions = str(
+        parsed.get("deductions") or parsed.get("abzuege") or parsed.get("abzüge") or ""
+    ).strip()
+    plain = str(parsed.get("justification") or "").strip()
+
+    parts: list[str] = []
+    if strengths:
+        parts.append(f"Positiv: {strengths}")
+
+    need_deductions = (
+        value is not None
+        and criterion.kind == "zuschlag"
+        and scale_max > 1
+        and float(value) < scale_max - 1e-6
+    )
+    need_eignung_fail = (
+        value is not None
+        and criterion.kind == "eignung"
+        and not _eignung_pass(float(value), scale_max)
+    )
+
+    if deductions:
+        if need_deductions:
+            gap = scale_max - float(value)
+            parts.append(f"Abzüge ({gap:g} P. unter Max. {scale_max:g}): {deductions}")
+        elif need_eignung_fail:
+            parts.append(f"Nicht erfüllt: {deductions}")
+    elif need_deductions or need_eignung_fail:
+        m = re.search(r"(?:abzüge|abzuege|nicht erfüllt)\s*:\s*(.+)", plain, re.I | re.S)
+        if m and m.group(1).strip().lower() not in ("keine", "—", "-"):
+            if need_deductions:
+                gap = scale_max - float(value)
+                parts.append(
+                    f"Abzüge ({gap:g} P. unter Max. {scale_max:g}): {m.group(1).strip()}"
+                )
+            else:
+                parts.append(f"Nicht erfüllt: {m.group(1).strip()}")
+
+    if parts:
+        return "\n\n".join(parts)
+    return plain
+
+
+def _suggestion_missing_deduction_rationale(
+    criterion: Criterion,
+    value: float | None,
+    justification: str,
+) -> bool:
+    """True wenn bei Punktabzug/Eignungs-Nein keine nachvollziehbare Abzugsbegründung vorliegt."""
+    if value is None:
+        return False
+    scale_max = max(1, criterion.scale_max)
+    val = float(value)
+    j = (justification or "").strip()
+    if not j:
+        return True
+
+    if criterion.kind == "zuschlag" and scale_max > 1 and val < scale_max - 1e-6:
+        m = re.search(r"abzüge[^:\n]*:\s*(.+)", j, re.I | re.S)
+        if m:
+            body = m.group(1).strip()
+            if body.lower() in ("keine", "—", "-", ""):
+                return True
+            return len(body) < 12
+        markers = (
+            "abzug", "fehlt", "fehlen", "unzureichend", "nicht nachgewiesen",
+            "nicht belegt", "lücke", "unklar", "punktabzug", "mangel",
+            "unvollständig", "ohne nachweis", "nicht erfüllt",
+        )
+        return not any(m in j.lower() for m in markers)
+
+    if criterion.kind == "eignung" and not _eignung_pass(val, scale_max):
+        m = re.search(r"nicht erfüllt\s*:\s*(.+)", j, re.I | re.S)
+        if m and len(m.group(1).strip()) >= 8:
+            return False
+        markers = ("nicht erfüllt", "ausgeschlossen", "ko-kriterium", "fehlt", "unzureichend")
+        return not any(m in j.lower() for m in markers)
+
+    return False
+
+
+def _parse_suggestion_llm_json(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    m = _JSON_BLOCK_RE.search(raw)
+    if not m:
+        return {}
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        log.warning("LLM JSON parse failed: %s", raw[:200])
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _parse_suggestion_value(parsed: dict[str, Any], scale_max: int) -> Optional[float]:
+    value = parsed.get("value")
+    try:
+        value_f = float(value) if value is not None else None
+    except (TypeError, ValueError):
+        value_f = None
+    if value_f is not None:
+        value_f = max(0.0, min(float(scale_max), value_f))
+    return value_f
+
+
+def _build_suggestion_chunk_ref(parsed: dict[str, Any]) -> Optional[str]:
+    quote = parsed.get("source_quote") or ""
+    chunk_id = parsed.get("source_chunk_id")
+    if chunk_id:
+        chunk_ref = f"chunk:{chunk_id}"
+        if quote:
+            chunk_ref += f" | {quote[:1200]}"
+        return chunk_ref
+    if quote:
+        return str(quote)[:1200]
+    return None
+
+
 def suggest_score_with_rag(
     project_key: str,
     bidder_id: int,
@@ -2143,9 +2302,10 @@ def suggest_score_with_rag(
     system = (
         f"{VERGABE_SYSTEM_RULES}\n"
         "Du bist Vergabesachverständiger. Vergleiche Ausschreibungs-Vorgaben mit dem Angebot "
-        "des Bieters und bewerte ein Kriterium. "
-        "Antwort NUR als JSON mit keys: value (Zahl 0 bis scale_max), justification (kurze Bewertungsbegründung — warum diese Punktzahl, nicht das Angebotszitat wiederholen), "
-        "source_quote (ein wörtliches Zitat aus dem Angebot als Beleg), source_chunk_id (Zahl oder null)."
+        "des Bieters und bewerte ein Kriterium. Begründungen müssen rekursfähig sein (BöB/IVöB): "
+        "bei jeder Punktzahl unter dem Maximum präzise benennen, welche Vorgaben im Angebot "
+        "fehlen, unklar oder unzureichend belegt sind — nicht nur Lob wiederholen.\n"
+        + _suggestion_json_keys_instruction(scale_max, criterion.kind)
     )
     if cfg.get("vergabe_notes"):
         system += f"\nProjekt-Hinweise: {cfg['vergabe_notes']}"
@@ -2162,40 +2322,64 @@ def suggest_score_with_rag(
         provider,
         system,
         messages,
-        max_tokens=1200,
+        max_tokens=1500,
         temperature=0.2,
         model=model,
     )
-    parsed: dict[str, Any] = {}
-    if raw:
-        m = _JSON_BLOCK_RE.search(raw)
-        if m:
-            try:
-                parsed = json.loads(m.group(0))
-            except json.JSONDecodeError:
-                log.warning("LLM JSON parse failed: %s", raw[:200])
+    parsed = _parse_suggestion_llm_json(raw)
+    value_f = _parse_suggestion_value(parsed, scale_max)
+    justification = _compose_suggestion_justification(criterion, value_f, parsed)
 
-    value = parsed.get("value")
-    try:
-        value_f = float(value) if value is not None else None
-    except (TypeError, ValueError):
-        value_f = None
-    if value_f is not None:
-        value_f = max(0.0, min(float(scale_max), value_f))
+    if value_f is not None and _suggestion_missing_deduction_rationale(
+        criterion, value_f, justification
+    ):
+        gap = scale_max - value_f
+        retry_system = (
+            system
+            + f"\n\nKORREKTUR: value={value_f} bei Maximum {scale_max} ({gap:g} P. Abzug). "
+            "Das Feld deductions und der Absatz «Abzüge:» sind PFLICHT und müssen konkrete "
+            "Lücken/Mängel im Angebot gegenüber der Vorgabe benennen — keine allgemeine Lobeshymne."
+        )
+        raw_retry = try_models_with_messages(
+            provider,
+            retry_system,
+            messages,
+            max_tokens=1500,
+            temperature=0.15,
+            model=model,
+        )
+        parsed_retry = _parse_suggestion_llm_json(raw_retry)
+        value_retry = _parse_suggestion_value(parsed_retry, scale_max)
+        justification_retry = _compose_suggestion_justification(
+            criterion, value_retry, parsed_retry
+        )
+        if value_retry is not None and not _suggestion_missing_deduction_rationale(
+            criterion, value_retry, justification_retry
+        ):
+            parsed, value_f, justification, raw = (
+                parsed_retry, value_retry, justification_retry, raw_retry
+            )
+        elif parsed_retry:
+            parsed = parsed_retry
+            value_f = value_retry if value_retry is not None else value_f
+            justification = justification_retry or justification
+            raw = raw_retry
 
-    chunk_ref = None
-    quote = parsed.get("source_quote") or ""
-    chunk_id = parsed.get("source_chunk_id")
-    if chunk_id:
-        chunk_ref = f"chunk:{chunk_id}"
-        if quote:
-            chunk_ref += f" | {quote[:1200]}"
-    elif quote:
-        chunk_ref = quote[:1200]
+    justification_warning = None
+    if value_f is not None and _suggestion_missing_deduction_rationale(
+        criterion, value_f, justification
+    ):
+        justification_warning = (
+            f"Abzugsbegründung unvollständig für {value_f}/{scale_max} — bitte manuell ergänzen "
+            "oder KI-Vorschlag erneut anstossen."
+        )
+
+    chunk_ref = _build_suggestion_chunk_ref(parsed)
 
     return {
         "value": value_f,
-        "justification": (parsed.get("justification") or "").strip(),
+        "justification": justification,
+        "justification_warning": justification_warning,
         "source_chunk_ref": chunk_ref,
         "rag_documents": docs,
         "raw_llm": raw,

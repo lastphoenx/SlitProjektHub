@@ -1127,6 +1127,28 @@ def test_fill_missing_line_children():
     assert t03.get("requirement_ref") == "T01-003"
 
 
+def test_suggestion_justification_requires_deductions():
+    from types import SimpleNamespace
+    from src.m15_evaluation import (
+        _compose_suggestion_justification,
+        _suggestion_missing_deduction_rationale,
+    )
+
+    crit = SimpleNamespace(kind="zuschlag", scale_max=10)
+    parsed = {
+        "strengths": "Gutes Verständnis des Projekts.",
+        "deductions": "Innovationsaspekte und Erfolgsfaktoren nicht konkret benannt.",
+        "value": 8,
+    }
+    text = _compose_suggestion_justification(crit, 8.0, parsed)
+    assert "Positiv:" in text
+    assert "Abzüge (2 P. unter Max. 10):" in text
+    assert not _suggestion_missing_deduction_rationale(crit, 8.0, text)
+
+    praise_only = "Das Angebot zeigt ein gutes Verständnis des Projekts."
+    assert _suggestion_missing_deduction_rationale(crit, 8.0, praise_only)
+
+
 def test_resolve_requirement_search():
     from src.m15_evaluation import _resolve_requirement_search
 
@@ -1307,6 +1329,7 @@ if __name__ == "__main__":
     test_missing_line_suffix_detection()
     test_extract_line_block_from_context()
     test_fill_missing_line_children()
+    test_suggestion_justification_requires_deductions()
     test_resolve_requirement_search()
     test_retrieve_tender_context_respects_max_format_chunks()
     test_evaluation_config_extraction_roundtrip()
