@@ -23,10 +23,10 @@
 
     {% if hint_context != 'settings' %}
     <p style="margin:0 0 .5rem">
-      Provider <strong>Ollama</strong> in Sidebar oder <a href="/settings">KI-Einstellungen</a>.
+      Provider <strong>Ollama</strong> in Sidebar oder <a href="/settings" class="badge">KI-Einstellungen</a>.
       Auf dem EVO ist meist nur <strong>ein</strong> Modell im VRAM — Umschalten kann kurz dauern.
       {% if hint_context != 'settings' %}
-      <span style="display:block;margin-top:.25rem;font-size:.72rem">Vollständige Übersicht aller Bereiche: <a href="/settings">KI-Einstellungen</a>.</span>
+      <span style="display:block;margin-top:.25rem;font-size:.72rem">Vollständige Übersicht aller Bereiche: <a href="/settings" class="badge">KI-Einstellungen</a>.</span>
       {% endif %}
     </p>
     {% else %}
@@ -112,7 +112,7 @@
     <p style="margin:0 0 .55rem;font-size:.72rem">
       <strong>Wo Modell wählen?</strong>
       Phase ④ Matrix: Picker pro Zelle.
-      Phase ②/③: Picker pro Lauf; dauerhafter Startwert unter «Vorgaben &amp; Frameworks → Projekt-Einstellungen» (oder <a href="/settings">globale KI-Einstellungen</a>).
+      Phase ②/③: Picker pro Lauf; dauerhafter Startwert unter «Vorgaben &amp; Frameworks → Projekt-Einstellungen» (oder <a href="/settings" class="badge">globale KI-Einstellungen</a>).
       Bieter-Dokumente mit Referenzpersonen → <strong>Ollama</strong> oder Cloud nur mit PII-Haken.
     </p>
     <div style="display:flex;flex-direction:column;gap:.65rem">
