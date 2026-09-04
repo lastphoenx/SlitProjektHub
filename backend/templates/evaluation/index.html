@@ -262,6 +262,8 @@
   </div>
   <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 .75rem">
     Manuell anlegen oder aus verknüpften Vorgaben (Phase ①) per KI extrahieren.
+    <a href="/evaluation/criteria-manage?project_key={{ project_key }}" class="badge badge-warn">Kriterien verwalten</a>
+    — Unterfragen (F01-001 …) nachträglich bearbeiten.
     Ohne Kriterien keine Matrix — die KI nutzt trotzdem die Vorgaben in Phase ④.
   </p>
   {% if request.query_params.get('criteria_apply') == 'ok' %}
@@ -360,36 +362,28 @@
     <textarea class="form-input" name="description" rows="2" placeholder="Voller Anforderungstext (optional, für KI-Vorschlag)" style="grid-column:1/-1"></textarea>
     <button type="submit" class="btn btn-primary">Kriterium anlegen</button>
   </form>
-  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Unterfragen (z.B. F01-001 unter F-01) sind Beleg-/KI-Hilfsebene für die KI-Vorschläge — nicht extra gewichtet, nur das übergeordnete Kriterium zählt in der Rangfolge.</p>
-  <ul style="margin-top:.75rem;font-size:.85rem">
+  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">
+    Unterfragen (z.&nbsp;B. F01-001 unter F-01) sind Beleg-/KI-Hilfsebene —
+    <a href="/evaluation/criteria-manage?project_key={{ project_key }}">in «Kriterien verwalten»</a>
+    anlegen und bearbeiten. Nur das übergeordnete Kriterium zählt in der Rangfolge.
+  </p>
+  {% if criteria %}
+  <p style="font-size:.78rem;margin:.5rem 0">
+    <a class="btn btn-secondary btn-sm" href="/evaluation/criteria-manage?project_key={{ project_key }}">Kriterien verwalten ({{ criteria|length }} Zeilen)</a>
+  </p>
+  <ul style="margin-top:.35rem;font-size:.8rem;max-height:12rem;overflow:auto">
     {% for c in criteria %}
-    <li style="margin:.35rem 0">
-      {% if c.parent_id %}&nbsp;&nbsp;↳ {% endif %}{{ c.kind }}: {{ c.name }}
-      {% if c.kind == 'zuschlag' and not c.parent_id %}({{ c.weight_pct }}%){% endif %}
-      {% if c.kind == 'zuschlag' and not c.parent_id and (c.ranking_phase or 1) >= 2 %}
-      <span class="text-muted" style="font-size:.72rem"> · Phase 2</span>
-      {% endif %}
-      {% if c.auto_price %} 💰{% endif %}
-      {% if may_evaluate and c.kind == 'zuschlag' and not c.parent_id %}
-      <form method="post" action="/evaluation/criterion-phase" style="display:inline;margin-left:.35rem">
-        <input type="hidden" name="project_key" value="{{ project_key }}" />
-        <input type="hidden" name="criterion_id" value="{{ c.id }}" />
-        <select class="form-select" name="ranking_phase" style="font-size:.72rem;padding:.1rem .25rem;height:auto;display:inline-block;width:auto"
-                onchange="this.form.submit()">
-          {% for p in ranking_phases %}
-          <option value="{{ p }}" {% if (c.ranking_phase or 1) == p %}selected{% endif %}>{{ ranking_phase_labels[p] }}</option>
-          {% endfor %}
-        </select>
-      </form>
-      {% endif %}
-      <form method="post" action="/evaluation/delete-criterion" style="display:inline">
-        <input type="hidden" name="project_key" value="{{ project_key }}" />
-        <input type="hidden" name="criterion_id" value="{{ c.id }}" />
-        <button type="submit" class="btn btn-danger btn-sm">×</button>
-      </form>
+    {% if not c.parent_id %}
+    <li style="margin:.2rem 0">
+      {{ c.kind }}: <strong>{{ c.name }}</strong>
+      {% if c.kind == 'zuschlag' %}({{ c.weight_pct }}%){% endif %}
+      {% set nchild = criteria|selectattr('parent_id', 'equalto', c.id)|list|length %}
+      {% if nchild %}<span class="text-muted">· {{ nchild }} Unterfrage(n)</span>{% endif %}
     </li>
+    {% endif %}
     {% endfor %}
   </ul>
+  {% endif %}
 </div>
 
 <!-- Phase 3: pro Bieter -->

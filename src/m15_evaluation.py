@@ -366,6 +366,169 @@ def soft_delete_criterion(criterion_id: int) -> None:
             session.commit()
 
 
+def update_criterion(
+    criterion_id: int,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    weight_pct: float | None = None,
+    scale_max: int | None = None,
+    ranking_phase: int | None = None,
+    auto_price: bool | None = None,
+) -> Criterion:
+    with get_session() as session:
+        crit = session.get(Criterion, criterion_id)
+        if not crit or crit.is_deleted:
+            raise ValueError("Kriterium nicht gefunden")
+        if name is not None:
+            n = (name or "").strip()
+            if not n:
+                raise ValueError("Kriteriumname erforderlich")
+            crit.name = n
+        if description is not None:
+            crit.description = (description or "").strip() or None
+        if crit.kind == "eignung":
+            crit.scale_max = 1
+        elif scale_max is not None:
+            crit.scale_max = max(1, int(scale_max))
+        if crit.kind == "zuschlag" and crit.parent_id is None:
+            if weight_pct is not None:
+                crit.weight_pct = float(weight_pct)
+            if ranking_phase is not None:
+                crit.ranking_phase = max(1, min(2, int(ranking_phase)))
+            if auto_price is not None:
+                crit.auto_price = bool(auto_price)
+        session.add(crit)
+        session.commit()
+        session.refresh(crit)
+        return crit
+
+
+def _criterion_to_editor_dict(criterion: Criterion, children: list[Criterion]) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "id": criterion.id,
+        "name": criterion.name,
+        "description": criterion.description or "",
+        "scale_max": criterion.scale_max,
+        "children": [
+            {
+                "id": ch.id,
+                "name": ch.name,
+                "description": ch.description or "",
+                "scale_max": ch.scale_max,
+            }
+            for ch in children
+        ],
+    }
+    if criterion.kind == "zuschlag":
+        row["weight_pct"] = criterion.weight_pct
+        row["ranking_phase"] = criterion.ranking_phase or 1
+        row["auto_price"] = criterion.auto_price
+    return row
+
+
+def criteria_editor_payload(project_key: str) -> dict[str, Any]:
+    """Kriterien-Hierarchie für Tabellen-Editor (Ticket 7)."""
+    all_c = list_criteria(project_key)
+    children_map: dict[int, list[Criterion]] = {}
+    top: list[Criterion] = []
+    for c in all_c:
+        if c.parent_id:
+            children_map.setdefault(c.parent_id, []).append(c)
+        else:
+            top.append(c)
+    for kids in children_map.values():
+        kids.sort(key=lambda x: (x.sort_order, x.id or 0))
+
+    eignung: list[dict[str, Any]] = []
+    zuschlag: list[dict[str, Any]] = []
+    for c in sorted(top, key=lambda x: (x.sort_order, x.id or 0)):
+        row = _criterion_to_editor_dict(c, children_map.get(c.id, []))
+        if c.kind == "eignung":
+            eignung.append(row)
+        else:
+            zuschlag.append(row)
+    return {"eignung": eignung, "zuschlag": zuschlag}
+
+
+def save_criteria_editor_payload(
+    project_key: str,
+    data: dict[str, Any],
+    *,
+    deleted_ids: list[int] | None = None,
+) -> dict[str, int]:
+    """Upsert aus Tabellen-Editor (Ticket 7)."""
+    stats = {"updated": 0, "created": 0, "deleted": 0}
+    for did in deleted_ids or []:
+        try:
+            soft_delete_criterion(int(did))
+            stats["deleted"] += 1
+        except (TypeError, ValueError):
+            pass
+
+    def _save_row(kind: str, entry: dict[str, Any], parent_id: int | None) -> int | None:
+        name = (entry.get("name") or "").strip()
+        if not name:
+            return parent_id
+        is_child = parent_id is not None
+        cid = entry.get("id")
+        row_id: int | None = None
+        if cid:
+            try:
+                update_criterion(
+                    int(cid),
+                    name=name,
+                    description=entry.get("description"),
+                    weight_pct=(
+                        float(entry.get("weight_pct") or 0)
+                        if not is_child and kind == "zuschlag"
+                        else None
+                    ),
+                    scale_max=int(entry.get("scale_max") or (1 if kind == "eignung" else 10)),
+                    ranking_phase=(
+                        int(entry["ranking_phase"])
+                        if not is_child and kind == "zuschlag" and entry.get("ranking_phase") is not None
+                        else None
+                    ),
+                    auto_price=(
+                        bool(entry.get("auto_price"))
+                        if not is_child and kind == "zuschlag"
+                        else None
+                    ),
+                )
+                stats["updated"] += 1
+                row_id = int(cid)
+            except (ValueError, TypeError):
+                row_id = None
+        if row_id is None:
+            crit = create_criterion(
+                project_key,
+                kind,
+                name,
+                weight_pct=float(entry.get("weight_pct") or 0) if not is_child else 0,
+                scale_max=int(entry.get("scale_max") or (1 if kind == "eignung" else 10)),
+                parent_id=parent_id,
+                auto_price=bool(entry.get("auto_price")),
+                description=entry.get("description"),
+                ranking_phase=(
+                    int(entry["ranking_phase"])
+                    if not is_child and entry.get("ranking_phase") is not None
+                    else None
+                ),
+            )
+            stats["created"] += 1
+            row_id = crit.id
+        for child in entry.get("children") or []:
+            _save_row(kind, child, row_id)
+        return row_id
+
+    for entry in data.get("eignung") or []:
+        _save_row("eignung", entry, None)
+    for entry in data.get("zuschlag") or []:
+        _save_row("zuschlag", entry, None)
+    return stats
+
+
 def update_criterion_ranking_phase(criterion_id: int, ranking_phase: int) -> None:
     """Phase 1 = ZK-Zwischenrang, Phase 2 = Präsentation (nur Top-Level-Zuschlag)."""
     phase = max(1, min(2, int(ranking_phase)))
@@ -1748,6 +1911,97 @@ def import_criteria_payload(
     return {"created": created, "skipped": skipped, "warnings": warnings}
 
 
+def _criterion_ref_prefix(name: str) -> Optional[str]:
+    """F-01 / F01 -> F01, T-01 -> T01 (Referenz für Einzelanforderungen)."""
+    m = re.match(r"^([A-Za-z])-?0*(\d+)\b", (name or "").strip())
+    if not m:
+        return None
+    return f"{m.group(1).upper()}{int(m.group(2)):02d}"
+
+
+def _enrich_zuschlag_children_from_requirements(
+    project_key: str,
+    payload: dict[str, Any],
+    provider: str,
+    model: str | None,
+    limit: int,
+) -> list[str]:
+    """Schritt 2: Einzelanforderungen pro Top-Level-Zuschlag (Ticket 8)."""
+    hints: list[str] = []
+    roles = ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben")
+    doc_ids = get_tender_document_ids(project_key, roles=roles)
+    if not doc_ids:
+        return hints
+
+    for entry in payload.get("zuschlag") or []:
+        ref = _criterion_ref_prefix(entry.get("name") or "")
+        if not ref:
+            continue
+        existing = list(entry.get("children") or [])
+        if len(existing) >= 8:
+            continue
+
+        query = (
+            f"{ref} Einzelanforderungen Fragenr Referenz Anforderung Lieferant "
+            f"Ja Nein Teilweise Begründung Pflicht Kapitel Anforderungen"
+        )
+        rag = retrieve_relevant_chunks_hybrid(
+            query,
+            project_key=project_key,
+            limit=limit,
+            threshold=0.24,
+            document_ids=tuple(doc_ids),
+        )
+        ctx = _format_rag_context(
+            rag.get("documents", []),
+            empty_msg="",
+            max_chunks=limit,
+        )
+        if not ctx.strip():
+            continue
+        if is_cloud_llm_provider(provider):
+            ctx = sanitize_for_cloud_text(ctx)
+
+        system = (
+            "Extrahiere alle Einzelanforderungen (Unterfragen) für ein Zuschlagskriterium aus "
+            "dem Kapitel «Anforderungen» / Anforderungsblatt — NICHT nur die Kapitel-Einleitung. "
+            f"Referenz-Gruppe: {ref} (Fragen z. B. {ref}-001, {ref}001, F01-003). "
+            "Antwort NUR als JSON mit key children (Liste). "
+            "Jedes Kind: name (kurz, exakte Fragennummer), description (voller Anforderungstext)."
+        )
+        user = f"Top-Kriterium: {entry.get('name')}\n\nAusschreibungsauszug:\n{ctx}\n\nJSON:"
+        raw = try_models_with_messages(
+            provider,
+            system,
+            [{"role": "user", "content": user}],
+            max_tokens=3500,
+            temperature=0.1,
+            model=model,
+        )
+        sub = _parse_llm_json_object(raw)
+        children = sub.get("children") if isinstance(sub, dict) else []
+        if not children and isinstance(sub, list):
+            children = sub
+        if not children:
+            continue
+
+        by_name = {(c.get("name") or "").strip(): c for c in existing if (c.get("name") or "").strip()}
+        for ch in children:
+            cname = (ch.get("name") or "").strip()
+            if not cname:
+                continue
+            if cname not in by_name:
+                by_name[cname] = {
+                    "name": cname,
+                    "description": (ch.get("description") or "").strip(),
+                    "scale_max": int(ch.get("scale_max") or 10),
+                }
+        entry["children"] = list(by_name.values())
+        hints.append(f"{entry.get('name')}: {len(entry['children'])} Unterfragen aus Anforderungen-Kapitel")
+
+    return hints
+
+
 def extract_criteria_from_tender_docs(
     project_key: str,
     provider: str = "openai",
@@ -1766,7 +2020,11 @@ def extract_criteria_from_tender_docs(
     limit = cfg["rag_chunks_per_role"]
     role_queries = [
         (("eignungskriterien", "ausschreibungsunterlage"), "Eignungskriterien K.O. Mindestanforderungen Bieter"),
-        (("zuschlagskriterien", "bewertungsvorgaben"), "Zuschlagskriterien Gewichtung Punkte Bewertungsmatrix"),
+        (("zuschlagskriterien", "bewertungsvorgaben"), "Zuschlagskriterien Gewichtung Punkte Bewertungsmatrix Übersicht"),
+        (
+            ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben"),
+            "Einzelanforderungen Fragenr Referenz Anforderung Lieferant Ja Nein Teilweise Begründung",
+        ),
         (("bewertungsvorgaben", "ausschreibungsunterlage"), "Bewertungsvorgaben Verfahren Skala Rangfolge"),
     ]
     context = _retrieve_tender_context_multi(project_key, role_queries, limit_per_role=limit)
@@ -1778,7 +2036,8 @@ def extract_criteria_from_tender_docs(
         f"{VERGABE_SYSTEM_RULES}\n"
         "Extrahiere strukturierte Bewertungskriterien aus Ausschreibungsunterlagen. "
         "Antwort NUR als JSON mit keys eignung und zuschlag (Listen von Objekten). "
-        "Jedes Objekt: name (kurz), description (voller Anforderungstext), optional children. "
+        "Jedes Objekt: name (kurz), description (Kapitel-Einleitung / Aufgabenstellung), "
+        "optional children (Einzelanforderungen mit vollem Text — werden ggf. in Schritt 2 ergänzt). "
         "Zuschlag: weight_pct, scale_max (default 10), auto_price true nur für reines Preis-Kriterium, "
         "ranking_phase 1 (ZK) oder 2 (Präsentation nach Einladung, z. B. A-01). "
         "Eignung: scale_max immer 1, kein weight_pct, keine Teilpunkte."
@@ -1791,7 +2050,11 @@ def extract_criteria_from_tender_docs(
         max_tokens=4000, temperature=0.1, model=model,
     )
     payload = _parse_llm_json_object(raw)
+    child_hints = _enrich_zuschlag_children_from_requirements(
+        project_key, payload, provider, model, limit
+    )
     warnings = validate_criteria_payload(payload)
+    warnings = list(warnings) + child_hints
     if not payload.get("eignung") and not payload.get("zuschlag"):
         return {
             "error": "KI konnte keine Kriterien extrahieren — Vorgaben prüfen oder manuell anlegen.",

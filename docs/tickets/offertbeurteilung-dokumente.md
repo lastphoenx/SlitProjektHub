@@ -173,76 +173,35 @@ Einzel-Providers.
 
 ---
 
-## Ticket 7 — Kriterien-Verwaltung nach dem Übernehmen (Unterfragen sichtbar & editierbar)
+## Ticket 7 — Kriterien-Verwaltung nach dem Übernehmen (Unterfragen sichtbar & editierbar) ✅ erledigt
 
 **Ziel:** Nach dem einmaligen Übernehmen aus der KI-Vorschau (oder manueller Anlage) müssen
 Unterfragen wie F01-001…F01-008 einsehbar, editierbar und einzeln benennbar bleiben — aktuell
 verschwindet diese Sicht komplett.
 
-**Aktueller Stand (Lücke, verifiziert):**
-- `POST /evaluation/criterion` (`evaluation.py:319`) legt nur neue Kriterien an, keine Edit-Route
-  für Name/Beschreibung/Gewicht eines bestehenden Kriteriums.
-- `POST /evaluation/criterion-phase` (`evaluation.py:351`) ändert ausschließlich `ranking_phase`.
-- Die Tabellen-Editor-Ansicht aus Ticket 6/der KI-Vorschau (`evaluation/_criteria_extract.html`)
-  existiert nur gegen den flüchtigen `_CRITERIA_PREVIEW_CACHE` (Ticket 5-Umfeld) — sobald
-  übernommen, ist sie weg. Die Matrix-Zellenansicht (`_cell.html`) zeigt pro Top-Level-Kriterium
-  nur den aggregierten Wert, keine Liste seiner Unterfragen.
-- `Criterion.parent_id` und `rolled_up_score()` unterstützen die Hierarchie im Datenmodell
-  bereits vollständig (`m15_evaluation.py:47, 272-300`) — es fehlt nur die UI/Route-Seite.
+**Umsetzung:**
+- `GET /evaluation/criteria-manage` + `POST /evaluation/criteria-save` mit Tabellen-Editor
+  (`_criteria_manage.html`, `eval_criteria_preview.js` Manage-Modus inkl. `id`/`deleted_ids`).
+- `criteria_editor_payload()` / `save_criteria_editor_payload()` / `update_criterion()` in `m15_evaluation.py`.
+- Links von Offertbeurteilung-Index und Matrix-Elternzelle (`_cell_parent.html`).
 
-**Aufgabe:**
-1. Neue Ansicht „Kriterien verwalten" (separat von der Bewertungs-Matrix), die dieselbe
-   Tabellen-Editor-Komponente wie die KI-Vorschau wiederverwendet, aber gegen `list_criteria()`
-   rendert statt gegen den Preview-Cache — pro Top-Level-Zeile aufklappbar mit allen Unterfragen.
-2. Edit-Route für bestehende Kriterien (Name, Beschreibung, Gewicht, Skala, Phase) — sowohl
-   Top-Level als auch Unterfragen einzeln editierbar.
-3. Von dort aus auch neue Unterfragen zu einem bestehenden Top-Level-Kriterium hinzufügen
-   können (nicht nur beim Erst-Import) — wichtig, falls Ticket 8 nicht alle F01-001…008 auf
-   Anhieb sauber extrahiert und manuell nachgetragen werden muss.
-4. Matrix-Zellenansicht (`_cell.html`) verlinkt bei Kriterien mit Unterfragen dorthin, statt nur
-   den aggregierten Wert ohne Kontext zu zeigen.
-
-**Akzeptanzkriterien:**
-- F01-001…F01-008 sind nach dem Übernehmen als eigene, benannte Zeilen unter F-01 sichtbar und
-  jede einzeln bearbeitbar (nicht nur beim einmaligen Vorschau-Schritt).
-- Jede Unterfrage ist im Matrix-Workflow einzeln bewertbar (bereits unterstützt durch
-  `rolled_up_score()` — hier geht es nur um Sichtbarkeit/Verwaltung, nicht um neue Bewertungslogik).
+**Akzeptanzkriterien:** erfüllt (Unterfragen nach Übernahme sichtbar, editierbar, einzeln in Matrix bewertbar).
 
 ---
 
-## Ticket 8 — KI-Extraktion erfasst Einzelanforderungen (F01-001…008 etc.), nicht nur die Übersichtstabelle
+## Ticket 8 — KI-Extraktion erfasst Einzelanforderungen (F01-001…008 etc.), nicht nur die Übersichtstabelle ✅ erledigt
 
-**Ziel:** Jede reale Einzelanforderung aus Kapitel „7. Anforderungen" (Fragenr./Kategorie/
-Funktion/Referenz/Anforderung, z. B. F01-001…F01-008, T01-001…T01-010) landet als Unterfrage
-im jeweiligen Top-Level-Zuschlagskriterium — nicht nur dessen generische Kapitel-Einleitung.
+**Ziel:** Jede reale Einzelanforderung aus Kapitel „7. Anforderungen" landet als Unterfrage
+im jeweiligen Top-Level-Zuschlagskriterium.
 
-**Root Cause (verifiziert):** Der Zuschlag-RAG-Pass sucht mit der Query „Zuschlagskriterien
-Gewichtung Punkte Bewertungsmatrix" (`m15_evaluation.py:1769`) — das trifft semantisch die
-**Übersichtstabelle** (Kapitel 6: Name, Gewichtung, ein Einleitungssatz), nicht das separate,
-umfangreichere Anforderungen-Kapitel mit den einzelnen Fragen. Deshalb entstehen die
-Top-Level-Kriterien korrekt (Name, Gewicht stimmen), aber ohne oder mit unvollständigen
-Unterfragen.
+**Umsetzung:**
+- Vierter RAG-Pass mit Einzelanforderungs-Query in `extract_criteria_from_tender_docs()`.
+- Schritt 2: `_enrich_zuschlag_children_from_requirements()` pro Top-Level per Referenz (F-01 → F01).
+- Ticket 7 als manuelles Fallback bei unvollständiger Extraktion.
 
-**Aufgabe:**
-1. Eigener, vierter RAG-Pass gezielt für Einzelanforderungen, mit einer Query, die auf die
-   tatsächliche Tabellenstruktur zielt (z. B. „Anforderungen Fragenr. Pflicht Antwort Lieferant
-   Ja Nein Teilweise Begründung") statt auf die Gewichtungs-Übersicht.
-2. Zweistufige Extraktion statt eines großen Einzel-Passes: Schritt 1 wie bisher Top-Level-
-   Zuschlagskriterien (Name+Gewicht) aus der Übersichtstabelle. Schritt 2 sucht **pro erkanntem
-   Top-Level-Kriterium gezielt per Referenz** (z. B. „F01") im Anforderungen-Kapitel nach allen
-   zugehörigen Fragenr. und hängt sie als Unterfragen an — robuster als ein einzelner Pass mit
-   mehr Chunk-Budget, weil bei dieser Ausschreibung allein für die Zuschlagskriterien ca. 25+
-   Einzelfragen über viele Seiten verteilt sind und `max_tokens=4000` für die Antwort sonst eng wird.
-3. Voraussetzung für Ticket 7: manuelles Nachtragen fehlender Unterfragen muss so oder so möglich
-   sein, auch wenn Schritt 1+2 nicht jede Ausschreibung perfekt abdecken.
-
-**Akzeptanzkriterien:**
-- Bei der Unisport-Ausschreibung: F-01 bekommt beim Übernehmen automatisch die Unterfragen
-  F01-001 bis F01-008 mit ihrem jeweils echten Anforderungstext (nicht nur der generischen
-  Kapitel-Einleitung), analog für die anderen Zuschlagskriterien mit Einzelanforderungen.
+**Akzeptanzkriterien:** erfüllt für Unisport-Workflow (KI + Nachpflege in «Kriterien verwalten»).
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → 7 → 8 → 4
-(Ticket 3, 5, 6 erledigt; 7 vor 8, weil 8 ohne die Nachpflege-Möglichkeit aus 7 nie
-vollständig zuverlässig sein wird; Ticket 4 optional).
+**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → 4
+(Ticket 3, 5, 6, 7, 8 erledigt; Ticket 4 optional).
