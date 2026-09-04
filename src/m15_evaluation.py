@@ -475,10 +475,10 @@ def save_criteria_editor_payload(
 ) -> dict[str, int]:
     """Upsert aus Tabellen-Editor (Ticket 7)."""
     stats = {"updated": 0, "created": 0, "deleted": 0}
+    deleted_set: set[int] = set()
     for did in deleted_ids or []:
         try:
-            soft_delete_criterion(int(did))
-            stats["deleted"] += 1
+            deleted_set.add(int(did))
         except (TypeError, ValueError):
             pass
 
@@ -488,6 +488,12 @@ def save_criteria_editor_payload(
             return parent_id
         is_child = parent_id is not None
         cid = entry.get("id")
+        if cid is not None:
+            try:
+                if int(cid) in deleted_set:
+                    return parent_id
+            except (TypeError, ValueError):
+                pass
         row_id: int | None = None
         if cid:
             try:
@@ -542,6 +548,13 @@ def save_criteria_editor_payload(
         _save_row("eignung", entry, None)
     for entry in data.get("zuschlag") or []:
         _save_row("zuschlag", entry, None)
+
+    for did in deleted_set:
+        try:
+            soft_delete_criterion(did)
+            stats["deleted"] += 1
+        except (TypeError, ValueError):
+            pass
     return stats
 
 
