@@ -272,6 +272,8 @@
   {% endif %}
   {% elif request.query_params.get('criteria_apply') == 'invalid' %}
   <p style="font-size:.78rem;color:var(--color-danger);margin:0 0 .5rem">Ungültiges JSON — nicht übernommen.</p>
+  {% elif request.query_params.get('criteria_preview') == 'expired' %}
+  <p style="font-size:.78rem;color:var(--color-warning, #fbbf24);margin:0 0 .5rem">Kriterien-Vorschau abgelaufen — bitte erneut extrahieren.</p>
   {% endif %}
   {% if has_tender_docs %}
   <form method="post" action="/evaluation/extract-criteria" data-eval-ki-form="1"
