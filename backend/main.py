@@ -901,7 +901,7 @@ async def documents_upload(
         resp.headers["HX-Toast"] = json.dumps({"message": "Leere Datei – Upload abgebrochen.", "type": "error"})
         return resp
 
-    success, msg = ingest_document(
+    result = ingest_document(
         file_name=file.filename,
         file_bytes=file_bytes,
         classification=classification,
@@ -913,9 +913,18 @@ async def documents_upload(
         "request": request,
         "docs": docs,
     })
+    if result.ok:
+        if result.status == "ocr_failed":
+            toast_type = "warning"
+        elif result.status == "no_text":
+            toast_type = "warning"
+        else:
+            toast_type = "success"
+    else:
+        toast_type = "error"
     resp.headers["HX-Toast"] = json.dumps({
-        "message": msg,
-        "type": "success" if success else "error",
+        "message": result.message,
+        "type": toast_type,
     })
     return resp
 

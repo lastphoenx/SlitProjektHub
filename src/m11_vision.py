@@ -2,6 +2,8 @@
 from __future__ import annotations
 import base64
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -206,34 +208,50 @@ def apply_ocr_to_pdf(pdf_path: str, output_path: Optional[str] = None) -> Option
     """
     Applies OCR to PDF (for scanned documents).
     Uses ocrmypdf to make scanned PDFs searchable.
-    
-    Args:
-        pdf_path: Path to input PDF
-        output_path: Path to output PDF. If None, overwrites input
-    
-    Returns:
-        Path to OCR'd PDF or None on failure
+
+    Returns path to OCR'd PDF (in-place replace when output_path is None) or None on failure.
     """
     try:
         import ocrmypdf
-        
-        if output_path is None:
-            output_path = pdf_path
-        
-        ocrmypdf.ocr(
-            pdf_path,
-            output_path,
-            language="deu+eng",
-            force_ocr=False,
-            remove_background=True,
-            deskew=True
-        )
-        
-        return output_path
     except ImportError:
         return None
-    except Exception:
+
+    src = Path(pdf_path)
+    if not src.is_file():
         return None
+
+    replace_in_place = output_path is None or str(output_path) == str(src)
+    tmp_out: str | None = None
+    if replace_in_place:
+        fd, tmp_out = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        dest = tmp_out
+    else:
+        dest = str(output_path)
+
+    try:
+        ocrmypdf.ocr(
+            str(src),
+            dest,
+            language="deu+eng",
+            force_ocr=False,
+            skip_text=True,
+            deskew=True,
+            optimize=1,
+        )
+        if replace_in_place and tmp_out:
+            shutil.move(tmp_out, src)
+            return str(src)
+        return dest
+    except Exception:
+        if tmp_out and Path(tmp_out).exists():
+            Path(tmp_out).unlink(missing_ok=True)
+        return None
+
+
+def pdf_extracted_text_is_sparse(text: str, *, min_chars: int = 80) -> bool:
+    """Wenig extrahierbarer Text → OCR/Vision-Fallback prüfen."""
+    return len((text or "").strip()) < min_chars
 
 
 def is_pdf_scanned(pdf_path: str) -> bool:

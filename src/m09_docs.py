@@ -10,7 +10,7 @@ import math
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Any, NamedTuple
 from sqlmodel import select, Session
 
 # PDF-Handling: Versuche verschiedene Bibliotheken
@@ -46,6 +46,23 @@ S = get_settings()
 # Verzeichnis für hochgeladene Dokumente
 DOCS_DIR = Path(S.data_dir) / "rag" / "docs"
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
+MIN_PDF_TEXT_CHARS = 80
+VISION_OCR_MAX_PAGES = 12
+VISION_OCR_PAGE_PROMPT = (
+    "Extrahiere den vollständigen lesbaren Text dieser Dokumentenseite (Deutsch/Englisch). "
+    "Tabellen zeilenweise, Listen als Aufzählung. Nur Dokumenttext — keine Beschreibung des Bildes."
+)
+
+
+class IngestResult(NamedTuple):
+    ok: bool
+    message: str
+    status: str = "ok"
+
+    def __iter__(self):
+        yield self.ok
+        yield self.message
 
 
 def _seed_keywords_for_document(doc_id: int, provider: str = "openai", model: str = "gpt-4o-mini") -> None:
@@ -160,6 +177,101 @@ def extract_text_from_pdf(
             print(f"pdfplumber extraction failed for {file_path}: {e}")
 
     return ""
+
+
+def _pdf_pages_as_png_bytes(file_path: Path, max_pages: int) -> list[tuple[bytes, str]]:
+    from pdf2image import convert_from_path
+    from io import BytesIO
+
+    images = convert_from_path(
+        str(file_path),
+        dpi=150,
+        first_page=1,
+        last_page=max(1, max_pages),
+    )
+    out: list[tuple[bytes, str]] = []
+    for im in images[:max_pages]:
+        buf = BytesIO()
+        im.save(buf, format="PNG")
+        out.append((buf.getvalue(), "image/png"))
+    return out
+
+
+def _extract_pdf_text_via_vision(file_path: Path, *, max_pages: int = VISION_OCR_MAX_PAGES) -> str:
+    """Optionaler Fallback: Vision-LLM liest gescannte PDF-Seiten (wenn ocrmypdf nicht reicht)."""
+    from .m08_llm import have_key, try_models_with_messages
+    from .m17_visual_lab_refs import resolve_vision_provider_model
+
+    provider, model = resolve_vision_provider_model("", "")
+    if not have_key(provider):
+        return ""
+    try:
+        pages = _pdf_pages_as_png_bytes(file_path, max_pages)
+    except Exception:
+        return ""
+    if not pages:
+        return ""
+
+    parts: list[str] = []
+    for i, (img_bytes, mime) in enumerate(pages, 1):
+        raw = try_models_with_messages(
+            provider,
+            "Du extrahierst Text aus gescannten Dokumentseiten für eine Volltext-Suche.",
+            [{"role": "user", "content": f"Seite {i}:\n{VISION_OCR_PAGE_PROMPT}"}],
+            max_tokens=2500,
+            temperature=0.0,
+            model=model,
+            images=[(img_bytes, mime)],
+        )
+        if raw and raw.strip():
+            parts.append(raw.strip())
+    return "\n\n".join(parts)
+
+
+def extract_pdf_text_with_fallback(
+    file_path: Path,
+    *,
+    max_pages: int | None = None,
+    use_vision_fallback: bool = True,
+) -> tuple[str, dict[str, Any]]:
+    """
+    PDF-Text: native → ocrmypdf → optional Vision-LLM.
+    Gibt (text, meta) zurück; meta für UI/Warnungen.
+    """
+    from .m11_vision import apply_ocr_to_pdf, is_pdf_scanned, pdf_extracted_text_is_sparse
+
+    meta: dict[str, Any] = {
+        "scanned_detected": False,
+        "ocr_attempted": False,
+        "ocr_success": False,
+        "vision_attempted": False,
+        "vision_success": False,
+        "extraction_method": "native",
+    }
+
+    text = extract_text_from_pdf(file_path, max_pages=max_pages)
+    sparse = pdf_extracted_text_is_sparse(text, min_chars=MIN_PDF_TEXT_CHARS)
+    if sparse:
+        meta["scanned_detected"] = is_pdf_scanned(str(file_path)) or not (text or "").strip()
+
+    if sparse:
+        meta["ocr_attempted"] = True
+        if apply_ocr_to_pdf(str(file_path)):
+            ocr_text = extract_text_from_pdf(file_path, max_pages=max_pages)
+            if not pdf_extracted_text_is_sparse(ocr_text, min_chars=MIN_PDF_TEXT_CHARS):
+                text = ocr_text
+                meta["ocr_success"] = True
+                meta["extraction_method"] = "ocrmypdf"
+
+    if use_vision_fallback and pdf_extracted_text_is_sparse(text, min_chars=MIN_PDF_TEXT_CHARS):
+        meta["vision_attempted"] = True
+        vision_text = _extract_pdf_text_via_vision(file_path)
+        if not pdf_extracted_text_is_sparse(vision_text, min_chars=MIN_PDF_TEXT_CHARS):
+            text = vision_text
+            meta["vision_success"] = True
+            meta["extraction_method"] = "vision_llm"
+
+    return text or "", meta
 
 
 def extract_text_from_docx(file_path: Path) -> str:
@@ -414,7 +526,7 @@ def force_rechunk_document(doc_id: int, chunk_size: int | None = None) -> Tuple[
                 return False, msg
             csv_chunks = data
         elif ext == ".pdf":
-            text_content = extract_text_from_pdf(path)
+            text_content, _pdf_meta = extract_pdf_text_with_fallback(path)
         elif ext == ".docx":
             text_content = extract_text_from_docx(path)
         elif ext in (".md", ".txt", ".json", ".yaml", ".yml"):
@@ -449,6 +561,27 @@ def chunk_meta_prefix(
     return f"[{classification} | {file_name}]\n"
 
 
+def _ingest_status_from_meta(meta: dict[str, Any], *, has_chunks: bool) -> str:
+    if has_chunks:
+        if meta.get("vision_success"):
+            return "vision_ok"
+        if meta.get("ocr_success"):
+            return "ocr_ok"
+        return "ok"
+    if meta.get("ocr_attempted") or meta.get("vision_attempted") or meta.get("scanned_detected"):
+        return "ocr_failed"
+    return "no_text"
+
+
+def _extraction_method_label(meta: dict[str, Any]) -> str:
+    method = meta.get("extraction_method") or "native"
+    if method == "ocrmypdf":
+        return " (OCR)"
+    if method == "vision_llm":
+        return " (Vision-KI)"
+    return ""
+
+
 def ingest_document(
     file_name: str,
     file_bytes: bytes,
@@ -457,7 +590,9 @@ def ingest_document(
     csv_delimiter: str = ";",
     linked_role_keys: list[str] | None = None,
     doc_subtype: str | None = None,
-) -> Tuple[bool, str]:
+    *,
+    use_vision_fallback: bool = True,
+) -> IngestResult:
     """
     Verarbeitet ein hochgeladenes Dokument:
     1. Hash prüfen (Duplikate)
@@ -469,8 +604,10 @@ def ingest_document(
     Für CSV: csv_delimiter bestimmt das Trennzeichen (default: ";")
     linked_role_keys: Optional, für "Pflichtenheft (Rolle)" - Liste von role.key Werten
     doc_subtype: Optional, feinere Art innerhalb der Klassifikation (z.B. Preisblatt)
+    use_vision_fallback: Bei gescannten PDFs optional Vision-LLM nach ocrmypdf
     """
     file_hash = calculate_sha256(file_bytes)
+    pdf_meta: dict[str, Any] = {}
     
     with get_session() as session:
         # Check Duplikate
@@ -497,7 +634,11 @@ def ingest_document(
                 # Jetzt neu chunken & embedden (gleicher Code wie Neu-Upload)
                 _reingest_doc = existing
             else:
-                return False, f"Dokument '{file_name}' existiert bereits (ID: {existing.id})."
+                return IngestResult(
+                    False,
+                    f"Dokument '{file_name}' existiert bereits (ID: {existing.id}).",
+                    "linked",
+                )
         else:
             _reingest_doc = None
 
@@ -510,7 +651,7 @@ def ingest_document(
         try:
             file_path.write_bytes(file_bytes)
         except Exception as e:
-            return False, f"Fehler beim Speichern der Datei: {e}"
+            return IngestResult(False, f"Fehler beim Speichern der Datei: {e}", "error")
 
         # Text extrahieren
         text_content = ""
@@ -522,15 +663,17 @@ def ingest_document(
             if not success and classification == "FAQ/Fragen-Katalog":
                 success, message, csv_data = process_generic_csv_rows(file_path, delimiter=csv_delimiter)
             if not success:
-                return False, f"CSV-Verarbeitung fehlgeschlagen: {message}"
+                return IngestResult(False, f"CSV-Verarbeitung fehlgeschlagen: {message}", "error")
             csv_chunks = csv_data
         elif ext in (".xlsx", ".xls"):
             success, message, csv_data = process_xlsx_to_rows(file_path)
             if not success:
-                return False, f"XLSX-Verarbeitung fehlgeschlagen: {message}"
+                return IngestResult(False, f"XLSX-Verarbeitung fehlgeschlagen: {message}", "error")
             csv_chunks = csv_data
         elif ext == ".pdf":
-            text_content = extract_text_from_pdf(file_path)
+            text_content, pdf_meta = extract_pdf_text_with_fallback(
+                file_path, use_vision_fallback=use_vision_fallback,
+            )
         elif ext == ".docx":
             text_content = extract_text_from_docx(file_path)
         elif ext in [".md", ".txt", ".json", ".yaml", ".yml"]:
@@ -579,9 +722,23 @@ def ingest_document(
             if csv_chunks or text_content:
                 if ok:
                     label = "neu indexiert" if _reingest_doc is not None else "erfolgreich importiert"
-                    return True, f"Dokument '{file_name}' {label}: {msg}"
-                return False, msg
-            return True, f"Dokument '{file_name}' gespeichert, aber kein Text extrahiert."
+                    suffix = _extraction_method_label(pdf_meta) if ext == ".pdf" else ""
+                    status = _ingest_status_from_meta(pdf_meta, has_chunks=True)
+                    return IngestResult(
+                        True,
+                        f"Dokument '{file_name}' {label}{suffix}: {msg}",
+                        status,
+                    )
+                return IngestResult(False, msg, "error")
+            status = _ingest_status_from_meta(pdf_meta, has_chunks=False)
+            if status == "ocr_failed":
+                msg = (
+                    f"Dokument '{file_name}' gespeichert — Gescannt: OCR fehlgeschlagen, "
+                    "0 Chunks indexiert. Datei manuell als durchsuchbares PDF vorbereiten oder erneut hochladen."
+                )
+            else:
+                msg = f"Dokument '{file_name}' gespeichert, aber kein Text extrahiert."
+            return IngestResult(True, msg, status)
 
 
 def delete_document(doc_id: int) -> bool:
