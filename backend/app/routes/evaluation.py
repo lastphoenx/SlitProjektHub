@@ -49,6 +49,7 @@ from src.m15_evaluation import (
     extract_price_from_bidder_doc,
     extract_price_structure_from_tender,
     get_bidder_document_ids,
+    get_bidder_doc_subtypes,
     get_bidder_preisblatt_doc_ids,
     get_evaluation_config,
     get_score,
@@ -77,6 +78,7 @@ from src.m15_evaluation import (
     save_evaluation_config,
     seed_price_structure_for_bidder,
     set_tender_doc_roles,
+    set_bidder_doc_subtypes,
     soft_delete_bidder,
     soft_delete_criterion,
     suggest_score_with_rag,
@@ -234,6 +236,7 @@ async def evaluation_page(request: Request, project_key: str = ""):
 
     offer_docs = []
     bidder_docs: dict[int, list[int]] = {}
+    bidder_doc_subtypes: dict[int, dict[int, list[str]]] = {}
     tender_doc_roles: dict[int, list[str]] = {}
     tender_role_suggestions: dict[int, str | None] = {}
     chunk_recommendations: dict[int, int] = {}
@@ -261,6 +264,9 @@ async def evaluation_page(request: Request, project_key: str = ""):
             )
         for b in bidders:
             bidder_docs[b.id] = get_bidder_document_ids(b.id)
+            bidder_doc_subtypes[b.id] = {}
+            for doc_id in bidder_docs[b.id]:
+                bidder_doc_subtypes[b.id][doc_id] = get_bidder_doc_subtypes(b.id, doc_id)
 
     who = _username(request)
     user_id = get_user_id(who) if who else None
@@ -285,6 +291,7 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "tender_role_labels": TENDER_ROLE_LABELS,
         "has_tender_docs": bool(get_tender_document_ids(project_key)) if project_key else False,
         "bidder_docs": bidder_docs,
+        "bidder_doc_subtypes": bidder_doc_subtypes,
         "has_phase2_criteria": any(
             int(c.ranking_phase or 1) >= 2
             for c in criteria
@@ -692,6 +699,26 @@ async def evaluation_tender_doc_upload(
     return RedirectResponse(url=f"{redirect}&tender_upload={status}", status_code=303)
 
 
+@router.post("/evaluation/bidder-doc-subtypes", response_class=HTMLResponse)
+async def evaluation_bidder_doc_subtypes(
+    request: Request,
+    project_key: str = Form(...),
+    bidder_id: int = Form(...),
+    document_id: int = Form(...),
+    doc_subtypes: list[str] = Form([]),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    try:
+        set_bidder_doc_subtypes(bidder_id, document_id, doc_subtypes)
+    except ValueError:
+        return RedirectResponse(
+            url=f"/evaluation?project_key={project_key}&doc_subtype=error",
+            status_code=303,
+        )
+    return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
+
+
 @router.post("/evaluation/bidder-doc", response_class=HTMLResponse)
 async def evaluation_bidder_doc(
     request: Request,
@@ -717,6 +744,7 @@ async def evaluation_bidder_doc_upload(
     file: UploadFile = File(...),
     classification: str = Form(""),
     doc_subtype: str = Form(""),
+    doc_subtypes: list[str] = Form([]),
     chunk_size: int = Form(1000),
 ):
     if not can_evaluate(_username(request)):
@@ -730,6 +758,14 @@ async def evaluation_bidder_doc_upload(
     subtype = (doc_subtype or "").strip() or None
     if subtype and subtype not in ANGEbot_SUBTYPES:
         subtype = None
+    subtypes = [
+        s.strip() for s in doc_subtypes
+        if s.strip() in ANGEbot_SUBTYPES
+    ]
+    if not subtypes and subtype:
+        subtypes = [subtype]
+    # Erster Subtyp für Chunk-Prefix beim Ingest (Document.doc_subtype bleibt optional)
+    ingest_subtype = subtypes[0] if subtypes else subtype
     chunk_size = normalize_chunk_size(
         chunk_size,
         fallback=recommended_chunk_size(
@@ -742,13 +778,15 @@ async def evaluation_bidder_doc_upload(
         file_bytes=file_bytes,
         classification=cls,
         chunk_size=chunk_size,
-        doc_subtype=subtype,
+        doc_subtype=ingest_subtype,
     )
     doc = get_document_by_sha256(calculate_sha256(file_bytes), include_deleted=True)
     if not doc:
         return RedirectResponse(url=f"{redirect}&doc_upload=error", status_code=303)
     link_document_to_project(project_key, doc.id)
     link_document_to_bidder(bidder_id, doc.id)
+    if subtypes:
+        set_bidder_doc_subtypes(bidder_id, doc.id, subtypes)
     status = "ok" if success else "linked"
     return RedirectResponse(url=f"{redirect}&doc_upload={status}", status_code=303)
 

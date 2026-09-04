@@ -698,6 +698,80 @@ def test_build_evaluation_export_includes_justifications():
     auth14.engine = old_auth_engine
 
 
+def test_bidder_doc_subtypes_multi():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+    from src.m03_db import Document
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    project_key = "p-bid-sub"
+    with Session(engine) as session:
+        bidder = Bidder(project_key=project_key, name="Merge")
+        doc = Document(
+            filename="mega-merge.pdf",
+            sha256_hash="mergehash9",
+            classification="Angebot (Bieter)",
+            file_path="/tmp/m.pdf",
+            doc_subtype="Grobkonzept/Lösungskonzept",
+        )
+        session.add(bidder)
+        session.add(doc)
+        session.commit()
+        session.refresh(bidder)
+        session.refresh(doc)
+        bidder_id, doc_id = bidder.id, doc.id
+
+    from src.m15_evaluation import (
+        bidder_doc_ids_for_criterion,
+        get_bidder_doc_subtypes,
+        link_document_to_bidder,
+        set_bidder_doc_subtypes,
+    )
+
+    link_document_to_bidder(bidder_id, doc_id)
+    # Legacy: Document.doc_subtype bis Junction gesetzt wird
+    assert get_bidder_doc_subtypes(bidder_id, doc_id) == ["Grobkonzept/Lösungskonzept"]
+
+    set_bidder_doc_subtypes(
+        bidder_id,
+        doc_id,
+        ["Preisblatt", "Grobkonzept/Lösungskonzept", "Proof of Concept", "Management Summary"],
+    )
+    assert set(get_bidder_doc_subtypes(bidder_id, doc_id)) == {
+        "Preisblatt",
+        "Grobkonzept/Lösungskonzept",
+        "Proof of Concept",
+        "Management Summary",
+    }
+
+    with Session(engine) as session:
+        price_crit = Criterion(
+            project_key=project_key, kind="zuschlag", name="Preis", auto_price=True,
+        )
+        z_crit = Criterion(project_key=project_key, kind="zuschlag", name="F-01")
+        session.add(price_crit)
+        session.add(z_crit)
+        session.commit()
+        session.refresh(price_crit)
+        session.refresh(z_crit)
+
+    assert bidder_doc_ids_for_criterion(bidder_id, price_crit) == [doc_id]
+    assert bidder_doc_ids_for_criterion(bidder_id, z_crit) == [doc_id]
+
+    set_bidder_doc_subtypes(bidder_id, doc_id, ["Grobkonzept/Lösungskonzept"])
+    assert bidder_doc_ids_for_criterion(bidder_id, price_crit) == [doc_id]
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
 def test_criterion_ref_prefix():
     from src.m15_evaluation import _criterion_ref_prefix
 
@@ -800,6 +874,7 @@ if __name__ == "__main__":
     test_score_justification_required()
     test_sync_price_criterion_scores_reciprocal_gate()
     test_build_evaluation_export_includes_justifications()
+    test_bidder_doc_subtypes_multi()
     test_criterion_ref_prefix()
     test_criteria_editor_payload_and_save()
     test_compute_price_reciprocal()
