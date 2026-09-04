@@ -240,6 +240,21 @@ F01-Leak-Filter, `auto_price` ohne Unterfragen.
 
 ---
 
+## Ticket 19 — Referenzschlüssel sichtbar & importierbar ✅ erledigt
+
+**Ziel:** EK1/EK2/EK3 und F-01/T-01/S-01 etc. in Vorschau und DB (`Criterion.referenz`), nicht nur intern in `requirement_ref`.
+
+**Umsetzung:**
+- Spalte **Ref** in Kriterien-Vorschau und «Kriterien verwalten» (`eval_criteria_preview.js`).
+- `import_criteria_payload()` / Editor-Save: `requirement_ref` → `Criterion.referenz` (Parent + Kind).
+- `_ensure_criteria_refs()` nach Schritt 1: EK1… sequenziell, Zuschlag per Regex aus Text.
+- Schritt-1-Prompt: `requirement_ref` auch für Eignung (EK1/EK2/EK3).
+- DB-Migration `criterion.referenz`.
+
+**Hinweis F-02/T-01 ohne Kinder:** Nach Ref-Fix neu extrahieren; P2-Badge + KI-Hinweise («keine Zeilenstruktur» vs. «keine RAG-Treffer») gegen PDF Kapitel 7 prüfen — separates Diagnose-Thema, kein Rückfall Ticket 17.
+
+---
+
 ## Ticket 18 — Vollständigkeits-Badge für Einzelanforderungen ✅ erledigt
 
 **Ziel:** Nach KI-Extraktion sichtbar machen, wenn weniger Unterfragen erkannt wurden als im Pflichtenheft angekündigt (z. B. «5 von 18 Einzelanforderungen»).
@@ -252,4 +267,4 @@ F01-Leak-Filter, `auto_price` ohne Unterfragen.
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → ~~13–17~~ → ~~4~~ → ~~18~~
+**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → ~~13–17~~ → ~~4~~ → ~~18~~ → ~~19~~

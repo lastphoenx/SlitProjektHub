@@ -600,6 +600,57 @@ def test_parse_expected_child_count_and_completeness():
     assert meta["completeness"][0]["expected"] == 18
 
 
+def test_ensure_criteria_refs_and_import_referenz():
+    from src.m15_evaluation import (
+        _ensure_criteria_refs,
+        format_requirement_ref_display,
+        import_criteria_payload,
+        list_criteria,
+    )
+
+    payload = {
+        "eignung": [{"name": "Wirtschaftliche Leistungsfähigkeit", "description": "K.O."}],
+        "zuschlag": [{
+            "name": "Funktionale Anforderungen",
+            "description": "Füllen Sie das Anforderungsblatt F-01 aus.",
+            "weight_pct": 20,
+            "children": [{"name": "F01-001", "description": "Projektverständnis"}],
+        }],
+    }
+    hints = _ensure_criteria_refs(payload)
+    assert payload["eignung"][0]["requirement_ref"] == "EK1"
+    assert payload["zuschlag"][0]["requirement_ref"] == "F01"
+    assert payload["zuschlag"][0]["children"][0]["requirement_ref"] == "F01-001"
+    assert any("EK1" in h for h in hints)
+    assert format_requirement_ref_display("F01") == "F-01"
+    assert format_requirement_ref_display("EK2") == "EK2"
+    assert format_requirement_ref_display("F01-001") == "F-01-001"
+
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+    SQLModel.metadata.create_all(engine)
+    ev.migrate_evaluation_db()
+
+    stats = import_criteria_payload("p-ref", payload, skip_existing=False)
+    assert stats["created"] >= 3
+    rows = list_criteria("p-ref")
+    parent = next(c for c in rows if c.name == "Funktionale Anforderungen")
+    child = next(c for c in rows if c.name == "F01-001")
+    ek = next(c for c in rows if c.name == "Wirtschaftliche Leistungsfähigkeit")
+    assert parent.referenz == "F01"
+    assert child.referenz == "F01-001"
+    assert ek.referenz == "EK1"
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
 def test_ki_busy_hint():
     from unittest.mock import patch
 
@@ -1143,6 +1194,7 @@ if __name__ == "__main__":
     test_criteria_preview_cache()
     test_criteria_preview_meta()
     test_parse_expected_child_count_and_completeness()
+    test_ensure_criteria_refs_and_import_referenz()
     test_ki_busy_hint()
     test_score_justification_required()
     test_sync_price_criterion_scores_reciprocal_gate()
