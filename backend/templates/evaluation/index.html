@@ -27,12 +27,12 @@
 {% include 'partials/_pii_cloud_hint.html' %}
 
 {% if price_offers_status and not price_offers_status.get('ready') and price_offers_status.get('bidder_count', 0) > 0 %}
-<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+<div class="card eval-price-warn" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
   <p style="font-size:.8rem;margin:0">
     <strong>Preis-Punkte noch nicht berechnet</strong> — erst wenn alle {{ price_offers_status.bidder_count }} Bieter ein vollständiges Preisblatt haben
     ({{ price_formula_labels.get(eval_config.price_formula, eval_config.price_formula) }}). Fehlend:
     {{ price_offers_status.missing_bidders | join(', ') }}.
-    <a href="/evaluation/price?project_key={{ project_key }}">Preisblatt</a>
+    <a href="/evaluation/price?project_key={{ project_key }}" class="badge badge-warn">Preisblatt</a>
   </p>
 </div>
 {% endif %}

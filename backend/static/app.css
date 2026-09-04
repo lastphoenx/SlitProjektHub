@@ -350,6 +350,47 @@ tbody td.eval-matrix-cell:hover { background: rgba(99,102,241,.12); outline: 1px
   border: 1px solid rgba(59,130,246,.3);
 }
 .badge-neutral { background: rgba(148,163,184,.15); color: var(--color-text-muted); border-color: rgba(148,163,184,.3); }
+a.badge, a.badge:visited {
+  text-decoration: none;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+a.badge:hover {
+  background: rgba(59,130,246,.28);
+  color: #bfdbfe;
+  border-color: rgba(59,130,246,.45);
+}
+.badge-warn {
+  background: rgba(245,158,11,.15);
+  color: #fcd34d;
+  border-color: rgba(245,158,11,.35);
+}
+a.badge.badge-warn, a.badge.badge-warn:visited { color: #fcd34d; }
+a.badge.badge-warn:hover {
+  background: rgba(245,158,11,.28);
+  color: #fde68a;
+  border-color: rgba(245,158,11,.5);
+}
+
+/* Hinweis-Karten: Links nicht als Default-Browser-Blau (auf dunklem Grund unleserlich) */
+.pii-cloud-hint a:not(.badge),
+.eval-workflow-hint a:not(.badge),
+.eval-price-warn a:not(.badge):not(.btn) {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  background: rgba(59,130,246,.15);
+  color: #93c5fd;
+  border: 1px solid rgba(59,130,246,.3);
+}
+.eval-price-warn a:not(.badge):not(.btn) {
+  background: rgba(245,158,11,.15);
+  color: #fcd34d;
+  border-color: rgba(245,158,11,.35);
+}
 
 /* ── Empty state ── */
 .empty-state {
