@@ -60,6 +60,7 @@ from src.m15_evaluation import (
     list_bidders,
     list_criteria,
     list_missing_justifications,
+    list_evaluator_score_discrepancies,
     list_price_items,
     list_scores_for_cell,
     list_scores_for_project,
@@ -71,6 +72,7 @@ from src.m15_evaluation import (
     official_score,
     price_offers_status,
     recommended_chunk_size,
+    project_evaluation_started,
     resolve_vorgaben_ki,
     rolled_up_score,
     score_requires_justification,
@@ -89,6 +91,8 @@ from src.m15_evaluation import (
     update_criterion_ranking_phase,
     upsert_score,
     validate_evaluation_cloud_gate,
+    validate_criterion_change_during_evaluation,
+    validate_criteria_manage_save,
     validate_tender_cloud_gate,
 )
 from src.m01_config import load_user_settings
@@ -302,6 +306,8 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "price_formula_labels": PRICE_FORMULA_LABELS,
         "price_formulas": PRICE_FORMULAS,
         "missing_justifications": list_missing_justifications(project_key) if project_key else [],
+        "evaluator_discrepancies": list_evaluator_score_discrepancies(project_key) if project_key else [],
+        "evaluation_started": project_evaluation_started(project_key) if project_key else False,
         "price_offers_status": price_offers_status(project_key) if project_key else {},
         "angebot_class": ANGEbot_CLASSIFICATION,
         "angebot_subtypes": ANGEbot_SUBTYPES,
@@ -337,9 +343,20 @@ async def evaluation_create_criterion(
     auto_price: str = Form("false"),
     description: str = Form(""),
     ranking_phase: str = Form(""),
+    confirm_active_evaluation: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
+    confirmed = confirm_active_evaluation.lower() in ("true", "on", "1", "yes")
+    try:
+        validate_criterion_change_during_evaluation(
+            project_key, confirm_active_evaluation=confirmed, structural=True,
+        )
+    except ValueError:
+        return RedirectResponse(
+            url=f"/evaluation?project_key={project_key}&criteria_change=confirm_required",
+            status_code=303,
+        )
     rp: int | None = None
     if ranking_phase.strip().isdigit():
         rp = int(ranking_phase.strip())
@@ -373,6 +390,7 @@ async def evaluation_criteria_manage_page(request: Request, project_key: str):
             "payload": payload,
             "ranking_phase_labels": RANKING_PHASE_LABELS,
             "ranking_phases": RANKING_PHASES,
+            "evaluation_started": project_evaluation_started(project_key),
         },
     )
 
@@ -383,6 +401,7 @@ async def evaluation_criteria_save(
     project_key: str = Form(...),
     criteria_json: str = Form(...),
     deleted_criterion_ids: str = Form("[]"),
+    confirm_active_evaluation: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -399,7 +418,16 @@ async def evaluation_criteria_save(
             deleted = []
     except json.JSONDecodeError:
         deleted = []
-    save_criteria_editor_payload(project_key, data, deleted_ids=deleted)
+    confirmed = confirm_active_evaluation.lower() in ("true", "on", "1", "yes")
+    try:
+        save_criteria_editor_payload(
+            project_key, data, deleted_ids=deleted, confirm_active_evaluation=confirmed,
+        )
+    except ValueError:
+        return RedirectResponse(
+            url=f"/evaluation/criteria-manage?project_key={project_key}&error=confirm_required",
+            status_code=303,
+        )
     return RedirectResponse(
         url=f"/evaluation/criteria-manage?project_key={project_key}&saved=1",
         status_code=303,
@@ -412,9 +440,20 @@ async def evaluation_criterion_phase(
     project_key: str = Form(...),
     criterion_id: int = Form(...),
     ranking_phase: int = Form(1),
+    confirm_active_evaluation: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
+    confirmed = confirm_active_evaluation.lower() in ("true", "on", "1", "yes")
+    try:
+        validate_criterion_change_during_evaluation(
+            project_key, confirm_active_evaluation=confirmed, structural=True,
+        )
+    except ValueError:
+        return RedirectResponse(
+            url=f"/evaluation?project_key={project_key}&criteria_change=confirm_required",
+            status_code=303,
+        )
     try:
         update_criterion_ranking_phase(criterion_id, ranking_phase)
     except ValueError:
@@ -970,9 +1009,24 @@ async def evaluation_apply_criteria(
 
 
 @router.post("/evaluation/delete-criterion", response_class=HTMLResponse)
-async def evaluation_delete_criterion(request: Request, project_key: str = Form(...), criterion_id: int = Form(...)):
+async def evaluation_delete_criterion(
+    request: Request,
+    project_key: str = Form(...),
+    criterion_id: int = Form(...),
+    confirm_active_evaluation: str = Form(""),
+):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
+    confirmed = confirm_active_evaluation.lower() in ("true", "on", "1", "yes")
+    try:
+        validate_criterion_change_during_evaluation(
+            project_key, confirm_active_evaluation=confirmed, structural=True,
+        )
+    except ValueError:
+        return RedirectResponse(
+            url=f"/evaluation?project_key={project_key}&criteria_change=confirm_required",
+            status_code=303,
+        )
     soft_delete_criterion(criterion_id)
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
 

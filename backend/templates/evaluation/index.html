@@ -38,6 +38,22 @@
 </div>
 {% endif %}
 
+{% if evaluator_discrepancies %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.8rem;margin:0 0 .35rem"><strong>Bewerter-Abweichungen ({{ evaluator_discrepancies|length }})</strong></p>
+  <ul style="font-size:.75rem;margin:0;padding-left:1.1rem;max-height:8rem;overflow:auto">
+    {% for d in evaluator_discrepancies[:12] %}
+    <li>
+      {{ d.bidder_name }} — {{ d.criterion_name }}:
+      {{ d.min_value }}–{{ d.max_value }} (Mittel {{ d.official_mean }}, {{ d.evaluator_count }} Bewerter)
+    </li>
+    {% endfor %}
+    {% if evaluator_discrepancies|length > 12 %}<li class="text-muted">… und {{ evaluator_discrepancies|length - 12 }} weitere</li>{% endif %}
+  </ul>
+  <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0">Starke Streuung bei mehreren Bewertern — vor Verlass auf den Mittelwert klären (Vier-Augen).</p>
+</div>
+{% endif %}
+
 {% if missing_justifications %}
 <div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
   <p style="font-size:.8rem;margin:0 0 .35rem"><strong>Offene Begründungspflichten ({{ missing_justifications|length }})</strong></p>
@@ -266,6 +282,14 @@
     — Unterfragen (F01-001 …) nachträglich bearbeiten.
     Ohne Kriterien keine Matrix — die KI nutzt trotzdem die Vorgaben in Phase ④.
   </p>
+  {% if evaluation_started %}
+  <div class="card" style="margin-bottom:.75rem;border-color:var(--color-warning, #fbbf24);padding:.5rem .65rem">
+    <p style="font-size:.75rem;margin:0">
+      <strong>Bewertung läuft.</strong> Strukturelle Kriterienänderungen (Gewicht, Löschen, neue Top-Level-Kriterien)
+      sind ein Rekursrisiko (BöB/IVöB) — nur mit Bestätigung in «Kriterien verwalten» oder unten beim Anlegen.
+    </p>
+  </div>
+  {% endif %}
   {% if request.query_params.get('criteria_apply') == 'ok' %}
   <p style="font-size:.78rem;color:var(--color-success, #86efac);margin:0 0 .5rem">
     {{ request.query_params.get('created', '0') }} Kriterien angelegt,
@@ -360,6 +384,12 @@
       <label for="auto_price" style="font-size:.78rem;margin:0">Preis-Kriterium (automatisch aus Preisblatt)</label>
     </div>
     <textarea class="form-input" name="description" rows="2" placeholder="Voller Anforderungstext (optional, für KI-Vorschlag)" style="grid-column:1/-1"></textarea>
+    {% if evaluation_started %}
+    <label style="grid-column:1/-1;font-size:.75rem;display:flex;gap:.35rem;align-items:flex-start">
+      <input type="checkbox" name="confirm_active_evaluation" value="true" />
+      <span>Strukturelle Änderung trotz laufender Bewertung bestätigen (Rekursrisiko)</span>
+    </label>
+    {% endif %}
     <button type="submit" class="btn btn-primary">Kriterium anlegen</button>
   </form>
   <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">

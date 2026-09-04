@@ -17,11 +17,25 @@
 <div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
   <p style="font-size:.85rem;margin:0">Kriterien gespeichert.</p>
 </div>
+{% elif request.query_params.get('error') == 'confirm_required' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">Speichern abgebrochen — strukturelle Änderung während laufender Bewertung erfordert die Bestätigungs-Checkbox.</p>
+</div>
+{% endif %}
+
+{% if evaluation_started %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.78rem;margin:0">
+    <strong>Bewertung läuft bereits.</strong> Änderungen an Gewicht, Name, Skala, Phase, Löschen oder neue Kriterien
+    können ein Rekursrisiko sein (BöB/IVöB). Nur Beschreibungstexte sind ohne Bestätigung unkritisch.
+  </p>
+</div>
 {% endif %}
 
 <div id="criteria-preview-app"
      data-ranking-labels='{{ ranking_phase_labels | default({}) | tojson }}'
-     data-manage-mode="1">
+     data-manage-mode="1"
+     data-evaluation-active="{{ '1' if evaluation_started else '0' }}">
 
   <p class="text-muted" style="font-size:.75rem;margin:0 0 .75rem">
     Top-Level-Kriterien und <strong>Unterfragen</strong> (z.&nbsp;B. F01-001…F01-008 unter F-01) —
@@ -84,9 +98,16 @@
     </div>
 
     <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem">
+      {% if evaluation_started %}
+      <label style="font-size:.75rem;display:flex;gap:.35rem;align-items:flex-start;flex:1;min-width:16rem">
+        <input type="checkbox" name="confirm_active_evaluation" id="criteria-confirm-active" value="true" />
+        <span>Strukturelle Änderung trotz laufender Bewertung bestätigen (Rekursrisiko BöB/IVöB)</span>
+      </label>
+      {% endif %}
       <button type="submit" class="btn btn-primary">Änderungen speichern</button>
       <a class="btn btn-secondary" href="/evaluation?project_key={{ project_key }}">Abbrechen</a>
     </div>
+    <p id="criteria-manage-error" class="text-muted" style="font-size:.72rem;color:var(--color-danger);margin:0 0 .75rem" hidden></p>
 
     <details style="font-size:.75rem;margin-bottom:1rem">
       <summary class="text-muted" style="cursor:pointer">JSON anzeigen (Power-User)</summary>

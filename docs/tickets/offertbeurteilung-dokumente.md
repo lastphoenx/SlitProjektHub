@@ -218,5 +218,24 @@ bevorzugen — nicht nur einen `Document.doc_subtype`.
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → 4
-(Ticket 3, 5, 6, 7, 8, 9 erledigt; Ticket 4 optional).
+## Ticket 10 — Kriterien-Schutz nach Bewertungsbeginn ✅ erledigt
+
+**Ziel:** Strukturelle Kriterienänderungen (Gewicht, Löschen, …) nach erstem Score nur mit Bestätigung
+(Rekursrisiko BöB/IVöB).
+
+**Umsetzung:** `validate_criteria_manage_save()`, Bestätigungs-Checkbox in «Kriterien verwalten» und
+beim manuellen Anlegen; reine Beschreibungsänderungen ohne Gate.
+
+---
+
+## Ticket 11 — Bewerter-Abweichungs-Hinweis ✅ erledigt
+
+**Ziel:** Hohe Streuung zwischen mehreren Bewertern (`user:*`) sichtbar machen, bevor man sich auf
+den Mittelwert verlässt.
+
+**Umsetzung:** `list_evaluator_score_discrepancies()` + Warnkarte auf der Offertbeurteilungs-Seite
+(analog «Offene Begründungspflichten»).
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → 4

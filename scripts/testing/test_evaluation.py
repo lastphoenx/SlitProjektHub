@@ -772,6 +772,118 @@ def test_bidder_doc_subtypes_multi():
     ev.get_session = old_get
 
 
+def test_criteria_manage_confirm_after_scores():
+    engine, evaluator_id = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    project_key = "p-gate"
+    with Session(engine) as session:
+        b = Bidder(project_key=project_key, name="A")
+        session.add(b)
+        session.commit()
+        session.refresh(b)
+        crit = Criterion(project_key=project_key, kind="zuschlag", name="Z1", weight_pct=50, scale_max=10)
+        session.add(crit)
+        session.commit()
+        session.refresh(crit)
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=crit.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=7.0,
+            )
+        )
+        session.commit()
+        crit_id = crit.id
+
+    from src.m15_evaluation import (
+        criteria_editor_payload,
+        save_criteria_editor_payload,
+        validate_criteria_manage_save,
+    )
+
+    payload = criteria_editor_payload(project_key)
+    payload["zuschlag"][0]["weight_pct"] = 40
+
+    try:
+        validate_criteria_manage_save(project_key, payload, [], confirm_active_evaluation=False)
+    except ValueError as exc:
+        assert "Rekursrisiko" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+    save_criteria_editor_payload(
+        project_key, payload, confirm_active_evaluation=True,
+    )
+
+    again = criteria_editor_payload(project_key)
+    assert again["zuschlag"][0]["weight_pct"] == 40
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_evaluator_score_discrepancies():
+    engine, evaluator_id = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    project_key = "p-var"
+    with Session(engine) as session:
+        user2 = AppUser(username="ev2", password_hash="x", app_role_key="projektleiter_intern")
+        session.add(user2)
+        session.commit()
+        session.refresh(user2)
+        b = Bidder(project_key=project_key, name="Bieter")
+        z = Criterion(project_key=project_key, kind="zuschlag", name="Qualität", scale_max=10, weight_pct=100)
+        session.add(b)
+        session.add(z)
+        session.commit()
+        session.refresh(b)
+        session.refresh(z)
+        session.add(
+            Score(
+                bidder_id=b.id, criterion_id=z.id,
+                source_key=f"user:{evaluator_id}", evaluator_user_id=evaluator_id, value=2.0,
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b.id, criterion_id=z.id,
+                source_key=f"user:{user2.id}", evaluator_user_id=user2.id, value=9.0,
+            )
+        )
+        session.commit()
+
+    from src.m15_evaluation import list_evaluator_score_discrepancies
+
+    rows = list_evaluator_score_discrepancies(project_key)
+    assert len(rows) == 1
+    assert rows[0]["spread"] == 7.0
+    assert rows[0]["min_value"] == 2.0
+    assert rows[0]["max_value"] == 9.0
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
 def test_criterion_ref_prefix():
     from src.m15_evaluation import _criterion_ref_prefix
 
@@ -875,6 +987,8 @@ if __name__ == "__main__":
     test_sync_price_criterion_scores_reciprocal_gate()
     test_build_evaluation_export_includes_justifications()
     test_bidder_doc_subtypes_multi()
+    test_criteria_manage_confirm_after_scores()
+    test_evaluator_score_discrepancies()
     test_criterion_ref_prefix()
     test_criteria_editor_payload_and_save()
     test_compute_price_reciprocal()

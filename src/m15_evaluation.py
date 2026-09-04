@@ -472,8 +472,12 @@ def save_criteria_editor_payload(
     data: dict[str, Any],
     *,
     deleted_ids: list[int] | None = None,
+    confirm_active_evaluation: bool = False,
 ) -> dict[str, int]:
     """Upsert aus Tabellen-Editor (Ticket 7)."""
+    validate_criteria_manage_save(
+        project_key, data, deleted_ids, confirm_active_evaluation=confirm_active_evaluation,
+    )
     stats = {"updated": 0, "created": 0, "deleted": 0}
     deleted_set: set[int] = set()
     for did in deleted_ids or []:
@@ -720,6 +724,162 @@ def list_missing_justifications(project_key: str) -> list[dict[str, Any]]:
                 }
             )
     return missing
+
+
+EVALUATOR_DISCREPANCY_MIN_SPREAD = 3.0
+EVALUATOR_DISCREPANCY_MIN_RATIO = 0.25
+
+
+def project_evaluation_started(project_key: str) -> bool:
+    """True sobald mindestens ein Score (beliebige Quelle) im Projekt existiert."""
+    return bool(list_scores_for_project(project_key))
+
+
+def criterion_ids_with_scores(project_key: str) -> set[int]:
+    return {s.criterion_id for s in list_scores_for_project(project_key)}
+
+
+def criterion_has_scores(criterion_id: int) -> bool:
+    with get_session() as session:
+        row = session.exec(
+            select(Score).where(Score.criterion_id == criterion_id).limit(1)
+        ).first()
+        return row is not None
+
+
+def _criterion_entry_structural_change(crit: Criterion, entry: dict[str, Any]) -> bool:
+    if (entry.get("name") or "").strip() != (crit.name or "").strip():
+        return True
+    if crit.kind == "zuschlag":
+        if abs(float(entry.get("weight_pct") or 0) - float(crit.weight_pct or 0)) > 1e-6:
+            return True
+        if int(entry.get("scale_max") or 10) != int(crit.scale_max or 10):
+            return True
+        if int(entry.get("ranking_phase") or 1) != int(crit.ranking_phase or 1):
+            return True
+        if bool(entry.get("auto_price")) != bool(crit.auto_price):
+            return True
+    return False
+
+
+def _criteria_payload_has_risky_changes(
+    project_key: str,
+    data: dict[str, Any],
+    deleted_ids: list[int] | None,
+) -> bool:
+    if deleted_ids:
+        return True
+    scored = criterion_ids_with_scores(project_key)
+    if not scored:
+        return False
+    by_id = {c.id: c for c in list_criteria(project_key) if c.id is not None}
+
+    def walk(entries: list[dict[str, Any]] | None) -> bool:
+        for entry in entries or []:
+            cid = entry.get("id")
+            if cid is None:
+                return True
+            try:
+                cid_int = int(cid)
+            except (TypeError, ValueError):
+                return True
+            crit = by_id.get(cid_int)
+            if crit is None:
+                return True
+            if cid_int in scored and _criterion_entry_structural_change(crit, entry):
+                return True
+            if walk(entry.get("children")):
+                return True
+        return False
+
+    if walk(data.get("eignung")) or walk(data.get("zuschlag")):
+        return True
+    return False
+
+
+def validate_criteria_manage_save(
+    project_key: str,
+    data: dict[str, Any],
+    deleted_ids: list[int] | None,
+    *,
+    confirm_active_evaluation: bool,
+) -> None:
+    """Blockiert strukturelle Kriterienänderungen nach Bewertungsbeginn ohne Bestätigung."""
+    if not project_evaluation_started(project_key):
+        return
+    if not _criteria_payload_has_risky_changes(project_key, data, deleted_ids):
+        return
+    if not confirm_active_evaluation:
+        raise ValueError(
+            "Bewertung läuft bereits — strukturelle Änderungen (Gewicht, Löschen, neue Kriterien …) "
+            "erfordern ausdrückliche Bestätigung wegen Rekursrisiko (BöB/IVöB)."
+        )
+
+
+def validate_criterion_change_during_evaluation(
+    project_key: str,
+    *,
+    confirm_active_evaluation: bool,
+    structural: bool = True,
+) -> None:
+    if not structural or not project_evaluation_started(project_key):
+        return
+    if not confirm_active_evaluation:
+        raise ValueError(
+            "Bewertung läuft bereits — diese Kriterienänderung erfordert Bestätigung "
+            "(Rekursrisiko nachträgliche Änderung der Zuschlagskriterien)."
+        )
+
+
+def list_evaluator_score_discrepancies(project_key: str) -> list[dict[str, Any]]:
+    """Zellen mit stark abweichenden Bewerter-Punkten (user:*), für Vier-Augen-Hinweis."""
+    bidders = {b.id: b for b in list_bidders(project_key)}
+    criteria = {c.id: c for c in list_criteria(project_key)}
+    by_cell: dict[tuple[int, int], list[float]] = {}
+    for score in list_scores_for_project(project_key):
+        if not score.source_key.startswith("user:"):
+            continue
+        key = (score.bidder_id, score.criterion_id)
+        by_cell.setdefault(key, []).append(float(score.value))
+
+    out: list[dict[str, Any]] = []
+    for (bidder_id, criterion_id), values in by_cell.items():
+        if len(values) < 2:
+            continue
+        crit = criteria.get(criterion_id)
+        bidder = bidders.get(bidder_id)
+        if not crit or not bidder:
+            continue
+        spread = max(values) - min(values)
+        if crit.kind == "eignung":
+            if spread < 0.5:
+                continue
+        else:
+            threshold = max(
+                EVALUATOR_DISCREPANCY_MIN_SPREAD,
+                EVALUATOR_DISCREPANCY_MIN_RATIO * max(1, crit.scale_max),
+            )
+            if spread < threshold:
+                continue
+        mean = round(sum(values) / len(values), 2)
+        out.append(
+            {
+                "bidder_id": bidder.id,
+                "bidder_name": bidder.name,
+                "criterion_id": crit.id,
+                "criterion_name": crit.name,
+                "parent_id": crit.parent_id,
+                "kind": crit.kind,
+                "min_value": min(values),
+                "max_value": max(values),
+                "spread": round(spread, 2),
+                "evaluator_count": len(values),
+                "official_mean": mean,
+                "scale_max": crit.scale_max,
+            }
+        )
+    out.sort(key=lambda row: (-row["spread"], row["bidder_name"], row["criterion_name"]))
+    return out
 
 
 def price_offers_status(project_key: str) -> dict[str, Any]:
