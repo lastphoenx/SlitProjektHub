@@ -59,7 +59,16 @@ Neue Tests: `_resolve_requirement_search`, `_normalize_requirement_ref`, RAG-For
 ## Akzeptanzkriterien
 
 - [x] Schritt 2 läuft auch bei «Funktionale Anforderungen» (ohne F01 im Namen)
-- [x] Eignung (EK3 etc.) wird angereichert
-- [x] Kein Namens-Mapping pro Tender
-- [x] RAG-Kontext Schritt 1 bis 36+ Chunks
-- [x] CSV/XLSX-Vorgaben liefern Unterfragen deterministisch
+- [x] Eignung: **keine** Unterfragen (flache K.O.-Gates)
+- [x] Zuschlag: Kinder nur mit Struktur-Nachweis (CSV/XLSX ≥2 Zeilen oder ≥2 Zeilennummern im RAG)
+- [x] Groundedness-Filter verwirft F01-001-Leaks unter S/R/A
+- [x] Schritt-1-Halluzinationen werden vor Schritt 2 verworfen
+
+---
+
+## Ticket 17 — Groundedness & flache Eignung ✅ erledigt
+
+- `_flatten_eignung_payload()` — Eignung nie mit `children`
+- Zuschlag: Schritt-1-`children` verworfen; Enrichment nur bei Zeilenstruktur-Nachweis
+- `_filter_grounded_children()` — Name/Text muss im RAG-Kontext belegbar sein; Ref-Prefix muss passen
+- `auto_price` (W-01): keine Unterfragen

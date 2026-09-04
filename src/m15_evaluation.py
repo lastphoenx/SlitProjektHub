@@ -1416,16 +1416,16 @@ def validate_criteria_payload(data: dict[str, Any]) -> list[str]:
     for kind, entries in (("eignung", eignung), ("zuschlag", zuschlag)):
         for e in entries:
             ename = (e.get("name") or "").strip()
+            if kind == "eignung":
+                e["children"] = []
             if ename and not (e.get("description") or "").strip():
                 warnings.append(f"«{ename}»: Beschreibung fehlt — bitte ergänzen oder in Vorgaben nachziehen.")
-            if not (e.get("requirement_ref") or "").strip():
+            if kind == "zuschlag" and not (e.get("requirement_ref") or "").strip():
                 warnings.append(
                     f"«{ename}»: requirement_ref fehlt — Schritt 2 nutzt nur Namen/Beschreibung als Suchbegriff."
                 )
             for ch in e.get("children") or []:
                 cname = (ch.get("name") or "").strip()
-                if kind == "eignung":
-                    ch["scale_max"] = 1
                 if cname and not (ch.get("description") or "").strip():
                     warnings.append(f"«{cname}» (Unterkriterium): Beschreibung fehlt.")
     return warnings
@@ -2244,6 +2244,126 @@ def _resolve_requirement_search(entry: dict[str, Any]) -> tuple[Optional[str], s
     return None, name
 
 
+def _flatten_eignung_payload(payload: dict[str, Any]) -> list[str]:
+    """Eignung: keine Unterfragen — K.O. bleibt flach (3 Gates, nicht N Einzel-K.O.)."""
+    hints: list[str] = []
+    for entry in payload.get("eignung") or []:
+        removed = list(entry.get("children") or [])
+        if removed:
+            ename = (entry.get("name") or "").strip() or "?"
+            hints.append(
+                f"«{ename}»: {len(removed)} Eignungs-Unterfragen entfernt "
+                "(K.O. wird nur auf Top-Level bewertet)"
+            )
+        entry["children"] = []
+        if int(entry.get("scale_max") or 1) != 1:
+            entry["scale_max"] = 1
+    return hints
+
+
+def _child_ref_prefix_from_name(child_name: str) -> Optional[str]:
+    """F01-001 → F01, T01-003 → T01."""
+    m = re.match(r"^([A-Za-z])-?0*(\d+)", (child_name or "").strip())
+    if not m:
+        return None
+    return f"{m.group(1).upper()}{int(m.group(2)):02d}"
+
+
+def _child_belongs_to_parent_ref(child_name: str, parent_ref: Optional[str]) -> bool:
+    if not parent_ref:
+        return True
+    child_prefix = _child_ref_prefix_from_name(child_name)
+    if not child_prefix:
+        return False
+    return child_prefix == _normalize_requirement_ref(parent_ref)
+
+
+def _extract_line_numbers_from_text(text: str, ref: Optional[str]) -> set[str]:
+    """Zählt unterscheidbare Zeilennummern (z. B. F01-001) im RAG-Kontext."""
+    ref_norm = (ref or "").upper().replace("-", "")
+    found: set[str] = set()
+    for m in re.finditer(r"\b([A-Za-z])-?0*(\d+)-0*(\d+)\b", text or ""):
+        prefix = f"{m.group(1).upper()}{int(m.group(2)):02d}"
+        label = f"{prefix}-{int(m.group(3)):03d}"
+        if not ref_norm or prefix.replace("-", "") == ref_norm:
+            found.add(label)
+    return found
+
+
+def _child_duplicates_parent(child: dict[str, Any], parent_desc: str) -> bool:
+    cd = (child.get("description") or "").strip()
+    pd = (parent_desc or "").strip()
+    if not cd or not pd:
+        return False
+    if cd == pd:
+        return True
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, cd[:400], pd[:400]).ratio() >= 0.88
+
+
+def _text_grounded_in_context(needle: str, haystack: str) -> bool:
+    needle = (needle or "").strip()
+    haystack = haystack or ""
+    if len(needle) < 8:
+        return needle.lower() in haystack.lower()
+    if needle.lower() in haystack.lower():
+        return True
+    words = needle.split()
+    if len(words) >= 4:
+        snippet = " ".join(words[:10])
+        if snippet.lower() in haystack.lower():
+            return True
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, needle.lower()[:240], haystack.lower()).ratio() >= 0.52
+
+
+def _child_grounded_in_context(
+    child: dict[str, Any],
+    ctx: str,
+    parent_ref: Optional[str],
+    parent_desc: str,
+) -> bool:
+    name = (child.get("name") or "").strip()
+    desc = (child.get("description") or "").strip()
+    if not name:
+        return False
+    if _child_duplicates_parent(child, parent_desc):
+        return False
+    if parent_ref and not _child_belongs_to_parent_ref(name, parent_ref):
+        return False
+    if name.lower() in ctx.lower():
+        return True
+    if desc and _text_grounded_in_context(desc, ctx):
+        return True
+    return False
+
+
+def _filter_grounded_children(
+    children: list[dict[str, Any]],
+    ctx: str,
+    parent_ref: Optional[str],
+    parent_desc: str,
+) -> tuple[list[dict[str, Any]], int]:
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for ch in children:
+        if _child_grounded_in_context(ch, ctx, parent_ref, parent_desc):
+            kept.append(ch)
+        else:
+            dropped += 1
+    return kept, dropped
+
+
+def _zuschlag_has_line_structure_evidence(
+    structured: list[dict[str, Any]],
+    ctx: str,
+    ref: Optional[str],
+) -> bool:
+    if len(structured) >= 2:
+        return True
+    return len(_extract_line_numbers_from_text(ctx, ref)) >= 2
+
+
 def _ref_matches_row_identifier(identifier: str, ref: Optional[str], search_term: str) -> bool:
     ident = re.sub(r"[\s_]+", "", (identifier or "").upper())
     if not ident:
@@ -2402,116 +2522,132 @@ def _enrich_criteria_children_from_requirements(
     enrich_limit: int = ENRICH_CHILDREN_RAG_LIMIT,
     enrich_threshold: float = ENRICH_CHILDREN_RAG_THRESHOLD,
 ) -> list[str]:
-    """Schritt 2: Unterfragen für Eignung + Zuschlag (kind-agnostisch, Ticket 13/15)."""
+    """Schritt 2: Unterfragen nur für Zuschlag — mit Struktur-Nachweis und Groundedness-Filter."""
     hints: list[str] = []
-    role_sets = {
-        "eignung": ("eignungskriterien", "ausschreibungsunterlage", "bewertungsvorgaben"),
-        "zuschlag": ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben"),
-    }
+    hints.extend(_flatten_eignung_payload(payload))
 
-    for kind in ("eignung", "zuschlag"):
-        roles = role_sets[kind]
-        doc_ids = get_tender_document_ids(project_key, roles=roles)
-        if not doc_ids:
+    roles = ("zuschlagskriterien", "ausschreibungsunterlage", "bewertungsvorgaben")
+    doc_ids = get_tender_document_ids(project_key, roles=roles)
+    if not doc_ids:
+        return hints
+
+    for entry in payload.get("zuschlag") or []:
+        name = (entry.get("name") or "").strip()
+        if not name:
+            continue
+        ref, search_term = _resolve_requirement_search(entry)
+        if ref and not entry.get("requirement_ref"):
+            entry["requirement_ref"] = ref
+        parent_desc = (entry.get("description") or "").strip()
+        step1_removed = len(entry.get("children") or [])
+
+        if entry.get("auto_price"):
+            if step1_removed:
+                hints.append(f"{name}: Preis-Kriterium — {step1_removed} Unterfragen verworfen (auto_price)")
+            entry["children"] = []
             continue
 
-        for entry in payload.get(kind) or []:
-            name = (entry.get("name") or "").strip()
-            if not name:
-                continue
-            ref, search_term = _resolve_requirement_search(entry)
-            if ref and not entry.get("requirement_ref"):
-                entry["requirement_ref"] = ref
+        entry["children"] = []
 
-            existing = list(entry.get("children") or [])
-            structured = _enrich_children_from_structured_tender_docs(
-                project_key, entry, kind=kind, ref=ref, search_term=search_term,
-            )
-            if structured:
-                entry["children"] = _merge_criteria_children(existing, structured, kind=kind)
-                hints.append(f"{name}: {len(structured)} Unterfragen aus strukturierter Vorgabe")
-                existing = list(entry.get("children") or [])
+        structured = _enrich_children_from_structured_tender_docs(
+            project_key, entry, kind="zuschlag", ref=ref, search_term=search_term,
+        )
+        if structured:
+            entry["children"] = _merge_criteria_children([], structured, kind="zuschlag")
+            hints.append(f"{name}: {len(structured)} Unterfragen aus strukturierter Vorgabe")
 
-            if len(existing) >= 30:
-                continue
+        query_parts = [search_term]
+        if ref and ref != search_term:
+            query_parts.append(ref)
+        query_parts.append(
+            "Einzelanforderungen Fragenr Referenz Anforderung Lieferant "
+            "Ja Nein Teilweise Begründung Pflicht Kapitel Anforderungen"
+        )
+        query = " ".join(query_parts)
+        rag = retrieve_relevant_chunks_hybrid(
+            query,
+            project_key=project_key,
+            limit=enrich_limit,
+            threshold=enrich_threshold,
+            document_ids=tuple(doc_ids),
+        )
+        ctx = _format_rag_context(
+            rag.get("documents", []),
+            empty_msg="",
+            max_chunks=enrich_limit,
+        )
+        if is_cloud_llm_provider(provider) and ctx.strip():
+            ctx = sanitize_for_cloud_text(ctx)
 
-            query_parts = [search_term]
-            if ref and ref != search_term:
-                query_parts.append(ref)
-            query_parts.append(
-                "Einzelanforderungen Fragenr Referenz Anforderung Lieferant "
-                "Ja Nein Teilweise Begründung Pflicht Kapitel Anforderungen"
-            )
-            query = " ".join(query_parts)
-            rag = retrieve_relevant_chunks_hybrid(
-                query,
-                project_key=project_key,
-                limit=enrich_limit,
-                threshold=enrich_threshold,
-                document_ids=tuple(doc_ids),
-            )
-            ctx = _format_rag_context(
-                rag.get("documents", []),
-                empty_msg="",
-                max_chunks=enrich_limit,
-            )
-            if not ctx.strip():
-                if not structured:
-                    hints.append(f"{name}: keine passenden Vorgaben-Stellen für Unterfragen")
-                continue
-            if is_cloud_llm_provider(provider):
-                ctx = sanitize_for_cloud_text(ctx)
+        existing = list(entry.get("children") or [])
+        if existing:
+            filtered, dropped = _filter_grounded_children(existing, ctx, ref, parent_desc)
+            if dropped:
+                hints.append(f"{name}: {dropped} strukturierte Unterfragen nicht im Kontext belegt")
+            entry["children"] = filtered
 
-            ref_hint = f"Referenz-Gruppe: {ref}" if ref else f"Suchbegriff: {search_term}"
-            if kind == "eignung":
-                system = (
-                    "Extrahiere alle Unterfragen (Einzelanforderungen) für ein Eignungs-K.O.-Kriterium. "
-                    f"{ref_hint}. "
-                    "Antwort NUR als JSON mit key children (Liste). "
-                    "Jedes Kind: name (exakte Fragennummer), description (voller Text), scale_max immer 1."
+        if not _zuschlag_has_line_structure_evidence(list(entry.get("children") or []), ctx, ref):
+            if step1_removed:
+                hints.append(
+                    f"{name}: {step1_removed} Schritt-1-Unterfragen verworfen "
+                    f"(keine Zeilenstruktur für {ref or search_term})"
                 )
-            else:
-                system = (
-                    "Extrahiere alle Einzelanforderungen (Unterfragen) für ein Zuschlagskriterium aus "
-                    "dem Kapitel «Anforderungen» / Anforderungsblatt — NICHT nur die Kapitel-Einleitung. "
-                    f"{ref_hint} (Fragen z. B. F01-001, EK2-03). "
-                    "Antwort NUR als JSON mit key children (Liste). "
-                    "Jedes Kind: name (kurz, exakte Fragennummer), description (voller Anforderungstext)."
+            elif not entry.get("children"):
+                hints.append(
+                    f"{name}: keine Unterfragen — kein Anforderungsblatt mit ≥2 Zeilen erkannt"
                 )
-            user = f"Top-Kriterium ({kind}): {name}\n\nAusschreibungsauszug:\n{ctx}\n\nJSON:"
-            raw = try_models_with_messages(
-                provider,
-                system,
-                [{"role": "user", "content": user}],
-                max_tokens=4500,
-                temperature=0.1,
-                model=model,
-            )
-            sub = _parse_llm_json_object(raw)
-            children = sub.get("children") if isinstance(sub, dict) else []
-            if not children and isinstance(sub, list):
-                children = sub
-            if not children:
-                continue
+            entry["children"] = []
+            continue
 
-            llm_children: list[dict[str, Any]] = []
-            for ch in children:
-                cname = (ch.get("name") or "").strip()
-                if not cname:
-                    continue
-                scale = 1 if kind == "eignung" else int(ch.get("scale_max") or 10)
-                llm_children.append({
-                    "name": cname,
-                    "description": (ch.get("description") or "").strip(),
-                    "scale_max": scale,
-                })
-            before = len(entry.get("children") or [])
-            entry["children"] = _merge_criteria_children(
-                list(entry.get("children") or []), llm_children, kind=kind,
-            )
-            added = len(entry.get("children") or []) - before
-            if added:
-                hints.append(f"{name}: +{added} Unterfragen (KI/RAG)")
+        if len(entry.get("children") or []) >= 30:
+            continue
+
+        if not ctx.strip():
+            continue
+
+        ref_hint = f"Referenz-Gruppe: {ref}" if ref else f"Suchbegriff: {search_term}"
+        system = (
+            "Extrahiere alle Einzelanforderungen (Unterfragen) für ein Zuschlagskriterium aus "
+            "dem Kapitel «Anforderungen» / Anforderungsblatt — NICHT nur die Kapitel-Einleitung. "
+            f"{ref_hint} (Fragen z. B. F01-001, T01-003). "
+            "Antwort NUR als JSON mit key children (Liste). "
+            "Jedes Kind: name (kurz, exakte Fragennummer), description (voller Anforderungstext). "
+            "Nur Zeilen, die im Ausschreibungsauszug wörtlich vorkommen — nichts erfinden."
+        )
+        user = f"Top-Kriterium (zuschlag): {name}\n\nAusschreibungsauszug:\n{ctx}\n\nJSON:"
+        raw = try_models_with_messages(
+            provider,
+            system,
+            [{"role": "user", "content": user}],
+            max_tokens=4500,
+            temperature=0.1,
+            model=model,
+        )
+        sub = _parse_llm_json_object(raw)
+        children = sub.get("children") if isinstance(sub, dict) else []
+        if not children and isinstance(sub, list):
+            children = sub
+
+        llm_children: list[dict[str, Any]] = []
+        for ch in children or []:
+            cname = (ch.get("name") or "").strip()
+            if not cname:
+                continue
+            llm_children.append({
+                "name": cname,
+                "description": (ch.get("description") or "").strip(),
+                "scale_max": int(ch.get("scale_max") or 10),
+            })
+
+        before = len(entry.get("children") or [])
+        merged = _merge_criteria_children(list(entry.get("children") or []), llm_children, kind="zuschlag")
+        filtered, dropped = _filter_grounded_children(merged, ctx, ref, parent_desc)
+        entry["children"] = filtered
+        added = len(filtered) - before
+        if dropped:
+            hints.append(f"{name}: {dropped} KI-Unterfragen verworfen (nicht im Vorgaben-Kontext)")
+        if added > 0:
+            hints.append(f"{name}: +{added} Unterfragen (KI/RAG, belegt)")
 
     return hints
 
@@ -2571,12 +2707,13 @@ def extract_criteria_from_tender_docs(
         "Extrahiere strukturierte Bewertungskriterien aus Ausschreibungsunterlagen. "
         "Antwort NUR als JSON mit keys eignung und zuschlag (Listen von Objekten). "
         "Jedes Objekt: name (kurz), description (Kapitel-Einleitung / Aufgabenstellung), "
-        "requirement_ref (PFLICHT: Dokument-/Kapitelreferenz aus den Vorgaben, z. B. F01, F-02, "
-        "T01, W01, EK2 — unabhängig vom name-Text), "
-        "optional children (Einzelanforderungen — werden in Schritt 2 ergänzt). "
+        "requirement_ref (PFLICHT für Zuschlag: F01, T01, W01, … — unabhängig vom name-Text). "
+        "Eignung: NUR flache Top-Level-K.O.-Kriterien — KEINE children, KEINE Unterfragen; "
+        "gesamter Nachweistext in description. "
+        "Zuschlag: optional children nur in Schritt 2 (Anforderungsblätter F/T). "
         "Zuschlag: weight_pct, scale_max (default 10), auto_price true nur für reines Preis-Kriterium, "
         "ranking_phase 1 (ZK) oder 2 (Präsentation nach Einladung, z. B. A-01). "
-        "Eignung: scale_max immer 1, kein weight_pct, keine Teilpunkte; Unterfragen scale_max 1."
+        "Eignung: scale_max immer 1, kein weight_pct."
     )
     if vergabe_extra:
         system += f"\nProjekt-Hinweise: {vergabe_extra}"
@@ -2586,13 +2723,14 @@ def extract_criteria_from_tender_docs(
         max_tokens=4000, temperature=0.1, model=model,
     )
     payload = _parse_llm_json_object(raw)
+    hints_pre = _flatten_eignung_payload(payload)
     child_hints = _enrich_criteria_children_from_requirements(
         project_key, payload, provider, model,
         enrich_limit=ENRICH_CHILDREN_RAG_LIMIT,
         enrich_threshold=ENRICH_CHILDREN_RAG_THRESHOLD,
     )
     warnings = validate_criteria_payload(payload)
-    warnings = list(warnings) + child_hints
+    warnings = list(hints_pre) + list(warnings) + child_hints
     if not payload.get("eignung") and not payload.get("zuschlag"):
         return {
             "error": "KI konnte keine Kriterien extrahieren — Vorgaben prüfen oder manuell anlegen.",
