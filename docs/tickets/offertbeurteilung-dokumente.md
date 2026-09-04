@@ -203,5 +203,20 @@ im jeweiligen Top-Level-Zuschlagskriterium.
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → 4
-(Ticket 3, 5, 6, 7, 8 erledigt; Ticket 4 optional).
+## Ticket 9 — Mehrfach-`doc_subtype` pro Bieter-Dokument (analog `tender_role`) ✅ erledigt
+
+**Ziel:** Merge-PDFs mit mehreren Inhaltsarten (Preisblatt, PoC, Grobkonzept, …) pro Kriterium gezielt
+bevorzugen — nicht nur einen `Document.doc_subtype`.
+
+**Umsetzung:**
+- Tabelle `bidder_document_subtype` mit `UniqueConstraint(bidder_id, document_id, doc_subtype)`.
+- `get_bidder_doc_subtypes()` / `set_bidder_doc_subtypes()`; Migration aus `Document.doc_subtype`.
+- `bidder_doc_ids_for_criterion()` und `get_bidder_preisblatt_doc_ids()` nutzen Junction-Subtypen.
+- UI: Mehrfach-Checkboxen beim Upload und pro verknüpftem Bieter-Dokument (Phase ③).
+
+**Akzeptanzkriterien:** erfüllt (Merge-PDF mit mehreren Subtyp-Tags wird pro Kriteriumart bevorzugt).
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → 4
+(Ticket 3, 5, 6, 7, 8, 9 erledigt; Ticket 4 optional).

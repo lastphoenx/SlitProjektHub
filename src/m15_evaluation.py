@@ -201,6 +201,22 @@ class BidderDocumentLink(SQLModel, table=True):
     added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class BidderDocumentSubtype(SQLModel, table=True):
+    """Mehrfach-Subtypen pro Bieter-Dokument (Ticket 9, analog EvaluationTenderDoc)."""
+    __tablename__ = "bidder_document_subtype"
+    __table_args__ = (
+        UniqueConstraint(
+            "bidder_id", "document_id", "doc_subtype",
+            name="uq_bidder_doc_subtype",
+        ),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    bidder_id: int = Field(foreign_key="bidder.id", index=True)
+    document_id: int = Field(foreign_key="document.id", index=True)
+    doc_subtype: str = Field(sa_column=Column(String(80), nullable=False))
+    added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class EvaluationTenderDoc(SQLModel, table=True):
     """Projekt-Vorgaben/Frameworks für die Offertbeurteilung (verweist auf bestehende Document-Zeilen)."""
     __tablename__ = "evaluation_tender_doc"
@@ -821,6 +837,13 @@ def link_document_to_bidder(bidder_id: int, document_id: int) -> bool:
 
 def unlink_document_from_bidder(bidder_id: int, document_id: int) -> None:
     with get_session() as session:
+        for row in session.exec(
+            select(BidderDocumentSubtype).where(
+                BidderDocumentSubtype.bidder_id == bidder_id,
+                BidderDocumentSubtype.document_id == document_id,
+            )
+        ).all():
+            session.delete(row)
         link = session.exec(
             select(BidderDocumentLink).where(
                 BidderDocumentLink.bidder_id == bidder_id,
@@ -840,6 +863,68 @@ def get_bidder_document_ids(bidder_id: int) -> list[int]:
                 select(BidderDocumentLink).where(BidderDocumentLink.bidder_id == bidder_id)
             ).all()
         ]
+
+
+def get_bidder_doc_subtypes(bidder_id: int, document_id: int) -> list[str]:
+    """Subtypen am Bieter-Link; leer wenn keine gesetzt (Legacy: Document.doc_subtype)."""
+    with get_session() as session:
+        rows = list(
+            session.exec(
+                select(BidderDocumentSubtype).where(
+                    BidderDocumentSubtype.bidder_id == bidder_id,
+                    BidderDocumentSubtype.document_id == document_id,
+                ).order_by(BidderDocumentSubtype.doc_subtype)
+            ).all()
+        )
+    if rows:
+        return [r.doc_subtype for r in rows]
+    doc = get_document_by_id(document_id)
+    if doc and (doc.doc_subtype or "").strip():
+        return [(doc.doc_subtype or "").strip()]
+    return []
+
+
+def set_bidder_doc_subtypes(
+    bidder_id: int,
+    document_id: int,
+    subtypes: Iterable[str],
+) -> None:
+    """Alle Subtypen eines Bieter-Dokuments setzen (Mehrfachauswahl, Ticket 9)."""
+    wanted = {
+        (s or "").strip()
+        for s in subtypes
+        if (s or "").strip() in ANGEbot_SUBTYPES
+    }
+    with get_session() as session:
+        link = session.exec(
+            select(BidderDocumentLink).where(
+                BidderDocumentLink.bidder_id == bidder_id,
+                BidderDocumentLink.document_id == document_id,
+            )
+        ).first()
+        if not link:
+            raise ValueError("Dokument ist nicht mit diesem Bieter verknüpft")
+        rows = list(
+            session.exec(
+                select(BidderDocumentSubtype).where(
+                    BidderDocumentSubtype.bidder_id == bidder_id,
+                    BidderDocumentSubtype.document_id == document_id,
+                )
+            ).all()
+        )
+        current = {r.doc_subtype for r in rows}
+        for st in wanted - current:
+            session.add(
+                BidderDocumentSubtype(
+                    bidder_id=bidder_id,
+                    document_id=document_id,
+                    doc_subtype=st,
+                )
+            )
+        for row in rows:
+            if row.doc_subtype not in wanted:
+                session.delete(row)
+        session.commit()
 
 
 def list_tender_docs(project_key: str) -> list[EvaluationTenderDoc]:
@@ -1271,28 +1356,27 @@ def _retrieve_tender_context_multi(
 
 
 def bidder_doc_ids_for_criterion(bidder_id: int, criterion: Criterion) -> list[int]:
-    """Bevorzugte Bieter-Dokument-IDs passend zum Kriterium (Subtyp-Heuristik)."""
+    """Bevorzugte Bieter-Dokument-IDs passend zum Kriterium (Mehrfach-Subtyp, Ticket 9)."""
     all_ids = get_bidder_document_ids(bidder_id)
     if not all_ids:
         return []
-    by_subtype: dict[str, list[int]] = {}
-    for doc_id in all_ids:
-        doc = get_document_by_id(doc_id)
-        if not doc:
-            continue
-        st = (doc.doc_subtype or "").strip()
-        if st:
-            by_subtype.setdefault(st, []).append(doc_id)
-    preferred: tuple[str, ...]
     if criterion.auto_price or "preis" in (criterion.name or "").lower():
         preferred = ("Preisblatt",)
     elif criterion.kind == "eignung":
         preferred = EIGNUNG_BIDDER_SUBTYPES
     else:
         preferred = ZUSCHLAG_BIDDER_SUBTYPES
+    by_subtype: dict[str, list[int]] = {}
+    for doc_id in all_ids:
+        for st in get_bidder_doc_subtypes(bidder_id, doc_id):
+            by_subtype.setdefault(st, []).append(doc_id)
     matched: list[int] = []
+    seen: set[int] = set()
     for st in preferred:
-        matched.extend(by_subtype.get(st, []))
+        for doc_id in by_subtype.get(st, []):
+            if doc_id not in seen:
+                seen.add(doc_id)
+                matched.append(doc_id)
     return matched or all_ids
 
 
@@ -2068,10 +2152,14 @@ def extract_criteria_from_tender_docs(
 def get_bidder_preisblatt_doc_ids(bidder_id: int) -> list[int]:
     ids: list[int] = []
     for doc_id in get_bidder_document_ids(bidder_id):
+        subtypes = get_bidder_doc_subtypes(bidder_id, doc_id)
         doc = get_document_by_id(doc_id)
-        if not doc:
-            continue
-        if doc.doc_subtype == "Preisblatt" or "preisblatt" in (doc.filename or "").lower():
+        if "Preisblatt" in subtypes:
+            ids.append(doc_id)
+        elif not subtypes and doc and (
+            doc.doc_subtype == "Preisblatt"
+            or "preisblatt" in (doc.filename or "").lower()
+        ):
             ids.append(doc_id)
     return ids
 
@@ -2522,4 +2610,33 @@ def migrate_evaluation_db() -> None:
                     "CREATE INDEX ix_evaluation_tender_doc_document_id "
                     "ON evaluation_tender_doc (document_id)"
                 ))
+
+        if "bidder_document_subtype" not in tables:
+            conn.execute(text("""
+                CREATE TABLE bidder_document_subtype (
+                    id INTEGER PRIMARY KEY,
+                    bidder_id INTEGER NOT NULL,
+                    document_id INTEGER NOT NULL,
+                    doc_subtype VARCHAR(80) NOT NULL,
+                    added_at DATETIME NOT NULL,
+                    UNIQUE (bidder_id, document_id, doc_subtype)
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX ix_bidder_document_subtype_bidder_id "
+                "ON bidder_document_subtype (bidder_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX ix_bidder_document_subtype_document_id "
+                "ON bidder_document_subtype (document_id)"
+            ))
+            if "bidder_document_link" in tables and "document" in tables:
+                conn.execute(text("""
+                    INSERT INTO bidder_document_subtype
+                        (bidder_id, document_id, doc_subtype, added_at)
+                    SELECT bdl.bidder_id, bdl.document_id, TRIM(d.doc_subtype), datetime('now')
+                    FROM bidder_document_link bdl
+                    JOIN document d ON d.id = bdl.document_id
+                    WHERE d.doc_subtype IS NOT NULL AND TRIM(d.doc_subtype) != ''
+                """))
         # zukünftige Spalten hier ergänzen

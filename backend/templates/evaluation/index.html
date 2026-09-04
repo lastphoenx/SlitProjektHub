@@ -394,6 +394,8 @@
   </div>
   <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 .75rem">
     Jeder Bieter bekommt eigene Angebots-PDFs/DOCX und ein Preisblatt — getrennt von den gemeinsamen Ausschreibungs-Kriterien.
+    Pro Dokument können <strong>mehrere Inhaltsarten</strong> gesetzt werden (z.&nbsp;B. Preisblatt + PoC + Grobkonzept
+    bei einem Merge-PDF) — die KI bevorzugt dann passende Abschnitte pro Kriterium.
   </p>
   <form method="post" action="/evaluation/bidder" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem">
     <input type="hidden" name="project_key" value="{{ project_key }}" />
@@ -419,13 +421,15 @@
                accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx,.xls" />
       </div>
       <div>
-        <label class="form-label" style="font-size:.72rem">Art (optional)</label>
-        <select class="form-select" name="doc_subtype">
-          <option value="">— kein Subtyp —</option>
+        <label class="form-label" style="font-size:.72rem">Inhaltsarten (optional, Mehrfach)</label>
+        <div class="tender-role-checkboxes" style="max-width:28rem">
           {% for st in angebot_subtypes %}
-          <option value="{{ st }}">{{ st }}</option>
+          <label class="tender-role-check" title="{{ st }}">
+            <input type="checkbox" name="doc_subtypes" value="{{ st }}" />
+            <span>{{ st }}</span>
+          </label>
           {% endfor %}
-        </select>
+        </div>
       </div>
       <div>
         <label class="form-label" style="font-size:.72rem">Chunk-Grösse</label>
@@ -434,21 +438,43 @@
       <button type="submit" class="btn btn-primary btn-sm">Hochladen</button>
     </form>
     {% if offer_docs %}
-    <div style="margin-top:.35rem;font-size:.85rem">
-      <p class="text-muted" style="font-size:.72rem;margin:.35rem 0">Verknüpfung (auch für gemeinsame Anhänge):</p>
+    <div style="margin-top:.5rem;font-size:.85rem">
+      <p class="text-muted" style="font-size:.72rem;margin:.35rem 0">Verknüpfung und Inhaltsarten (auch für Merge-PDFs):</p>
       {% for doc in offer_docs %}
-      <label style="display:block;margin:.2rem 0">
-        <input type="checkbox"
-          onchange="const f=document.getElementById('doc-{{ b.id }}-{{ doc.id }}'); f.querySelector('[name=linked]').value=this.checked?'true':'false'; f.submit();"
-          {% if doc.id in bidder_docs.get(b.id, []) %}checked{% endif %} />
-        {{ doc.filename }}{% if doc.doc_subtype %} <span class="text-muted">({{ doc.doc_subtype }})</span>{% endif %}
-      </label>
-      <form id="doc-{{ b.id }}-{{ doc.id }}" method="post" action="/evaluation/bidder-doc" style="display:none">
-        <input type="hidden" name="project_key" value="{{ project_key }}" />
-        <input type="hidden" name="bidder_id" value="{{ b.id }}" />
-        <input type="hidden" name="document_id" value="{{ doc.id }}" />
-        <input type="hidden" name="linked" value="{% if doc.id in bidder_docs.get(b.id, []) %}true{% else %}false{% endif %}" />
-      </form>
+      {% set linked = doc.id in bidder_docs.get(b.id, []) %}
+      {% set doc_st = bidder_doc_subtypes.get(b.id, {}).get(doc.id, []) %}
+      <div style="margin:.5rem 0;padding:.35rem 0;border-bottom:1px solid var(--color-border)">
+        <label style="display:block;margin:.15rem 0">
+          <input type="checkbox"
+            onchange="const f=document.getElementById('doc-{{ b.id }}-{{ doc.id }}'); f.querySelector('[name=linked]').value=this.checked?'true':'false'; f.submit();"
+            {% if linked %}checked{% endif %} />
+          <strong style="font-size:.8rem">{{ doc.filename }}</strong>
+          {% if doc.doc_subtype and not doc_st %}<span class="text-muted">({{ doc.doc_subtype }})</span>{% endif %}
+        </label>
+        <form id="doc-{{ b.id }}-{{ doc.id }}" method="post" action="/evaluation/bidder-doc" style="display:none">
+          <input type="hidden" name="project_key" value="{{ project_key }}" />
+          <input type="hidden" name="bidder_id" value="{{ b.id }}" />
+          <input type="hidden" name="document_id" value="{{ doc.id }}" />
+          <input type="hidden" name="linked" value="{% if linked %}true{% else %}false{% endif %}" />
+        </form>
+        {% if linked %}
+        <form method="post" action="/evaluation/bidder-doc-subtypes" class="tender-role-form" style="margin:.25rem 0 0 1.25rem">
+          <input type="hidden" name="project_key" value="{{ project_key }}" />
+          <input type="hidden" name="bidder_id" value="{{ b.id }}" />
+          <input type="hidden" name="document_id" value="{{ doc.id }}" />
+          <div class="tender-role-checkboxes">
+            {% for st in angebot_subtypes %}
+            <label class="tender-role-check" title="{{ st }}">
+              <input type="checkbox" name="doc_subtypes" value="{{ st }}"
+                {% if st in doc_st %}checked{% endif %}
+                onchange="this.form.submit()" />
+              <span>{{ st }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </form>
+        {% endif %}
+      </div>
       {% endfor %}
     </div>
     {% else %}
