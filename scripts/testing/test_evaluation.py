@@ -460,6 +460,19 @@ def test_evaluation_config_roundtrip():
     assert cfg["price_years"] == [2026, 2027]
     assert cfg["rag_chunks_per_role"] == 14
 
+    save_evaluation_config("p1", vorgaben_ki_provider="ollama", vorgaben_ki_model="llama3.3:70b")
+    cfg2 = get_evaluation_config("p1")
+    assert cfg2["vorgaben_ki_provider"] == "ollama"
+    assert cfg2["vorgaben_ki_model"] == "llama3.3:70b"
+
+    from src.m15_evaluation import resolve_vorgaben_ki
+    p, m = resolve_vorgaben_ki("p1", "", "", global_provider="openai", global_model="gpt-4o-mini")
+    assert p == "ollama"
+    assert m == "llama3.3:70b"
+    p2, m2 = resolve_vorgaben_ki("p1", "openai", "gpt-4o", global_provider="openai", global_model="gpt-4o-mini")
+    assert p2 == "openai"
+    assert m2 == "gpt-4o"
+
     db.engine = old_engine
     ev.engine = old_engine
 

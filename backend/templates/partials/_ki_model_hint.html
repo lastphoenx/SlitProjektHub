@@ -7,7 +7,7 @@
   {% elif hint_context == 'idea' %}
     Empfohlene Ollama-Modelle für Projektideen
   {% elif hint_context == 'evaluation' %}
-    Empfohlene Ollama-Modelle für Offert-KI-Vorschläge
+    KI-Modell-Empfehlungen für Offertbeurteilung
   {% elif hint_context == 'chat' %}
     Empfohlene Ollama-Modelle für Chat &amp; KI-Vorschläge
   {% elif hint_context == 'batch-qa' %}
@@ -64,11 +64,21 @@
         </ol>
       </div>
       <div>
-        <strong style="color:var(--color-text);font-size:.8rem">Offertbeurteilung (KI-Vorschläge pro Zelle)</strong>
-        <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
-          <li><code>qwen3:32b</code> — Angebots-Chunks, Score + Zitat, viele Matrix-Zellen</li>
-          <li><code>llama3.3:70b</code> — schwierige Kriterien, langer Anforderungstext</li>
-          <li><code>llama3:8b</code> — nur zum Ausprobieren</li>
+        <strong style="color:var(--color-text);font-size:.8rem">Offertbeurteilung (nach Aufgabe)</strong>
+        <p style="margin:.35rem 0;font-size:.72rem">
+          <strong>④ Matrix-Zelle:</strong> Picker pro Zelle.
+          <strong>② Kriterien / ③ Preis:</strong> Picker pro Lauf; Projekt-Default in «Vorgaben-Einstellungen».
+        </p>
+        <p style="margin:.25rem 0 .15rem;font-size:.72rem"><em>Ollama (lokal, bevorzugt bei Bieter-Dokumenten mit PII)</em></p>
+        <ol style="margin:.2rem 0 .35rem;padding-left:1.25rem;display:flex;flex-direction:column;gap:.25rem">
+          <li><code>qwen3:32b</code> — ④ viele Zell-Vorschläge (Dual-RAG Vorgabe + Angebot)</li>
+          <li><code>llama3.3:70b</code> — ② Kriterien-Extraktion, ③ Preisstruktur, schwierige Zuschlagskriterien</li>
+          <li><code>qwen3:8b</code> — nur Smoke-Tests</li>
+        </ol>
+        <p style="margin:.25rem 0 .15rem;font-size:.72rem"><em>OpenAI / Anthropic (Cloud + PII-Sanitizer + Bestätigung)</em></p>
+        <ol style="margin:.2rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.25rem">
+          <li><code>gpt-4o-mini</code> / <code>haiku-4.5</code> — ④ Zell-Vorschläge in Masse</li>
+          <li><code>gpt-4o</code> / <code>sonnet-4.6</code> — ② Kriterien-JSON, ③ unübersichtliche Preisblätter</li>
         </ol>
       </div>
       <div>
@@ -99,11 +109,39 @@
       <li><strong style="color:var(--color-text)"><code>llama3:8b</code></strong> — nur zum Testen.</li>
     </ol>
   {% elif hint_context == 'evaluation' %}
-    <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
-      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard: RAG aus Angebot, Score + Zitat, viele Zellen.</li>
-      <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — schwierige Kriterien, feine Abgrenzung.</li>
-      <li><strong style="color:var(--color-text)"><code>llama3:8b</code></strong> — nur zum Ausprobieren.</li>
-    </ol>
+    <p style="margin:0 0 .55rem;font-size:.72rem">
+      <strong>Wo Modell wählen?</strong>
+      Phase ④ Matrix: Picker pro Zelle.
+      Phase ②/③: Picker pro Lauf; dauerhafter Startwert unter «Vorgaben &amp; Frameworks → Projekt-Einstellungen» (oder <a href="/settings">globale KI-Einstellungen</a>).
+      Bieter-Dokumente mit Referenzpersonen → <strong>Ollama</strong> oder Cloud nur mit PII-Haken.
+    </p>
+    <div style="display:flex;flex-direction:column;gap:.65rem">
+      <div>
+        <strong style="color:var(--color-text);font-size:.78rem">④ Matrix-Zell-Vorschläge</strong> <span style="font-size:.68rem">(viele Aufrufe, Dual-RAG)</span>
+        <ul style="margin:.3rem 0 0;padding-left:1.1rem;font-size:.75rem;display:flex;flex-direction:column;gap:.25rem">
+          <li><strong>Ollama:</strong> <code>qwen3:32b</code> Standard · <code>llama3.3:70b</code> bei feiner Abgrenzung</li>
+          <li><strong>OpenAI:</strong> <code>gpt-4o-mini</code> · <strong>Anthropic:</strong> <code>haiku-4.5</code></li>
+        </ul>
+      </div>
+      <div>
+        <strong style="color:var(--color-text);font-size:.78rem">② Kriterien aus Vorgaben</strong> <span style="font-size:.68rem">(einmalig, grosses JSON, Multi-Pass-RAG)</span>
+        <ul style="margin:.3rem 0 0;padding-left:1.1rem;font-size:.75rem;display:flex;flex-direction:column;gap:.25rem">
+          <li><strong>Ollama:</strong> <code>llama3.3:70b</code> · <code>qwen3:32b</code> als schnellerer Kompromiss</li>
+          <li><strong>OpenAI:</strong> <code>gpt-4o</code> · <strong>Anthropic:</strong> <code>sonnet-4.6</code></li>
+        </ul>
+      </div>
+      <div>
+        <strong style="color:var(--color-text);font-size:.78rem">③ Preisblatt-KI</strong> <span style="font-size:.68rem">(Struktur Vorlage / Bieter-PDF einlesen)</span>
+        <ul style="margin:.3rem 0 0;padding-left:1.1rem;font-size:.75rem;display:flex;flex-direction:column;gap:.25rem">
+          <li><strong>Ollama:</strong> <code>qwen3:32b</code> bei sauberen Tabellen · <code>llama3.3:70b</code> bei unübersichtlichen PDFs</li>
+          <li><strong>OpenAI:</strong> <code>gpt-4o-mini</code> / <code>gpt-4o</code> · <strong>Anthropic:</strong> <code>sonnet-4.6</code></li>
+        </ul>
+      </div>
+      <p style="margin:0;font-size:.7rem;border-top:1px solid var(--color-border);padding-top:.45rem">
+        Nicht für Text-RAG: Vision-Modelle (<code>qwen2.5vl</code>, <code>llava</code>).
+        Kleine Modelle (<code>qwen3:8b</code>) nur zum Testen — nicht für Go-Live.
+      </p>
+    </div>
   {% elif hint_context == 'chat' %}
     <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
       <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard für Chat mit RAG im Projekt-Kontext.</li>

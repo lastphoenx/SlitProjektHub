@@ -72,11 +72,21 @@
 {% if may_evaluate %}
 <div class="card" style="margin-bottom:1rem;padding:.65rem .85rem">
   <p style="font-size:.78rem;font-weight:600;margin:0 0 .35rem">KI-Hilfe Preisblatt</p>
+  <div id="price-ki-picker" style="margin-bottom:.5rem;max-width:720px">
+    {% set form_id = 'price-ki' %}
+    {% set picker_title = 'KI für Preisblatt-Aktion' %}
+    {% set picker_hint = 'Leer = Projekt-Default (Offertbeurteilung → Vorgaben-Einstellungen) oder globale KI-Einstellungen.' %}
+    {% set form_visual_provider = eval_config.vorgaben_ki_provider or '' %}
+    {% set form_visual_model = eval_config.vorgaben_ki_model or '' %}
+    {% include 'partials/_llm_picker.html' %}
+  </div>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end">
     {% if has_price_template %}
-    <form method="post" action="/evaluation/price-template/seed" style="display:flex;gap:.35rem;align-items:center">
+    <form method="post" action="/evaluation/price-template/seed" class="price-ki-action-form" style="display:flex;gap:.35rem;align-items:center">
       <input type="hidden" name="project_key" value="{{ project_key }}" />
       <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+      <input type="hidden" name="visual_llm_provider" class="price-ki-provider" value="" />
+      <input type="hidden" name="visual_llm_model" class="price-ki-model" value="" />
       <label style="font-size:.7rem;display:flex;gap:.25rem;align-items:center">
         <input type="checkbox" name="cloud_confirm" value="true" /> Cloud-PII
       </label>
@@ -84,9 +94,11 @@
     </form>
     {% endif %}
     {% if has_bidder_preisblatt %}
-    <form method="post" action="/evaluation/price-template/parse" style="display:flex;gap:.35rem;align-items:center">
+    <form method="post" action="/evaluation/price-template/parse" class="price-ki-action-form" style="display:flex;gap:.35rem;align-items:center">
       <input type="hidden" name="project_key" value="{{ project_key }}" />
       <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+      <input type="hidden" name="visual_llm_provider" class="price-ki-provider" value="" />
+      <input type="hidden" name="visual_llm_model" class="price-ki-model" value="" />
       <label style="font-size:.7rem;display:flex;gap:.25rem;align-items:center">
         <input type="checkbox" name="cloud_confirm" value="true" /> Cloud-PII
       </label>
@@ -98,6 +110,22 @@
     {% endif %}
   </div>
 </div>
+<script>
+(function() {
+  const root = document.getElementById('price-ki-picker');
+  if (!root) return;
+  const provSel = root.querySelector('select[name="visual_llm_provider"]');
+  const modelSel = root.querySelector('select[name="visual_llm_model"]');
+  document.querySelectorAll('.price-ki-action-form').forEach(form => {
+    form.addEventListener('submit', function() {
+      const pIn = form.querySelector('.price-ki-provider');
+      const mIn = form.querySelector('.price-ki-model');
+      if (pIn && provSel) pIn.value = provSel.value;
+      if (mIn && modelSel) mIn.value = modelSel.value;
+    });
+  });
+})();
+</script>
 {% endif %}
 
 <div class="card" style="margin-bottom:1rem">

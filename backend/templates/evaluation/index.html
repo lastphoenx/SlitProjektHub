@@ -143,6 +143,12 @@
         <input class="form-input" type="number" name="rag_chunks_per_role" min="4" max="24"
                value="{{ eval_config.rag_chunks_per_role }}" style="width:6rem" />
       </div>
+      {% set form_id = 'vorgaben-config' %}
+      {% set picker_title = 'KI-Default für Kriterien- & Preisblatt-KI (②③)' %}
+      {% set picker_hint = 'Startwert für Kriterien-Extraktion und Preisblatt-KI. Leer = globale KI-Einstellungen. Pro Lauf im Picker änderbar.' %}
+      {% set form_visual_provider = eval_config.vorgaben_ki_provider or '' %}
+      {% set form_visual_model = eval_config.vorgaben_ki_model or '' %}
+      {% include 'partials/_llm_picker.html' %}
       <button type="submit" class="btn btn-secondary btn-sm" style="justify-self:start">Speichern</button>
     </form>
   </details>
@@ -268,17 +274,25 @@
   {% endif %}
   {% if has_tender_docs %}
   <form method="post" action="/evaluation/extract-criteria"
-        style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end;margin-bottom:.75rem;padding:.5rem;border:1px dashed var(--color-border);border-radius:6px">
+        style="display:grid;gap:.5rem;margin-bottom:.75rem;padding:.5rem;border:1px dashed var(--color-border);border-radius:6px;max-width:720px">
     <input type="hidden" name="project_key" value="{{ project_key }}" />
     <div>
       <p style="font-size:.78rem;font-weight:600;margin:0 0 .25rem">Aus Vorgaben extrahieren (KI)</p>
       <p class="text-muted" style="font-size:.7rem;margin:0">Nutzt Dokumente mit Rolle Eignungs-/Zuschlagskriterien etc.</p>
     </div>
-    <label style="font-size:.72rem;display:flex;gap:.3rem;align-items:center">
-      <input type="checkbox" name="cloud_confirm" value="true" />
-      Cloud-PII bestätigen
-    </label>
-    <button type="submit" class="btn btn-secondary btn-sm">KI-Extraktion starten</button>
+    {% set form_id = 'extract-criteria' %}
+    {% set picker_title = 'KI für diese Extraktion' %}
+    {% set picker_hint = 'Leer = Projekt-Default (Vorgaben-Einstellungen oben) oder globale KI-Einstellungen.' %}
+    {% set form_visual_provider = eval_config.vorgaben_ki_provider or '' %}
+    {% set form_visual_model = eval_config.vorgaben_ki_model or '' %}
+    {% include 'partials/_llm_picker.html' %}
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+      <label style="font-size:.72rem;display:flex;gap:.3rem;align-items:center">
+        <input type="checkbox" name="cloud_confirm" value="true" />
+        Cloud-PII bestätigen
+      </label>
+      <button type="submit" class="btn btn-secondary btn-sm">KI-Extraktion starten</button>
+    </div>
   </form>
   {% else %}
   <p class="text-muted" style="font-size:.72rem;margin:0 0 .75rem">KI-Extraktion: zuerst Phase ① Vorgaben verknüpfen.</p>
