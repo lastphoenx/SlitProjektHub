@@ -18,6 +18,11 @@ _WORKER_STARTED = False
 ACTIVE = ("queued", "running")
 
 
+def idea_ki_queue_size() -> int:
+    """Wartende Ideen-KI-Jobs (laufender Job ist nicht in der Queue)."""
+    return _JOB_Q.qsize()
+
+
 def parse_job(raw: Optional[str]) -> Optional[dict[str, Any]]:
     if not raw:
         return None

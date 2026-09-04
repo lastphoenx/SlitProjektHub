@@ -766,6 +766,31 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
     }
 
 
+def ki_busy_hint(provider: str = "", model: str = "") -> dict[str, Any]:
+    """Kurz-Meldung für UI vor langen Offert-KI-Läufen (Ollama-VRAM, Ideen-Queue)."""
+    from .m08_llm import have_key, ollama_runtime_status
+
+    p = (provider or "").strip().lower()
+    parts: list[str] = []
+    if p == "ollama" and have_key("ollama"):
+        st = ollama_runtime_status((model or "").strip() or None)
+        if st.get("message"):
+            parts.append(str(st["message"]))
+    try:
+        from .m16_idea_jobs import idea_ki_queue_size
+
+        qs = idea_ki_queue_size()
+        if qs > 0:
+            parts.append(
+                f"{qs} Ideen-Auftrag/Aufträge in der Warteschlange — Ollama kann belegt sein."
+            )
+    except Exception:
+        pass
+    tail = "KI läuft … bitte warten. Nicht erneut klicken."
+    msg = f"{' '.join(parts)} {tail}".strip() if parts else tail
+    return {"message": msg, "provider": p, "model": (model or "").strip()}
+
+
 def resolve_vorgaben_ki(
     project_key: str,
     form_provider: str = "",

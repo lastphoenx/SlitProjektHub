@@ -25,6 +25,7 @@
 {% set hint_context = 'evaluation' %}
 {% include 'partials/_ki_model_hint.html' %}
 {% include 'partials/_pii_cloud_hint.html' %}
+{% include 'partials/_eval_ki_busy.html' %}
 
 {% if price_offers_status and not price_offers_status.get('ready') and price_offers_status.get('bidder_count', 0) > 0 %}
 <div class="card eval-price-warn" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
@@ -273,9 +274,13 @@
   <p style="font-size:.78rem;color:var(--color-danger);margin:0 0 .5rem">Ungültiges JSON — nicht übernommen.</p>
   {% endif %}
   {% if has_tender_docs %}
-  <form method="post" action="/evaluation/extract-criteria"
+  <form method="post" action="/evaluation/extract-criteria" data-eval-ki-form="1"
         style="display:grid;gap:.5rem;margin-bottom:.75rem;padding:.5rem;border:1px dashed var(--color-border);border-radius:6px;max-width:720px">
     <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <div class="eval-ki-busy-banner idea-busy-banner" hidden>
+      <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+      <span class="eval-ki-busy-text">KI-Extraktion läuft …</span>
+    </div>
     <div>
       <p style="font-size:.78rem;font-weight:600;margin:0 0 .25rem">Aus Vorgaben extrahieren (KI)</p>
       <p class="text-muted" style="font-size:.7rem;margin:0">Nutzt Dokumente mit Rolle Eignungs-/Zuschlagskriterien etc.</p>
@@ -291,7 +296,13 @@
         <input type="checkbox" name="cloud_confirm" value="true" />
         Cloud-PII bestätigen
       </label>
-      <button type="submit" class="btn btn-secondary btn-sm">KI-Extraktion starten</button>
+      <button type="submit" class="btn btn-secondary btn-sm eval-ki-submit">
+        <span class="ki-btn-idle">KI-Extraktion starten</span>
+        <span class="ki-btn-busy" hidden>
+          <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+          KI läuft …
+        </span>
+      </button>
     </div>
   </form>
   {% else %}

@@ -95,7 +95,13 @@
         {% endif %}
         <div style="display:flex;gap:.5rem">
           <button type="submit" class="btn btn-primary btn-sm">Speichern</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="cellSuggest(this)">KI-Vorschlag (RAG)</button>
+          <button type="button" class="btn btn-secondary btn-sm eval-ki-btn" onclick="cellSuggest(this)">
+            <span class="ki-btn-idle">KI-Vorschlag (RAG)</span>
+            <span class="ki-btn-busy" hidden>
+              <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+              KI läuft …
+            </span>
+          </button>
         </div>
       </form>
       <div id="cell-suggest-target" data-bidder="{{ bidder.id }}" data-criterion="{{ criterion.id }}" data-project="{{ project_key }}"></div>
@@ -135,23 +141,33 @@ syncJustificationRequired();
   syncGate();
 })();
 async function cellSuggest(btn) {
+  if (typeof evalKiBusy === 'function' && evalKiBusy()) return;
   const target = document.getElementById('cell-suggest-target');
-  const fd = new FormData();
-  fd.append('project_key', target.dataset.project);
-  fd.append('bidder_id', target.dataset.bidder);
-  fd.append('criterion_id', target.dataset.criterion);
   const picker = document.querySelector('#cell-llm-picker select[name="visual_llm_provider"]');
   const modelSel = document.querySelector('#cell-llm-picker select[name="visual_llm_model"]');
   const visProvider = picker ? picker.value : '';
   const visModel = modelSel ? modelSel.value : '';
+  const prov = visProvider || (window.KI && window.KI.provider) || '{{ llm_provider }}';
+  const mod = visModel || (window.KI && window.KI.model) || '{{ llm_model }}';
+  if (typeof evalStartKiAsync === 'function' && !evalStartKiAsync(prov, mod)) return;
+  const fd = new FormData();
+  fd.append('project_key', target.dataset.project);
+  fd.append('bidder_id', target.dataset.bidder);
+  fd.append('criterion_id', target.dataset.criterion);
   fd.append('visual_llm_provider', visProvider);
   fd.append('visual_llm_model', visModel);
-  fd.append('provider', visProvider || (window.KI && window.KI.provider) || '{{ llm_provider }}');
-  fd.append('model', visModel || (window.KI && window.KI.model) || '{{ llm_model }}');
+  fd.append('provider', prov);
+  fd.append('model', mod);
   const confirm = document.getElementById('eval-cloud-confirm');
   if (confirm && confirm.checked) fd.append('cloud_confirm', '1');
   target.innerHTML = '<p class="text-muted" style="margin-top:.5rem">RAG + LLM …</p>';
-  const r = await fetch('/evaluation/suggest', { method: 'POST', body: fd });
-  target.innerHTML = await r.text();
+  try {
+    const r = await fetch('/evaluation/suggest', { method: 'POST', body: fd });
+    target.innerHTML = await r.text();
+  } catch (err) {
+    target.innerHTML = '<p class="text-muted" style="margin-top:.5rem;color:#fca5a5">KI-Vorschlag fehlgeschlagen.</p>';
+  } finally {
+    if (typeof evalSetKiBusy === 'function') evalSetKiBusy(false);
+  }
 }
 </script>
