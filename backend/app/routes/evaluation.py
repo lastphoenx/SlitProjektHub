@@ -762,7 +762,7 @@ async def evaluation_extract_criteria(
     }
     extract_ctx.update(_llm_picker_context())
     if gate:
-    extract_ctx.update({
+        extract_ctx.update({
             "error": "cloud_confirm",
             "payload": {},
             "criteria_json": "{}",
