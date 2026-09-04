@@ -651,6 +651,28 @@ def test_ensure_criteria_refs_and_import_referenz():
     ev.engine = old_engine
 
 
+def test_ref_enrichment_query_and_child_refs():
+    from src.m15_evaluation import (
+        _merge_criteria_children,
+        _ref_enrichment_query,
+        _stamp_child_requirement_refs,
+    )
+
+    q = _ref_enrichment_query("F02", "UI / UX")
+    assert "F02" in q
+    assert "F-02" in q
+    assert "F02-001" in q
+
+    children = [{"name": "F01-001", "description": "test"}]
+    _stamp_child_requirement_refs(children)
+    assert children[0]["requirement_ref"] == "F01-001"
+
+    merged = _merge_criteria_children(
+        [], [{"name": "T01-003", "description": "x"}], kind="zuschlag",
+    )
+    assert merged[0]["requirement_ref"] == "T01-003"
+
+
 def test_ki_busy_hint():
     from unittest.mock import patch
 
@@ -1195,6 +1217,7 @@ if __name__ == "__main__":
     test_criteria_preview_meta()
     test_parse_expected_child_count_and_completeness()
     test_ensure_criteria_refs_and_import_referenz()
+    test_ref_enrichment_query_and_child_refs()
     test_ki_busy_hint()
     test_score_justification_required()
     test_sync_price_criterion_scores_reciprocal_gate()

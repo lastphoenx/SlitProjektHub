@@ -255,6 +255,18 @@ F01-Leak-Filter, `auto_price` ohne Unterfragen.
 
 ---
 
+## Ticket 20 — Ref-gezielter RAG für Unterfragen + Kinder-Refs ✅ erledigt
+
+**Ziel:** F-02/T-01 etc. bekommen Chunks mit Zeilennummern; Kinder zeigen `F01-001` statt leerem Platzhalter.
+
+**Umsetzung:**
+- `_ref_enrichment_query()` + `_retrieve_enrichment_context()` — zweiter Hybrid-Pass mit `F02-001 F-02 …` (niedrigerer Threshold).
+- `requirement_ref` bei LLM-/Merge-/Structured-Kindern aus Name (`_stamp_child_requirement_refs`).
+- KI-Hinweise differenziert: «X Zeilennummer(n) im RAG-Kontext (≥2 nötig)».
+- UI: Kinder-Placeholder `F01-001`, Client inferiert Ref aus Name.
+
+---
+
 ## Ticket 18 — Vollständigkeits-Badge für Einzelanforderungen ✅ erledigt
 
 **Ziel:** Nach KI-Extraktion sichtbar machen, wenn weniger Unterfragen erkannt wurden als im Pflichtenheft angekündigt (z. B. «5 von 18 Einzelanforderungen»).
@@ -267,4 +279,4 @@ F01-Leak-Filter, `auto_price` ohne Unterfragen.
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → ~~13–17~~ → ~~4~~ → ~~18~~ → ~~19~~
+**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~19~~ → ~~20~~

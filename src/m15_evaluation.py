@@ -2595,11 +2595,15 @@ def _child_dict_from_structured_row(row: dict[str, Any], *, kind: str) -> Option
         name = desc[:60]
     if not name:
         return None
-    return {
+    child = {
         "name": name,
         "description": desc or name,
         "scale_max": 1 if kind == "eignung" else int(row.get("scale_max") or 10),
     }
+    cref = _store_referenz(name) or _entry_referenz({"name": name, "description": desc})
+    if cref:
+        child["requirement_ref"] = cref
+    return child
 
 
 def _enrich_children_from_structured_tender_docs(
@@ -2685,6 +2689,74 @@ def _enrich_children_from_structured_tender_docs(
     return children
 
 
+def _stamp_child_requirement_refs(children: list[dict[str, Any]]) -> None:
+    """Unterfragen: requirement_ref aus name (F01-001) falls leer."""
+    for ch in children or []:
+        if (ch.get("requirement_ref") or "").strip():
+            continue
+        cref = _entry_referenz(ch)
+        if cref:
+            ch["requirement_ref"] = cref
+
+
+def _ref_enrichment_query(ref: Optional[str], name: str = "") -> str:
+    """BM25-Query für Anforderungsblatt-Zeilen einer Ref-Gruppe (Ticket 20)."""
+    if not ref:
+        return (name or "").strip()
+    norm = _normalize_requirement_ref(ref) or ref.upper().replace("-", "")
+    parts = [norm, name.strip()]
+    m = re.match(r"^([A-Z])(\d{2})$", norm)
+    if m:
+        letter, num = m.group(1), m.group(2)
+        dashed = f"{letter}-{num}"
+        parts.extend([
+            dashed,
+            f"{norm}-001",
+            f"{norm}-002",
+            f"{dashed}-001",
+            f"{dashed}-002",
+        ])
+    parts.append("Einzelanforderungen Anforderungsblatt Referenz Fragenr Lieferant")
+    return " ".join(p for p in parts if p)
+
+
+def _retrieve_enrichment_context(
+    project_key: str,
+    *,
+    query: str,
+    ref: Optional[str],
+    name: str,
+    doc_ids: tuple[int, ...],
+    limit: int,
+    threshold: float,
+) -> str:
+    """Hybrid-RAG + ref-gezielter Zusatzpass, dedupliziert."""
+    rag_docs: list[dict] = []
+    rag = retrieve_relevant_chunks_hybrid(
+        query,
+        project_key=project_key,
+        limit=limit,
+        threshold=threshold,
+        document_ids=doc_ids,
+    )
+    rag_docs = list(rag.get("documents", []))
+    if ref:
+        ref_q = _ref_enrichment_query(ref, name)
+        ref_rag = retrieve_relevant_chunks_hybrid(
+            ref_q,
+            project_key=project_key,
+            limit=limit,
+            threshold=min(threshold, 0.12),
+            document_ids=doc_ids,
+        )
+        rag_docs = _dedupe_rag_docs(rag_docs + list(ref_rag.get("documents", [])))
+    return _format_rag_context(
+        rag_docs,
+        empty_msg="",
+        max_chunks=min(len(rag_docs), limit * 2),
+    )
+
+
 def _merge_criteria_children(
     existing: list[dict[str, Any]],
     new_children: list[dict[str, Any]],
@@ -2698,12 +2770,24 @@ def _merge_criteria_children(
             continue
         if cname not in by_name:
             scale = 1 if kind == "eignung" else int(ch.get("scale_max") or 10)
-            by_name[cname] = {
+            row = {
                 "name": cname,
                 "description": (ch.get("description") or "").strip(),
                 "scale_max": scale,
             }
-    return list(by_name.values())
+            cref = (ch.get("requirement_ref") or "").strip() or _entry_referenz(ch)
+            if cref:
+                row["requirement_ref"] = cref
+            by_name[cname] = row
+        else:
+            existing_row = by_name[cname]
+            if not (existing_row.get("requirement_ref") or "").strip():
+                cref = (ch.get("requirement_ref") or "").strip() or _entry_referenz(ch)
+                if cref:
+                    existing_row["requirement_ref"] = cref
+    merged = list(by_name.values())
+    _stamp_child_requirement_refs(merged)
+    return merged
 
 
 def _enrich_criteria_children_from_requirements(
@@ -2757,17 +2841,14 @@ def _enrich_criteria_children_from_requirements(
             "Ja Nein Teilweise Begründung Pflicht Kapitel Anforderungen"
         )
         query = " ".join(query_parts)
-        rag = retrieve_relevant_chunks_hybrid(
-            query,
-            project_key=project_key,
+        ctx = _retrieve_enrichment_context(
+            project_key,
+            query=query,
+            ref=ref,
+            name=name,
+            doc_ids=tuple(doc_ids),
             limit=enrich_limit,
             threshold=enrich_threshold,
-            document_ids=tuple(doc_ids),
-        )
-        ctx = _format_rag_context(
-            rag.get("documents", []),
-            empty_msg="",
-            max_chunks=enrich_limit,
         )
         if is_cloud_llm_provider(provider) and ctx.strip():
             ctx = sanitize_for_cloud_text(ctx)
@@ -2780,14 +2861,16 @@ def _enrich_criteria_children_from_requirements(
             entry["children"] = filtered
 
         if not _zuschlag_has_line_structure_evidence(list(entry.get("children") or []), ctx, ref):
+            line_n = len(_extract_line_numbers_from_text(ctx, ref))
             if step1_removed:
                 hints.append(
                     f"{name}: {step1_removed} Schritt-1-Unterfragen verworfen "
-                    f"(keine Zeilenstruktur für {ref or search_term})"
+                    f"(keine Zeilenstruktur für {ref or search_term}; {line_n} Zeile(n) im RAG-Kontext)"
                 )
             elif not entry.get("children"):
                 hints.append(
-                    f"{name}: keine Unterfragen — kein Anforderungsblatt mit ≥2 Zeilen erkannt"
+                    f"{name}: keine Unterfragen — {line_n} Zeilennummer(n) für "
+                    f"{ref or search_term} im RAG-Kontext (≥2 nötig)"
                 )
             entry["children"] = []
             continue
@@ -2830,6 +2913,8 @@ def _enrich_criteria_children_from_requirements(
                 "name": cname,
                 "description": (ch.get("description") or "").strip(),
                 "scale_max": int(ch.get("scale_max") or 10),
+                "requirement_ref": (ch.get("requirement_ref") or "").strip()
+                or _entry_referenz({"name": cname, "description": ch.get("description")}),
             })
 
         before = len(entry.get("children") or [])
@@ -2841,6 +2926,7 @@ def _enrich_criteria_children_from_requirements(
             hints.append(f"{name}: {dropped} KI-Unterfragen verworfen (nicht im Vorgaben-Kontext)")
         if added > 0:
             hints.append(f"{name}: +{added} Unterfragen (KI/RAG, belegt)")
+        _stamp_child_requirement_refs(entry.get("children") or [])
 
     return hints
 
