@@ -1559,6 +1559,7 @@ def suggest_score_with_rag(
         tender_context_raw = _format_rag_context(
             tender_rag.get("documents", []),
             empty_msg="Keine passenden Vorgaben-Stellen gefunden.",
+            max_chunks=limit,
         )
 
     bidder_doc_ids = bidder_doc_ids_for_criterion(bidder_id, criterion)
@@ -1584,7 +1585,7 @@ def suggest_score_with_rag(
 
     tender_context = tender_context_raw
     offer_context = _format_rag_context(
-        docs, empty_msg="Keine passenden Angebotsstellen gefunden."
+        docs, empty_msg="Keine passenden Angebotsstellen gefunden.", max_chunks=limit,
     )
     if is_cloud_llm_provider(provider):
         tender_context = sanitize_for_cloud_text(tender_context)
@@ -1832,15 +1833,20 @@ def extract_price_structure_from_tender(
 
     cfg = get_evaluation_config(project_key)
     years_str = ", ".join(str(y) for y in cfg["price_years"])
+    rag_limit = cfg["rag_chunks_per_role"]
 
     rag = retrieve_relevant_chunks_hybrid(
         "Preisblatt Positionen Leistungsbeschreibung Referenz Einheit Kosten",
         project_key=project_key,
-        limit=cfg["rag_chunks_per_role"],
+        limit=rag_limit,
         threshold=0.28,
         document_ids=tuple(tender_ids),
     )
-    context = _format_rag_context(rag.get("documents", []), empty_msg="Keine Preisblatt-Stellen gefunden.")
+    context = _format_rag_context(
+        rag.get("documents", []),
+        empty_msg="Keine Preisblatt-Stellen gefunden.",
+        max_chunks=rag_limit,
+    )
     if is_cloud_llm_provider(provider):
         context = sanitize_for_cloud_text(context)
 
@@ -1875,17 +1881,22 @@ def extract_price_from_bidder_doc(
 
     cfg = get_evaluation_config(project_key)
     years_str = ", ".join(str(y) for y in cfg["price_years"])
+    rag_limit = cfg["rag_chunks_per_role"]
 
     rag = retrieve_relevant_chunks_hybrid(
         "Preisblatt Kosten CHF Positionen Anzahl Einheit",
         project_key=project_key,
-        limit=cfg["rag_chunks_per_role"],
+        limit=rag_limit,
         threshold=0.28,
         classification_filter=ANGEbot_CLASSIFICATION,
         bidder_id=bidder_id,
         document_ids=tuple(doc_ids),
     )
-    context = _format_rag_context(rag.get("documents", []), empty_msg="Keine Preisblatt-Stellen gefunden.")
+    context = _format_rag_context(
+        rag.get("documents", []),
+        empty_msg="Keine Preisblatt-Stellen gefunden.",
+        max_chunks=rag_limit,
+    )
     if is_cloud_llm_provider(provider):
         context = sanitize_for_cloud_text(context)
 
