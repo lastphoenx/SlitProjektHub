@@ -55,7 +55,6 @@ from src.m15_evaluation import (
     import_criteria_payload,
     ki_busy_hint,
     link_document_to_bidder,
-    link_tender_doc,
     list_bidders,
     list_criteria,
     list_missing_justifications,
@@ -75,13 +74,13 @@ from src.m15_evaluation import (
     score_requires_justification,
     save_evaluation_config,
     seed_price_structure_for_bidder,
+    set_tender_doc_roles,
     soft_delete_bidder,
     soft_delete_criterion,
     suggest_score_with_rag,
     suggest_tender_role,
     sync_price_criterion_scores,
     unlink_document_from_bidder,
-    unlink_tender_doc,
     upsert_price_item,
     update_criterion_ranking_phase,
     upsert_score,
@@ -233,7 +232,7 @@ async def evaluation_page(request: Request, project_key: str = ""):
 
     offer_docs = []
     bidder_docs: dict[int, list[int]] = {}
-    tender_doc_roles: dict[int, str] = {}
+    tender_doc_roles: dict[int, list[str]] = {}
     tender_role_suggestions: dict[int, str | None] = {}
     chunk_recommendations: dict[int, int] = {}
     project_source_docs = []
@@ -249,12 +248,13 @@ async def evaluation_page(request: Request, project_key: str = ""):
             if d.classification != ANGEbot_CLASSIFICATION
         ]
         for row in list_tender_docs(project_key):
-            tender_doc_roles[row.document_id] = row.tender_role
+            tender_doc_roles.setdefault(row.document_id, []).append(row.tender_role)
         for doc in project_source_docs:
             tender_role_suggestions[doc.id] = suggest_tender_role(doc.classification, doc.filename)
+            doc_roles = tender_doc_roles.get(doc.id, [])
             chunk_recommendations[doc.id] = recommended_chunk_size(
                 doc.classification,
-                tender_role=tender_doc_roles.get(doc.id),
+                tender_role=doc_roles[0] if doc_roles else None,
                 filename=doc.filename,
             )
         for b in bidders:
@@ -585,15 +585,11 @@ async def evaluation_tender_doc(
     request: Request,
     project_key: str = Form(...),
     document_id: int = Form(...),
-    tender_role: str = Form(""),
+    tender_roles: list[str] = Form([]),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
-    role = (tender_role or "").strip().lower()
-    if role:
-        link_tender_doc(project_key, document_id, role)
-    else:
-        unlink_tender_doc(project_key, document_id)
+    set_tender_doc_roles(project_key, document_id, tender_roles)
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
 
 
@@ -603,7 +599,7 @@ async def evaluation_tender_doc_upload(
     project_key: str = Form(...),
     file: UploadFile = File(...),
     classification: str = Form(""),
-    tender_role: str = Form(...),
+    tender_roles: list[str] = Form([]),
     chunk_size: int = Form(1000),
 ):
     if not can_evaluate(_username(request)):
@@ -618,12 +614,16 @@ async def evaluation_tender_doc_upload(
     cls = (classification or "").strip() or "Sonstiges"
     if cls not in DOCUMENT_CLASSIFICATIONS:
         cls = "Sonstiges"
-    role = (tender_role or "").strip().lower()
-    if role not in TENDER_ROLES:
+    roles = [
+        (r or "").strip().lower()
+        for r in tender_roles
+        if (r or "").strip().lower() in TENDER_ROLES
+    ]
+    if not roles:
         return RedirectResponse(url=f"{redirect}&tender_upload=error", status_code=303)
     chunk_size = normalize_chunk_size(
         chunk_size,
-        fallback=recommended_chunk_size(cls, tender_role=role, filename=file.filename or ""),
+        fallback=recommended_chunk_size(cls, tender_role=roles[0], filename=file.filename or ""),
     )
 
     success, _msg = ingest_document(
@@ -636,7 +636,7 @@ async def evaluation_tender_doc_upload(
     if not doc:
         return RedirectResponse(url=f"{redirect}&tender_upload=error", status_code=303)
     link_document_to_project(project_key, doc.id)
-    link_tender_doc(project_key, doc.id, role)
+    set_tender_doc_roles(project_key, doc.id, roles)
     status = "ok" if success else "linked"
     return RedirectResponse(url=f"{redirect}&tender_upload={status}", status_code=303)
 

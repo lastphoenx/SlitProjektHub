@@ -326,6 +326,7 @@ def test_tender_doc_link_and_roles():
     db.engine = engine
     ev.engine = engine
     ev.get_session = lambda: Session(engine)
+    ev.migrate_evaluation_db()
 
     with Session(engine) as session:
         doc = Document(
@@ -342,6 +343,16 @@ def test_tender_doc_link_and_roles():
     link_tender_doc("p1", doc_id, "zuschlagskriterien")
     assert get_tender_document_ids("p1") == [doc_id]
     assert get_tender_document_ids("p1", roles=("eignungskriterien",)) == []
+
+    link_tender_doc("p1", doc_id, "eignungskriterien")
+    assert get_tender_document_ids("p1", roles=("eignungskriterien",)) == [doc_id]
+    assert get_tender_document_ids("p1", roles=("zuschlagskriterien",)) == [doc_id]
+    assert get_tender_document_ids("p1", roles=("eignungskriterien", "zuschlagskriterien")) == [doc_id]
+
+    from src.m15_evaluation import get_tender_doc_roles, set_tender_doc_roles
+
+    set_tender_doc_roles("p1", doc_id, ["bewertungsvorgaben"])
+    assert get_tender_doc_roles("p1", doc_id) == ["bewertungsvorgaben"]
 
     crit = Criterion(project_key="p1", kind="zuschlag", name="Z1")
     assert "zuschlagskriterien" in tender_roles_for_criterion(crit)

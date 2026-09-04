@@ -423,6 +423,25 @@ tbody td.eval-matrix-cell:hover { background: rgba(99,102,241,.12); outline: 1px
 .eval-phase-once-card { border-left: 3px solid #3b82f6; }
 .eval-phase-bidder-card { border-left: 3px solid #f59e0b; }
 .eval-phase-result-card { border-left: 3px solid #22c55e; }
+
+.tender-role-checkboxes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+  gap: .2rem .45rem;
+  min-width: 14rem;
+  max-width: 28rem;
+}
+.tender-role-check {
+  display: flex;
+  align-items: flex-start;
+  gap: .3rem;
+  font-size: .68rem;
+  line-height: 1.25;
+  cursor: pointer;
+}
+.tender-role-check input { margin-top: .12rem; flex-shrink: 0; }
+.tender-role-check span { color: var(--color-text-muted); }
+.tender-role-check input:checked + span { color: var(--color-text); font-weight: 600; }
 .eval-bidder-block { margin-top: .75rem; padding: .65rem 0; border-top: 1px solid var(--color-border); }
 
 .badge {

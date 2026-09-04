@@ -11,7 +11,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 from uuid import uuid4
 
 from sqlalchemy import Boolean, Column, Float, Integer, String, UniqueConstraint, text
@@ -205,7 +205,10 @@ class EvaluationTenderDoc(SQLModel, table=True):
     """Projekt-Vorgaben/Frameworks für die Offertbeurteilung (verweist auf bestehende Document-Zeilen)."""
     __tablename__ = "evaluation_tender_doc"
     __table_args__ = (
-        UniqueConstraint("project_key", "document_id", name="uq_eval_tender_doc"),
+        UniqueConstraint(
+            "project_key", "document_id", "tender_role",
+            name="uq_eval_tender_doc_role",
+        ),
     )
     id: Optional[int] = Field(default=None, primary_key=True)
     project_key: str = Field(sa_column=Column(String(80), nullable=False, index=True))
@@ -697,7 +700,27 @@ def get_tender_document_ids(
     if roles:
         role_set = set(roles)
         rows = [r for r in rows if r.tender_role in role_set]
-    return [r.document_id for r in rows]
+    seen: set[int] = set()
+    out: list[int] = []
+    for r in rows:
+        if r.document_id in seen:
+            continue
+        seen.add(r.document_id)
+        out.append(r.document_id)
+    return out
+
+
+def get_tender_doc_roles(project_key: str, document_id: int) -> list[str]:
+    with get_session() as session:
+        rows = list(
+            session.exec(
+                select(EvaluationTenderDoc).where(
+                    EvaluationTenderDoc.project_key == project_key,
+                    EvaluationTenderDoc.document_id == document_id,
+                ).order_by(EvaluationTenderDoc.tender_role)
+            ).all()
+        )
+    return [r.tender_role for r in rows]
 
 
 def link_tender_doc(project_key: str, document_id: int, tender_role: str) -> bool:
@@ -709,21 +732,51 @@ def link_tender_doc(project_key: str, document_id: int, tender_role: str) -> boo
             select(EvaluationTenderDoc).where(
                 EvaluationTenderDoc.project_key == project_key,
                 EvaluationTenderDoc.document_id == document_id,
+                EvaluationTenderDoc.tender_role == role,
             )
         ).first()
         if existing:
-            existing.tender_role = role
-            session.add(existing)
-            session.commit()
-            return True
-        link = EvaluationTenderDoc(
-            project_key=project_key,
-            document_id=document_id,
-            tender_role=role,
+            return False
+        session.add(
+            EvaluationTenderDoc(
+                project_key=project_key,
+                document_id=document_id,
+                tender_role=role,
+            )
         )
-        session.add(link)
         session.commit()
         return True
+
+
+def set_tender_doc_roles(project_key: str, document_id: int, roles: Iterable[str]) -> None:
+    """Alle Rollen eines Vorgabe-Dokuments setzen (Mehrfachauswahl)."""
+    wanted = {
+        (r or "").strip().lower()
+        for r in roles
+        if (r or "").strip().lower() in TENDER_ROLES
+    }
+    with get_session() as session:
+        rows = list(
+            session.exec(
+                select(EvaluationTenderDoc).where(
+                    EvaluationTenderDoc.project_key == project_key,
+                    EvaluationTenderDoc.document_id == document_id,
+                )
+            ).all()
+        )
+        current = {r.tender_role for r in rows}
+        for role in wanted - current:
+            session.add(
+                EvaluationTenderDoc(
+                    project_key=project_key,
+                    document_id=document_id,
+                    tender_role=role,
+                )
+            )
+        for row in rows:
+            if row.tender_role not in wanted:
+                session.delete(row)
+        session.commit()
 
 
 def unlink_tender_doc(project_key: str, document_id: int) -> None:
@@ -2141,5 +2194,46 @@ def migrate_evaluation_db() -> None:
             if "vorgaben_ki_model" not in cfg_cols:
                 conn.execute(text(
                     "ALTER TABLE evaluation_project_config ADD COLUMN vorgaben_ki_model VARCHAR(80)"
+                ))
+
+        if "evaluation_tender_doc" in tables:
+            idx_rows = conn.execute(text("PRAGMA index_list('evaluation_tender_doc')")).fetchall()
+            needs_role_uc = False
+            for idx in idx_rows:
+                if not idx[2]:
+                    continue
+                cols = [
+                    r[2]
+                    for r in conn.execute(text(f"PRAGMA index_info('{idx[1]}')")).fetchall()
+                ]
+                if cols == ["project_key", "document_id"]:
+                    needs_role_uc = True
+                    break
+            if needs_role_uc:
+                conn.execute(text("""
+                    CREATE TABLE evaluation_tender_doc_new (
+                        id INTEGER PRIMARY KEY,
+                        project_key VARCHAR(80) NOT NULL,
+                        document_id INTEGER NOT NULL,
+                        tender_role VARCHAR(40) NOT NULL,
+                        added_at DATETIME NOT NULL,
+                        UNIQUE (project_key, document_id, tender_role)
+                    )
+                """))
+                conn.execute(text("""
+                    INSERT INTO evaluation_tender_doc_new
+                        (id, project_key, document_id, tender_role, added_at)
+                    SELECT id, project_key, document_id, tender_role, added_at
+                    FROM evaluation_tender_doc
+                """))
+                conn.execute(text("DROP TABLE evaluation_tender_doc"))
+                conn.execute(text("ALTER TABLE evaluation_tender_doc_new RENAME TO evaluation_tender_doc"))
+                conn.execute(text(
+                    "CREATE INDEX ix_evaluation_tender_doc_project_key "
+                    "ON evaluation_tender_doc (project_key)"
+                ))
+                conn.execute(text(
+                    "CREATE INDEX ix_evaluation_tender_doc_document_id "
+                    "ON evaluation_tender_doc (document_id)"
                 ))
         # zukünftige Spalten hier ergänzen
