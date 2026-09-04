@@ -51,6 +51,7 @@ from src.m15_evaluation import (
     get_score,
     get_tender_document_ids,
     import_criteria_payload,
+    ki_busy_hint,
     link_document_to_bidder,
     link_tender_doc,
     list_bidders,
@@ -132,6 +133,12 @@ def _llm_picker_context() -> dict:
         "form_input_provider": "",
         "form_input_model": "",
     }
+
+
+@router.get("/evaluation/ki-hint")
+async def evaluation_ki_hint(provider: str = "", model: str = ""):
+    """Ollama-VRAM / Warteschlange — für Busy-Banner in der Offert-UI."""
+    return ki_busy_hint(provider, model)
 
 
 @router.get("/evaluation", response_class=HTMLResponse)

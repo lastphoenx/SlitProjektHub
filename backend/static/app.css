@@ -234,6 +234,21 @@ body {
   color: #e2e8f0;
   cursor: wait;
 }
+.btn-secondary.is-busy,
+.btn-secondary.is-busy:hover {
+  background: #334155;
+  color: #e2e8f0;
+  border-color: #475569;
+  cursor: wait;
+}
+.ki-btn-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.ki-btn-busy[hidden] {
+  display: none !important;
+}
 .idea-run-badge {
   background: rgba(234, 179, 8, 0.2);
   color: #fde047;

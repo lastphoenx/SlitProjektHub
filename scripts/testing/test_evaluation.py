@@ -483,6 +483,25 @@ def test_evaluation_config_roundtrip():
     ev.engine = old_engine
 
 
+def test_ki_busy_hint():
+    from unittest.mock import patch
+
+    from src.m15_evaluation import ki_busy_hint
+
+    with patch("src.m08_llm.ollama_runtime_status", return_value={"message": "Ollama ist frei."}):
+        with patch("src.m16_idea_jobs.idea_ki_queue_size", return_value=0):
+            h = ki_busy_hint("openai", "gpt-4o")
+    assert "KI läuft" in h["message"]
+
+    with patch("src.m08_llm.have_key", return_value=True), patch(
+        "src.m08_llm.ollama_runtime_status",
+        return_value={"message": "Modellwechsel nötig."},
+    ), patch("src.m16_idea_jobs.idea_ki_queue_size", return_value=2):
+        h2 = ki_busy_hint("ollama", "llama3.3:70b")
+    assert "Modellwechsel" in h2["message"]
+    assert "Warteschlange" in h2["message"]
+
+
 def test_score_justification_required():
     from src.m15_evaluation import (
         Criterion,
@@ -625,6 +644,7 @@ if __name__ == "__main__":
     test_validate_tender_cloud_gate()
     test_suggest_tender_role_and_validate_criteria()
     test_evaluation_config_roundtrip()
+    test_ki_busy_hint()
     test_score_justification_required()
     test_sync_price_criterion_scores_reciprocal_gate()
     test_build_evaluation_export_includes_justifications()

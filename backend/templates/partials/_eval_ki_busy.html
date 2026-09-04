@@ -1,0 +1,133 @@
+<div id="eval-ki-global-banner" class="idea-busy-banner" hidden style="margin-bottom:1rem">
+  <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+  <span id="eval-ki-global-banner-text">KI läuft … bitte warten. Nicht erneut klicken.</span>
+</div>
+<script>
+(function() {
+  var _busy = false;
+
+  function defaultHint() {
+    return 'KI läuft … bitte warten (kann mehrere Minuten dauern). Nicht erneut klicken.';
+  }
+
+  window.evalKiBusy = function() { return _busy; };
+
+  function setButtonBusy(btn, on) {
+    if (!btn) return;
+    var idle = btn.querySelector('.ki-btn-idle');
+    var busy = btn.querySelector('.ki-btn-busy');
+    if (idle) idle.hidden = !!on;
+    if (busy) busy.hidden = !on;
+    btn.classList.toggle('is-busy', !!on);
+    btn.disabled = !!on;
+    btn.setAttribute('aria-disabled', on ? 'true' : 'false');
+  }
+
+  function setFormControlsDisabled(form, on) {
+    if (!form) return;
+    form.querySelectorAll('select, input, button, textarea').forEach(function(el) {
+      if (on) {
+        el.dataset.kiWasDisabled = el.disabled ? '1' : '0';
+        el.disabled = true;
+      } else if (el.dataset.kiWasDisabled !== '1') {
+        el.disabled = false;
+      }
+    });
+  }
+
+  window.evalSetKiBusy = function(on, message) {
+    _busy = !!on;
+    var msg = message || defaultHint();
+    document.querySelectorAll('.eval-ki-form').forEach(function(form) {
+      form.setAttribute('data-busy', on ? '1' : '0');
+      form.setAttribute('aria-busy', on ? 'true' : 'false');
+      setFormControlsDisabled(form, on);
+      var ban = form.querySelector('.eval-ki-busy-banner');
+      if (ban) {
+        ban.hidden = !on;
+        var t = ban.querySelector('.eval-ki-busy-text');
+        if (t) t.textContent = msg;
+      }
+    });
+    document.querySelectorAll('.eval-ki-submit, .eval-ki-btn').forEach(function(btn) {
+      setButtonBusy(btn, on);
+    });
+    var global = document.getElementById('eval-ki-global-banner');
+    if (global) {
+      global.hidden = !on;
+      var gt = document.getElementById('eval-ki-global-banner-text');
+      if (gt) gt.textContent = msg;
+    }
+  };
+
+  function pickerFromForm(form) {
+    var scope = form;
+    if (form.classList.contains('price-ki-action-form')) {
+      scope = document.getElementById('price-ki-picker') || form;
+    }
+    var p = scope.querySelector('select[name="visual_llm_provider"]');
+    var m = scope.querySelector('select[name="visual_llm_model"]');
+    var prov = p && p.value ? p.value : '';
+    var mod = m && m.value ? m.value : '';
+    if (!prov && window.KI) prov = window.KI.provider || '';
+    if (!mod && window.KI) mod = window.KI.model || '';
+    return { provider: prov, model: mod };
+  }
+
+  window.evalFetchKiHint = function(provider, model) {
+    var url = '/evaluation/ki-hint?provider=' + encodeURIComponent(provider || '') + '&model=' + encodeURIComponent(model || '');
+    return fetch(url, { credentials: 'same-origin' })
+      .then(function(r) { return r.ok ? r.json() : {}; })
+      .then(function(d) { return (d && d.message) ? d.message : defaultHint(); })
+      .catch(function() { return defaultHint(); });
+  };
+
+  window.evalBindKiForm = function(form) {
+    if (!form || form.getAttribute('data-ki-bound')) return;
+    form.setAttribute('data-ki-bound', '1');
+    form.classList.add('eval-ki-form');
+    form.addEventListener('invalid', function() { evalSetKiBusy(false); }, true);
+    form.addEventListener('submit', function(e) {
+      if (evalKiBusy() && form.getAttribute('data-busy') !== '1') {
+        e.preventDefault();
+        return;
+      }
+      if (form.classList.contains('price-ki-action-form')) {
+        var root = document.getElementById('price-ki-picker');
+        if (root) {
+          var ps = root.querySelector('select[name="visual_llm_provider"]');
+          var ms = root.querySelector('select[name="visual_llm_model"]');
+          var pIn = form.querySelector('.price-ki-provider');
+          var mIn = form.querySelector('.price-ki-model');
+          if (pIn && ps) pIn.value = ps.value;
+          if (mIn && ms) mIn.value = ms.value;
+        }
+      }
+      var picker = pickerFromForm(form);
+      evalSetKiBusy(true, defaultHint());
+      evalFetchKiHint(picker.provider, picker.model).then(function(msg) {
+        if (evalKiBusy()) evalSetKiBusy(true, msg);
+      });
+    });
+  };
+
+  window.evalStartKiAsync = function(provider, model) {
+    if (evalKiBusy()) return false;
+    evalSetKiBusy(true, defaultHint());
+    evalFetchKiHint(provider || '', model || '').then(function(msg) {
+      if (evalKiBusy()) evalSetKiBusy(true, msg);
+    });
+    return true;
+  };
+
+  function initEvalKiBusy() {
+    document.querySelectorAll('form.eval-ki-form').forEach(evalBindKiForm);
+    document.querySelectorAll('form[data-eval-ki-form]').forEach(evalBindKiForm);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initEvalKiBusy);
+  } else {
+    initEvalKiBusy();
+  }
+})();
+</script>

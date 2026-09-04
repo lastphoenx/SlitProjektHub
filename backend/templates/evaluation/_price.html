@@ -4,6 +4,7 @@
 
 {% block content %}
 <div style="max-width:1100px">
+{% include 'partials/_eval_ki_busy.html' %}
 
 <div class="page-header">
   <div>
@@ -82,7 +83,7 @@
   </div>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end">
     {% if has_price_template %}
-    <form method="post" action="/evaluation/price-template/seed" class="price-ki-action-form" style="display:flex;gap:.35rem;align-items:center">
+    <form method="post" action="/evaluation/price-template/seed" data-eval-ki-form="1" class="price-ki-action-form" style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap">
       <input type="hidden" name="project_key" value="{{ project_key }}" />
       <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
       <input type="hidden" name="visual_llm_provider" class="price-ki-provider" value="" />
@@ -90,11 +91,14 @@
       <label style="font-size:.7rem;display:flex;gap:.25rem;align-items:center">
         <input type="checkbox" name="cloud_confirm" value="true" /> Cloud-PII
       </label>
-      <button type="submit" class="btn btn-secondary btn-sm">Struktur aus Vorlage (leer)</button>
+      <button type="submit" class="btn btn-secondary btn-sm eval-ki-submit">
+        <span class="ki-btn-idle">Struktur aus Vorlage (leer)</span>
+        <span class="ki-btn-busy" hidden><svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg> KI läuft …</span>
+      </button>
     </form>
     {% endif %}
     {% if has_bidder_preisblatt %}
-    <form method="post" action="/evaluation/price-template/parse" class="price-ki-action-form" style="display:flex;gap:.35rem;align-items:center">
+    <form method="post" action="/evaluation/price-template/parse" data-eval-ki-form="1" class="price-ki-action-form" style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap">
       <input type="hidden" name="project_key" value="{{ project_key }}" />
       <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
       <input type="hidden" name="visual_llm_provider" class="price-ki-provider" value="" />
@@ -102,7 +106,10 @@
       <label style="font-size:.7rem;display:flex;gap:.25rem;align-items:center">
         <input type="checkbox" name="cloud_confirm" value="true" /> Cloud-PII
       </label>
-      <button type="submit" class="btn btn-secondary btn-sm">Eingereichtes Preisblatt einlesen</button>
+      <button type="submit" class="btn btn-secondary btn-sm eval-ki-submit">
+        <span class="ki-btn-idle">Eingereichtes Preisblatt einlesen</span>
+        <span class="ki-btn-busy" hidden><svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg> KI läuft …</span>
+      </button>
     </form>
     {% endif %}
     {% if not has_price_template and not has_bidder_preisblatt %}
@@ -122,7 +129,8 @@
       const mIn = form.querySelector('.price-ki-model');
       if (pIn && provSel) pIn.value = provSel.value;
       if (mIn && modelSel) mIn.value = modelSel.value;
-    });
+    }, true);
+    if (typeof evalBindKiForm === 'function') evalBindKiForm(form);
   });
 })();
 </script>
