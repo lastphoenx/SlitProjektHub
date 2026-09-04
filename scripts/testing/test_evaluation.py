@@ -465,11 +465,17 @@ def test_evaluation_config_roundtrip():
     assert cfg2["vorgaben_ki_provider"] == "ollama"
     assert cfg2["vorgaben_ki_model"] == "llama3.3:70b"
 
+    from unittest.mock import patch
     from src.m15_evaluation import resolve_vorgaben_ki
+
     p, m = resolve_vorgaben_ki("p1", "", "", global_provider="openai", global_model="gpt-4o-mini")
     assert p == "ollama"
     assert m == "llama3.3:70b"
-    p2, m2 = resolve_vorgaben_ki("p1", "openai", "gpt-4o", global_provider="openai", global_model="gpt-4o-mini")
+    # resolve_visual_llm() prueft have_key(provider) - ohne konfigurierten Key wuerde die
+    # explizite Picker-Wahl "openai" sonst still auf den Projekt-Default zurueckfallen und
+    # den eigentlichen Test (Picker > Projekt-Default) unbemerkt umgehen.
+    with patch("src.m16_idea_visual.have_key", return_value=True):
+        p2, m2 = resolve_vorgaben_ki("p1", "openai", "gpt-4o", global_provider="openai", global_model="gpt-4o-mini")
     assert p2 == "openai"
     assert m2 == "gpt-4o"
 

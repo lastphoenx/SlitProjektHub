@@ -30,7 +30,7 @@
 <div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
   <p style="font-size:.8rem;margin:0">
     <strong>Preis-Punkte noch nicht berechnet</strong> — erst wenn alle {{ price_offers_status.bidder_count }} Bieter ein vollständiges Preisblatt haben
-    (günstigster = volle Punktzahl, teuerster = 0). Fehlend:
+    ({{ price_formula_labels.get(eval_config.price_formula, eval_config.price_formula) }}). Fehlend:
     {{ price_offers_status.missing_bidders | join(', ') }}.
     <a href="/evaluation/price?project_key={{ project_key }}">Preisblatt</a>
   </p>
