@@ -114,7 +114,8 @@
   <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 .75rem">
     Ausschreibungsunterlagen (Eignungs-/Zuschlagskriterien, Bewertungsvorgaben, Preisblatt-Vorlage) —
     ohne erneuten Upload, wenn sie bereits unter <strong>Dokumente</strong> am Projekt hängen.
-    Die KI nutzt diese Rolle beim Vergleich mit den Bieter-Angeboten.
+    Pro Dokument können <strong>mehrere Rollen</strong> gesetzt werden (z.&nbsp;B. Eignung und Zuschlag auf derselben Datei).
+    Die KI nutzt diese Rollen beim Vergleich mit den Bieter-Angeboten.
   </p>
 
   <details style="margin-bottom:.75rem;font-size:.75rem">
@@ -163,12 +164,15 @@
              accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx,.xls" />
     </div>
     <div>
-      <label class="form-label" style="font-size:.72rem">Rolle</label>
-      <select class="form-select" name="tender_role" required id="tender-role-select">
+      <label class="form-label" style="font-size:.72rem">Rollen <span class="text-muted">(mind. 1)</span></label>
+      <div class="tender-role-checkboxes" id="tender-upload-roles">
         {% for role in tender_roles %}
-        <option value="{{ role }}">{{ tender_role_labels[role] }}</option>
+        <label class="tender-role-check">
+          <input type="checkbox" name="tender_roles" value="{{ role }}" />
+          <span>{{ tender_role_labels[role] }}</span>
+        </label>
         {% endfor %}
-      </select>
+      </div>
     </div>
     <div>
       <label class="form-label" style="font-size:.72rem">Klassifikation</label>
@@ -193,7 +197,7 @@
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th>Datei</th><th>Klassifikation</th><th>Chunks</th><th>Chunk-Gr.</th><th>Vorschlag Rolle</th><th>Rolle in Beurteilung</th><th></th>
+        <th>Datei</th><th>Klassifikation</th><th>Chunks</th><th>Chunk-Gr.</th><th>Vorschlag Rolle</th><th>Rollen in Beurteilung</th><th></th>
       </tr></thead>
       <tbody>
         {% for doc in project_source_docs %}
@@ -212,20 +216,20 @@
             {% if sug %}{{ tender_role_labels.get(sug, sug) }}{% else %}—{% endif %}
           </td>
           <td>
-            <form method="post" action="/evaluation/tender-doc" style="display:flex;gap:.35rem;align-items:center">
+            {% set doc_roles = tender_doc_roles.get(doc.id, []) %}
+            <form method="post" action="/evaluation/tender-doc" class="tender-role-form">
               <input type="hidden" name="project_key" value="{{ project_key }}" />
               <input type="hidden" name="document_id" value="{{ doc.id }}" />
-              <select class="form-select" name="tender_role" style="font-size:.75rem;min-width:14rem"
-                      onchange="this.form.submit()">
-                <option value="">— nicht in Beurteilung —</option>
+              <div class="tender-role-checkboxes">
                 {% for role in tender_roles %}
-                <option value="{{ role }}"
-                  {% if tender_doc_roles.get(doc.id) == role %}selected
-                  {% elif not tender_doc_roles.get(doc.id) and sug == role %}selected{% endif %}>
-                  {{ tender_role_labels[role] }}
-                </option>
+                <label class="tender-role-check" title="{{ tender_role_labels[role] }}">
+                  <input type="checkbox" name="tender_roles" value="{{ role }}"
+                    {% if role in doc_roles %}checked{% endif %}
+                    onchange="this.form.submit()" />
+                  <span>{{ tender_role_labels[role] }}</span>
+                </label>
                 {% endfor %}
-              </select>
+              </div>
             </form>
           </td>
           <td>
