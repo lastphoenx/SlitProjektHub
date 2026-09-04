@@ -1076,10 +1076,11 @@ def _retrieve_tender_context_multi(
     limit_per_role: int = 12,
 ) -> str:
     """Mehrere RAG-Pässe nach tender_role, dedupliziert."""
-    all_docs: list[dict] = []
+    per_pass_docs: list[list[dict]] = []
     for roles, query in role_queries:
         ids = get_tender_document_ids(project_key, roles=roles)
         if not ids:
+            per_pass_docs.append([])
             continue
         rag = retrieve_relevant_chunks_hybrid(
             query,
@@ -1088,10 +1089,21 @@ def _retrieve_tender_context_multi(
             threshold=0.28,
             document_ids=tuple(ids),
         )
-        all_docs.extend(rag.get("documents", []))
+        per_pass_docs.append(list(rag.get("documents", []))[:limit_per_role])
+
+    merged: list[dict] = []
+    for i in range(limit_per_role):
+        for batch in per_pass_docs:
+            if i < len(batch):
+                merged.append(batch[i])
+
+    max_chunks = limit_per_role * max(1, len(role_queries))
+    docs = _dedupe_rag_docs(merged)[:max_chunks]
+    format_limit = min(len(docs), max(5, limit_per_role))
     return _format_rag_context(
-        _dedupe_rag_docs(all_docs)[: limit_per_role * 2],
+        docs,
         empty_msg="Keine passenden Vorgaben-Stellen gefunden.",
+        max_chunks=format_limit,
     )
 
 
@@ -1129,9 +1141,9 @@ def tender_roles_for_criterion(criterion: Criterion) -> tuple[str, ...]:
     return ("zuschlagskriterien",) + common
 
 
-def _format_rag_context(docs: list[dict], *, empty_msg: str) -> str:
+def _format_rag_context(docs: list[dict], *, empty_msg: str, max_chunks: int = 5) -> str:
     parts: list[str] = []
-    for i, d in enumerate(docs[:5], 1):
+    for i, d in enumerate(docs[:max_chunks], 1):
         text = (d.get("text") or "")[:1200]
         fname = d.get("filename", "?")
         chunk_id = d.get("chunk_id")
