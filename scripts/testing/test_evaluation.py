@@ -562,10 +562,13 @@ def test_build_evaluation_export_includes_justifications():
 
     import src.m15_evaluation as ev
     import src.m03_db as db
+    import src.m14_auth as auth14
 
     old_engine = db.engine
+    old_auth_engine = auth14.engine
     db.engine = engine
     ev.engine = engine
+    auth14.engine = engine
     ev.get_session = lambda: Session(engine)
 
     from src.m15_evaluation import build_evaluation_export_sheets
@@ -578,6 +581,7 @@ def test_build_evaluation_export_includes_justifications():
 
     db.engine = old_engine
     ev.engine = old_engine
+    auth14.engine = old_auth_engine
 
 
 def test_compute_price_reciprocal():
