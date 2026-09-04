@@ -884,6 +884,50 @@ def test_evaluator_score_discrepancies():
     ev.get_session = old_get
 
 
+def test_flatten_eignung_payload():
+    from src.m15_evaluation import _flatten_eignung_payload
+
+    payload = {
+        "eignung": [
+            {"name": "EK1", "description": "Text", "children": [{"name": "EK1-01", "description": "x"}]},
+            {"name": "EK2", "description": "y", "children": []},
+        ],
+        "zuschlag": [],
+    }
+    hints = _flatten_eignung_payload(payload)
+    assert len(payload["eignung"][0]["children"]) == 0
+    assert any("EK1" in h for h in hints)
+
+
+def test_child_belongs_to_parent_ref():
+    from src.m15_evaluation import _child_belongs_to_parent_ref
+
+    assert _child_belongs_to_parent_ref("F01-001", "F01")
+    assert _child_belongs_to_parent_ref("F01-004", "F-01")
+    assert not _child_belongs_to_parent_ref("F01-001", "S01")
+    assert not _child_belongs_to_parent_ref("F01-001", "R01")
+
+
+def test_child_grounded_and_line_structure():
+    from src.m15_evaluation import (
+        _child_grounded_in_context,
+        _extract_line_numbers_from_text,
+        _zuschlag_has_line_structure_evidence,
+    )
+
+    ctx = (
+        "F01-001 Bitte beschreiben Sie Ihr Verständnis des Projekts.\n"
+        "F01-002 Pushnachrichten Kursausfälle müssen unterstützt werden."
+    )
+    assert len(_extract_line_numbers_from_text(ctx, "F01")) >= 2
+    assert _zuschlag_has_line_structure_evidence([], ctx, "F01")
+
+    good = {"name": "F01-001", "description": "Bitte beschreiben Sie Ihr Verständnis des Projekts"}
+    bad = {"name": "F01-001", "description": "Bitte beschreiben Sie Ihr Verständnis des Projekts"}
+    assert _child_grounded_in_context(good, ctx, "F01", "Einleitung F-01")
+    assert not _child_grounded_in_context(bad, ctx, "S01", "SLA Vorschlag")
+
+
 def test_criterion_ref_prefix():
     from src.m15_evaluation import _criterion_ref_prefix, _normalize_requirement_ref
 
@@ -1065,6 +1109,9 @@ if __name__ == "__main__":
     test_criteria_manage_confirm_after_scores()
     test_evaluator_score_discrepancies()
     test_criterion_ref_prefix()
+    test_flatten_eignung_payload()
+    test_child_belongs_to_parent_ref()
+    test_child_grounded_and_line_structure()
     test_resolve_requirement_search()
     test_retrieve_tender_context_respects_max_format_chunks()
     test_evaluation_config_extraction_roundtrip()
