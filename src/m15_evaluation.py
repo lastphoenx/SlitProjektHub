@@ -716,6 +716,35 @@ def validate_score_justification(
         )
 
 
+def validate_user_score_not_blind_ai_copy(
+    bidder_id: int,
+    criterion_id: int,
+    criterion: Criterion,
+    value: float,
+    justification: str | None,
+    *,
+    ai_reference_justification: str | None = None,
+) -> None:
+    """Verhindert 1:1-Übernahme der KI-Begründung unter eigenem Namen bei Abzug/K.O."""
+    if not score_requires_justification(criterion, value):
+        return
+    user_j = (justification or "").strip()
+    if not user_j:
+        return
+
+    ref = (ai_reference_justification or "").strip()
+    if not ref:
+        ai_row = get_score(bidder_id, criterion_id, "ai")
+        if ai_row and ai_row.justification:
+            ref = ai_row.justification.strip()
+
+    if ref and user_j == ref:
+        raise ValueError(
+            f"«{criterion.name}»: Begründung ist identisch mit dem KI-Vorschlag — bitte lesen, "
+            "anpassen oder ergänzen, bevor Sie unter Ihrem Namen speichern (Rekursfähigkeit BöB/IVöB)."
+        )
+
+
 def list_missing_justifications(project_key: str) -> list[dict[str, Any]]:
     """Offene Begründungspflichten (menschl. Bewertungen, inkl. Unterfragen)."""
     bidders = {b.id: b for b in list_bidders(project_key)}
