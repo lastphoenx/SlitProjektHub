@@ -485,7 +485,7 @@ def test_score_justification_required():
         raise AssertionError("expected ValueError")
 
 
-def test_sync_price_criterion_scores_min_max_gate():
+def test_sync_price_criterion_scores_reciprocal_gate():
     engine, evaluator_id = _setup_db()
     project_key = "p-price"
     with Session(engine) as session:
@@ -530,10 +530,62 @@ def test_sync_price_criterion_scores_min_max_gate():
     cheap_score = get_score(b1_id, crit_id, "system")
     dear_score = get_score(b2_id, crit_id, "system")
     assert cheap_score and cheap_score.value == 10.0
-    assert dear_score and dear_score.value == 0.0
+    assert dear_score and dear_score.value == 5.0
 
     db.engine = old_engine
     ev.engine = old_engine
+
+
+def test_build_evaluation_export_includes_justifications():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-export"
+    with Session(engine) as session:
+        b = Bidder(project_key=project_key, name="Bieter A")
+        session.add(b)
+        session.commit()
+        session.refresh(b)
+        crit = Criterion(project_key=project_key, kind="zuschlag", name="Qualität", scale_max=10, weight_pct=50)
+        session.add(crit)
+        session.commit()
+        session.refresh(crit)
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=crit.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=7.0,
+                justification="Referenz unvollständig",
+            )
+        )
+        session.commit()
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    from src.m15_evaluation import build_evaluation_export_sheets
+
+    sheets = build_evaluation_export_sheets(project_key, project_title="Test", may_see_evaluators=True)
+    headers, rows = sheets["Bewertungen"]
+    assert "KI-Begründung" in headers
+    assert any("Begründung:" in h for h in headers)
+    assert rows and "Referenz unvollständig" in rows[0]
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_compute_price_reciprocal():
+    from src.m15_evaluation import compute_price_criterion_value
+
+    assert compute_price_criterion_value(10, 120_000, 120_000) == 10.0
+    assert compute_price_criterion_value(10, 120_000, 150_000) == 8.0
+    assert compute_price_criterion_value(10, 120_000, 200_000) == 6.0
 
 
 if __name__ == "__main__":
@@ -551,5 +603,7 @@ if __name__ == "__main__":
     test_suggest_tender_role_and_validate_criteria()
     test_evaluation_config_roundtrip()
     test_score_justification_required()
-    test_sync_price_criterion_scores_min_max_gate()
+    test_sync_price_criterion_scores_reciprocal_gate()
+    test_build_evaluation_export_includes_justifications()
+    test_compute_price_reciprocal()
     print("OK")

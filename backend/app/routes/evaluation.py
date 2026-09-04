@@ -30,11 +30,14 @@ from src.m15_evaluation import (
     ANGEbot_CLASSIFICATION,
     ANGEbot_SUBTYPES,
     CRITERION_KINDS,
+    PRICE_FORMULA_LABELS,
+    PRICE_FORMULAS,
     RANKING_PHASE_LABELS,
     RANKING_PHASES,
     TENDER_ROLE_LABELS,
     TENDER_ROLES,
     compute_bidder_tco,
+    build_evaluation_export_sheets,
     compute_rankings,
     create_bidder,
     create_criterion,
@@ -253,6 +256,8 @@ async def evaluation_page(request: Request, project_key: str = ""):
         ) if project_key else False,
         "ranking_phase_labels": RANKING_PHASE_LABELS,
         "ranking_phases": RANKING_PHASES,
+        "price_formula_labels": PRICE_FORMULA_LABELS,
+        "price_formulas": PRICE_FORMULAS,
         "missing_justifications": list_missing_justifications(project_key) if project_key else [],
         "price_offers_status": price_offers_status(project_key) if project_key else {},
         "angebot_class": ANGEbot_CLASSIFICATION,
@@ -678,6 +683,7 @@ async def evaluation_save_config(
     price_years: str = Form(""),
     vergabe_notes: str = Form(""),
     rag_chunks_per_role: int = Form(12),
+    price_formula: str = Form("reciprocal"),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -691,6 +697,7 @@ async def evaluation_save_config(
         price_years=years or None,
         vergabe_notes=vergabe_notes,
         rag_chunks_per_role=rag_chunks_per_role,
+        price_formula=price_formula,
     )
     return RedirectResponse(url=f"/evaluation?project_key={project_key}&config_saved=1", status_code=303)
 
@@ -973,60 +980,12 @@ async def evaluation_price_template_parse(
 
 
 def _export_rows(project_key: str, may_see: bool) -> tuple[list[str], list[list]]:
-    """Eine Zeile pro (Bieter, Top-Level-Kriterium): KI-Spalte, Ø/offizielle Spalte,
-    je eine Spalte pro Bewerter (nur wenn may_see) - das ist die 'mehrere Spalten'-
-    Anforderung: KI vs. jede Person einzeln vs. offizieller Wert, nebeneinander."""
-    from src.m14_auth import get_username_by_id
-
-    bidders = list_bidders(project_key)
-    criteria = [c for c in list_criteria(project_key) if c.parent_id is None]
-    scores = list_scores_for_project(project_key)
-    scores_by_cell: dict[tuple[int, int], list] = {}
-    for s in scores:
-        scores_by_cell.setdefault((s.bidder_id, s.criterion_id), []).append(s)
-    rankings = {r["bidder_id"]: r for r in compute_rankings(project_key)}
-
-    evaluator_ids: list[int] = []
-    if may_see:
-        seen = set()
-        for s in scores:
-            if s.source_key.startswith("user:") and s.evaluator_user_id not in seen:
-                seen.add(s.evaluator_user_id)
-                evaluator_ids.append(s.evaluator_user_id)
-        evaluator_ids.sort()
-    evaluator_names = {uid: (get_username_by_id(uid) or f"User {uid}") for uid in evaluator_ids}
-
-    headers = ["Projekt", "Bieter", "Kriterium", "Art", "Gewicht %", "Skala", "KI-Vorschlag"]
-    for uid in evaluator_ids:
-        headers.append(f"Bewerter: {evaluator_names[uid]}")
-    headers += ["Ø / Offiziell", "Rang", "Gesamt %"]
-
-    rows: list[list] = []
-    for crit in criteria:
-        for bidder in bidders:
-            cell = scores_by_cell.get((bidder.id, crit.id), [])
-            ai_row = next((s for s in cell if s.source_key == "ai"), None)
-            by_uid = {s.evaluator_user_id: s for s in cell if s.source_key.startswith("user:")}
-            rank_row = rankings.get(bidder.id, {})
-            row = [
-                _project_title(project_key),
-                bidder.name,
-                crit.name,
-                crit.kind,
-                crit.weight_pct if crit.kind == "zuschlag" else "",
-                crit.scale_max,
-                ai_row.value if ai_row else "",
-            ]
-            for uid in evaluator_ids:
-                sc = by_uid.get(uid)
-                row.append(sc.value if sc else "")
-            row += [
-                official_score(bidder.id, crit, cell),
-                rank_row.get("rank"),
-                rank_row.get("total_score"),
-            ]
-            rows.append(row)
-    return headers, rows
+    sheets = build_evaluation_export_sheets(
+        project_key,
+        project_title=_project_title(project_key),
+        may_see_evaluators=may_see,
+    )
+    return sheets["Bewertungen"]
 
 
 @router.get("/evaluation/export.csv")
@@ -1059,6 +1018,11 @@ async def evaluation_export_xlsx(request: Request, project_key: str):
         raise HTTPException(500, "openpyxl nicht installiert")
 
     headers, rows = _export_rows(project_key, can_view_evaluator_details(who))
+    sheets = build_evaluation_export_sheets(
+        project_key,
+        project_title=_project_title(project_key),
+        may_see_evaluators=can_view_evaluator_details(who),
+    )
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -1066,6 +1030,13 @@ async def evaluation_export_xlsx(request: Request, project_key: str):
     ws.append(headers)
     for row in rows:
         ws.append(row)
+
+    detail_headers, detail_rows = sheets.get("Einzelanforderungen", ([], []))
+    if detail_rows:
+        ws_detail = wb.create_sheet("Einzelanforderungen")
+        ws_detail.append(detail_headers)
+        for row in detail_rows:
+            ws_detail.append(row)
 
     ws2 = wb.create_sheet("Rangfolge")
     ws2.append(["Rang", "Bieter", "Gesamt %", "KO"])

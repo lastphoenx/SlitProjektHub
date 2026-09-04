@@ -130,9 +130,12 @@ voller Punktzahl in Phase 2 nicht mehr aufholen können, als «keine Einladung»
 
 **a) Begründungen:** Pflicht bei Eignung «Nein» und Zuschlag &lt; Maximalpunktzahl (inkl. Unterfragen).
 Server-Validierung in `upsert_score`, UI-Hinweis + Liste offener Pflichten auf `/evaluation`.
+**Export:** Wert + Begründung je Bewerter, KI und System; Blatt «Einzelanforderungen» für Unterfragen.
 
-**b) Preis:** `sync_price_criterion_scores` nur wenn alle Bieter TCO &gt; 0; Formel min–max linear
-(günstigster = volle Punktzahl, teuerster = 0). Bis dahin keine System-Preis-Scores.
+**b) Preis:** `sync_price_criterion_scores` nur wenn alle Bieter TCO &gt; 0. Standard-Formel **reziprok**
+(Unisport: Punkte = max × günstigstes / dieses Angebot). Optional `linear_minmax` in Projekt-Einstellungen.
+
+**Export:** CSV/XLSX mit Begründungsspalten je Bewerter + Blatt «Einzelanforderungen».
 
 ---
 
