@@ -38,7 +38,11 @@
         <span class="badge badge-neutral" style="font-size:.72rem">{{ d.classification }}</span>
       </td>
       <td style="text-align:right;font-variant-numeric:tabular-nums;font-size:.85rem">
+        {% if (d.chunk_count or 0) == 0 %}
+        <span title="Kein indexierter Text — gescannt oder leer; KI/RAG nutzt dieses Dokument nicht" style="color:var(--color-warning, #fbbf24);font-weight:600">0 ⚠</span>
+        {% else %}
         {{ d.chunk_count }}
+        {% endif %}
       </td>
       <td style="text-align:right;font-size:.78rem;color:var(--color-text-muted)">
         {% if d.file_size < 1024 %}

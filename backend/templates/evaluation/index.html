@@ -96,6 +96,36 @@
 <div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
   <p style="font-size:.85rem;margin:0">Upload fehlgeschlagen — Datei prüfen und erneut versuchen.</p>
 </div>
+{% elif doc_upload == 'ocr_failed' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">
+    <strong>Gescannt — OCR fehlgeschlagen.</strong> PDF gespeichert, aber 0 Chunks indexiert.
+    Die KI findet in diesem Dokument nichts (z.&nbsp;B. eingescannte Vorbehaltsliste).
+    Extern als durchsuchbares PDF aufbereiten oder erneut hochladen.
+  </p>
+</div>
+{% elif doc_upload == 'ocr_ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Dokument hochgeladen (Texterkennung per OCR) und mit dem Bieter verknüpft.</p>
+</div>
+{% elif doc_upload == 'vision_ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Dokument hochgeladen (Texterkennung per Vision-KI) und mit dem Bieter verknüpft.</p>
+</div>
+{% elif doc_upload == 'no_text' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">Dokument gespeichert, aber kein extrahierbarer Text — 0 Chunks für die KI.</p>
+</div>
+{% endif %}
+{% if zero_chunk_offer_docs %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.8rem;margin:0 0 .35rem"><strong>Angebots-Dokumente ohne Index ({{ zero_chunk_offer_docs|length }})</strong></p>
+  <ul style="font-size:.75rem;margin:0;padding-left:1.1rem">
+    {% for d in zero_chunk_offer_docs[:8] %}
+    <li>{{ d.filename }} — vermutlich gescannt oder leer; KI/RAG nutzt es nicht</li>
+    {% endfor %}
+  </ul>
+</div>
 {% endif %}
 {% if request.query_params.get('tender_upload') == 'ok' %}
 <div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
@@ -104,6 +134,14 @@
 {% elif request.query_params.get('tender_upload') == 'error' %}
 <div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
   <p style="font-size:.85rem;margin:0">Vorgabe-Upload fehlgeschlagen — Rolle und Datei prüfen.</p>
+</div>
+{% elif request.query_params.get('tender_upload') == 'ocr_failed' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">Vorgabe gespeichert — Gescannt: OCR fehlgeschlagen, 0 Chunks. KI nutzt dieses PDF nicht.</p>
+</div>
+{% elif request.query_params.get('tender_upload') in ('ocr_ok', 'vision_ok') %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Vorgabe hochgeladen (Texterkennung {% if request.query_params.get('tender_upload') == 'vision_ok' %}Vision-KI{% else %}OCR{% endif %}) und markiert.</p>
 </div>
 {% endif %}
 {% if request.query_params.get('config_saved') %}
@@ -220,7 +258,13 @@
         <tr>
           <td style="font-size:.8rem">{{ doc.filename }}</td>
           <td style="font-size:.75rem">{{ doc.classification }}</td>
-          <td style="font-size:.75rem">{{ doc.chunk_count or 0 }}</td>
+          <td style="font-size:.75rem">
+            {% if (doc.chunk_count or 0) == 0 %}
+            <span title="Kein Text indexiert — gescannt oder leer" style="color:var(--color-warning, #fbbf24);font-weight:600">0 ⚠</span>
+            {% else %}
+            {{ doc.chunk_count }}
+            {% endif %}
+          </td>
           <td style="font-size:.75rem">
             {% if doc.chunk_size_used == 0 %}zeilenweise{% else %}{{ doc.chunk_size_used or '—' }}{% endif %}
             {% if chunk_recommendations.get(doc.id) is not none and (doc.chunk_size_used is none or chunk_recommendations.get(doc.id) != doc.chunk_size_used) %}
@@ -484,6 +528,9 @@
             <input type="checkbox" class="bidder-doc-link-cb" {% if linked %}checked{% endif %}
               onchange="this.form.querySelector('.bidder-doc-linked-val').value=this.checked?'true':'false'; this.form.requestSubmit();" />
             <strong style="font-size:.8rem">{{ doc.filename }}</strong>
+            {% if linked and (doc.chunk_count or 0) == 0 %}
+            <span title="Gescannt oder leer — KI findet nichts in diesem Dokument" style="color:var(--color-warning, #fbbf24);font-size:.72rem"> — 0 Chunks</span>
+            {% endif %}
             {% if doc.doc_subtype and not doc_st %}<span class="text-muted">({{ doc.doc_subtype }})</span>{% endif %}
           </label>
         </form>

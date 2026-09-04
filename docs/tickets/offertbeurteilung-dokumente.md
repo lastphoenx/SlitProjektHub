@@ -238,4 +238,10 @@ den Mittelwert verlässt.
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → 4
+## Ticket 12 — Gescannte PDFs: OCR + Vision-Fallback ✅ erledigt
+
+Siehe **`docs/tickets/pdf-ocr-ingest.md`** — OCR-Pipeline in `ingest_document()`, UI-Warnung bei 0 Chunks.
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → 1 → 2 → ~~5~~ → ~~6~~ → ~~7~~ → ~~8~~ → ~~9~~ → ~~10~~ → ~~11~~ → ~~12~~ → 4

@@ -318,6 +318,9 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "price_offers_status": price_offers_status(project_key) if project_key else {},
         "angebot_class": ANGEbot_CLASSIFICATION,
         "angebot_subtypes": ANGEbot_SUBTYPES,
+        "zero_chunk_offer_docs": [
+            d for d in offer_docs if (d.chunk_count or 0) == 0
+        ] if project_key else [],
         "may_evaluate": can_evaluate(who),
         "may_see_evaluators": can_view_evaluator_details(who),
         "super_user": is_super_user(who),
@@ -730,19 +733,20 @@ async def evaluation_tender_doc_upload(
         fallback=recommended_chunk_size(cls, tender_role=roles[0], filename=file.filename or ""),
     )
 
-    success, _msg = ingest_document(
+    result = ingest_document(
         file_name=file.filename,
         file_bytes=file_bytes,
         classification=cls,
         chunk_size=chunk_size,
     )
+    if not result.ok:
+        return RedirectResponse(url=f"{redirect}&tender_upload=error", status_code=303)
     doc = get_document_by_sha256(calculate_sha256(file_bytes), include_deleted=True)
     if not doc:
         return RedirectResponse(url=f"{redirect}&tender_upload=error", status_code=303)
     link_document_to_project(project_key, doc.id)
     set_tender_doc_roles(project_key, doc.id, roles)
-    status = "ok" if success else "linked"
-    return RedirectResponse(url=f"{redirect}&tender_upload={status}", status_code=303)
+    return RedirectResponse(url=f"{redirect}&tender_upload={result.status}", status_code=303)
 
 
 @router.post("/evaluation/bidder-doc-subtypes", response_class=HTMLResponse)
@@ -818,13 +822,15 @@ async def evaluation_bidder_doc_upload(
         ),
     )
 
-    success, _msg = ingest_document(
+    result = ingest_document(
         file_name=file.filename,
         file_bytes=file_bytes,
         classification=cls,
         chunk_size=chunk_size,
         doc_subtype=ingest_subtype,
     )
+    if not result.ok and result.status != "linked":
+        return RedirectResponse(url=f"{redirect}&doc_upload=error", status_code=303)
     doc = get_document_by_sha256(calculate_sha256(file_bytes), include_deleted=True)
     if not doc:
         return RedirectResponse(url=f"{redirect}&doc_upload=error", status_code=303)
@@ -832,8 +838,8 @@ async def evaluation_bidder_doc_upload(
     link_document_to_bidder(bidder_id, doc.id)
     if subtypes:
         set_bidder_doc_subtypes(bidder_id, doc.id, subtypes)
-    status = "ok" if success else "linked"
-    return RedirectResponse(url=f"{redirect}&doc_upload={status}", status_code=303)
+    upload_status = "linked" if result.status == "linked" else result.status
+    return RedirectResponse(url=f"{redirect}&doc_upload={upload_status}", status_code=303)
 
 
 @router.post("/evaluation/delete-bidder", response_class=HTMLResponse)
