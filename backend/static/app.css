@@ -427,9 +427,37 @@ tbody td.eval-matrix-cell:hover { background: rgba(99,102,241,.12); outline: 1px
 .tender-role-checkboxes {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
-  gap: .2rem .45rem;
+  gap: .25rem .5rem;
   min-width: 14rem;
   max-width: 28rem;
+}
+.bidder-subtype-checkboxes {
+  max-width: none;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+}
+.bidder-upload-form {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  margin-top: .5rem;
+  width: 100%;
+}
+.bidder-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  align-items: flex-end;
+}
+.bidder-subtype-panel {
+  width: 100%;
+  max-width: 44rem;
+}
+.eval-bidder-doc-subtypes {
+  margin: .25rem 0 0 1.25rem;
+  max-width: 44rem;
+}
+.eval-bidder-doc-subtypes .tender-role-checkboxes {
+  max-width: none;
 }
 .tender-role-check {
   display: flex;

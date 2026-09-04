@@ -7,7 +7,7 @@ import io
 import json
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from backend.app.jinja_env import templates
 
 from src.m07_projects import list_projects_df
@@ -109,6 +109,13 @@ def _username(request: Request) -> str:
     if validate_session_token(token, max_age_seconds=s.auth_session_timeout_minutes * 60):
         return session_username(token) or ""
     return ""
+
+
+def _htmx_or_redirect(request: Request, url: str, *, status: int = 303) -> Response:
+    """HTMX-Requests ohne Full-Page-Reload (Scroll-Position bleibt)."""
+    if request.headers.get("HX-Request"):
+        return Response(status_code=204)
+    return RedirectResponse(url=url, status_code=status)
 
 
 def _projects_list() -> list[dict]:
@@ -751,11 +758,10 @@ async def evaluation_bidder_doc_subtypes(
     try:
         set_bidder_doc_subtypes(bidder_id, document_id, doc_subtypes)
     except ValueError:
-        return RedirectResponse(
-            url=f"/evaluation?project_key={project_key}&doc_subtype=error",
-            status_code=303,
+        return _htmx_or_redirect(
+            request, f"/evaluation?project_key={project_key}&doc_subtype=error",
         )
-    return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
+    return _htmx_or_redirect(request, f"/evaluation?project_key={project_key}")
 
 
 @router.post("/evaluation/bidder-doc", response_class=HTMLResponse)
@@ -772,7 +778,7 @@ async def evaluation_bidder_doc(
         link_document_to_bidder(bidder_id, document_id)
     else:
         unlink_document_from_bidder(bidder_id, document_id)
-    return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
+    return _htmx_or_redirect(request, f"/evaluation?project_key={project_key}")
 
 
 @router.post("/evaluation/bidder-doc-upload", response_class=HTMLResponse)

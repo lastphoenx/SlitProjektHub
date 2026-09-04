@@ -433,7 +433,7 @@
     <button type="submit" class="btn btn-primary">Bieter anlegen</button>
   </form>
   {% for b in bidders %}
-  <div class="eval-bidder-block">
+  <div class="eval-bidder-block" id="bidder-{{ b.id }}">
     <strong>{{ b.name }}</strong>
   <form method="post" action="/evaluation/delete-bidder" style="display:inline;margin-left:.5rem">
     <input type="hidden" name="project_key" value="{{ project_key }}" />
@@ -441,18 +441,24 @@
     <button type="submit" class="btn btn-danger btn-sm">Entfernen</button>
   </form>
   <a class="btn btn-secondary btn-sm" style="margin-left:.5rem" href="/evaluation/price?project_key={{ project_key }}&bidder_id={{ b.id }}">Preisblatt</a>
-    <form method="post" action="/evaluation/bidder-doc-upload" enctype="multipart/form-data"
-          style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:end;margin-top:.5rem">
+    <form method="post" action="/evaluation/bidder-doc-upload" enctype="multipart/form-data" class="bidder-upload-form">
       <input type="hidden" name="project_key" value="{{ project_key }}" />
       <input type="hidden" name="bidder_id" value="{{ b.id }}" />
-      <div>
-        <label class="form-label" style="font-size:.72rem">Dokument hochladen</label>
-        <input class="form-input" type="file" name="file" required
-               accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx,.xls" />
+      <div class="bidder-upload-row">
+        <div>
+          <label class="form-label" style="font-size:.72rem">Dokument hochladen</label>
+          <input class="form-input" type="file" name="file" required
+                 accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx,.xls" />
+        </div>
+        <div>
+          <label class="form-label" style="font-size:.72rem">Chunk-Grösse</label>
+          <input class="form-input" type="number" name="chunk_size" value="1000" min="0" max="4000" step="100" style="width:6.5rem" />
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Hochladen</button>
       </div>
-      <div>
+      <div class="bidder-subtype-panel">
         <label class="form-label" style="font-size:.72rem">Inhaltsarten (optional, Mehrfach)</label>
-        <div class="tender-role-checkboxes" style="max-width:28rem">
+        <div class="tender-role-checkboxes bidder-subtype-checkboxes">
           {% for st in angebot_subtypes %}
           <label class="tender-role-check" title="{{ st }}">
             <input type="checkbox" name="doc_subtypes" value="{{ st }}" />
@@ -461,11 +467,6 @@
           {% endfor %}
         </div>
       </div>
-      <div>
-        <label class="form-label" style="font-size:.72rem">Chunk-Grösse</label>
-        <input class="form-input" type="number" name="chunk_size" value="1000" min="0" max="4000" step="100" style="width:6.5rem" />
-      </div>
-      <button type="submit" class="btn btn-primary btn-sm">Hochladen</button>
     </form>
     {% if offer_docs %}
     <div style="margin-top:.5rem;font-size:.85rem">
@@ -474,30 +475,32 @@
       {% set linked = doc.id in bidder_docs.get(b.id, []) %}
       {% set doc_st = bidder_doc_subtypes.get(b.id, {}).get(doc.id, []) %}
       <div style="margin:.5rem 0;padding:.35rem 0;border-bottom:1px solid var(--color-border)">
-        <label style="display:block;margin:.15rem 0">
-          <input type="checkbox"
-            onchange="const f=document.getElementById('doc-{{ b.id }}-{{ doc.id }}'); f.querySelector('[name=linked]').value=this.checked?'true':'false'; f.submit();"
-            {% if linked %}checked{% endif %} />
-          <strong style="font-size:.8rem">{{ doc.filename }}</strong>
-          {% if doc.doc_subtype and not doc_st %}<span class="text-muted">({{ doc.doc_subtype }})</span>{% endif %}
-        </label>
-        <form id="doc-{{ b.id }}-{{ doc.id }}" method="post" action="/evaluation/bidder-doc" style="display:none">
+        <form id="doc-link-{{ b.id }}-{{ doc.id }}" method="post" action="/evaluation/bidder-doc" class="bidder-doc-link-form">
           <input type="hidden" name="project_key" value="{{ project_key }}" />
           <input type="hidden" name="bidder_id" value="{{ b.id }}" />
           <input type="hidden" name="document_id" value="{{ doc.id }}" />
-          <input type="hidden" name="linked" value="{% if linked %}true{% else %}false{% endif %}" />
+          <input type="hidden" name="linked" class="bidder-doc-linked-val" value="{% if linked %}true{% else %}false{% endif %}" />
+          <label style="display:block;margin:.15rem 0">
+            <input type="checkbox" class="bidder-doc-link-cb" {% if linked %}checked{% endif %}
+              onchange="this.form.querySelector('.bidder-doc-linked-val').value=this.checked?'true':'false'; this.form.requestSubmit();" />
+            <strong style="font-size:.8rem">{{ doc.filename }}</strong>
+            {% if doc.doc_subtype and not doc_st %}<span class="text-muted">({{ doc.doc_subtype }})</span>{% endif %}
+          </label>
         </form>
         {% if linked %}
-        <form method="post" action="/evaluation/bidder-doc-subtypes" class="tender-role-form" style="margin:.25rem 0 0 1.25rem">
+        <form method="post" action="/evaluation/bidder-doc-subtypes"
+              class="eval-bidder-doc-subtypes"
+              hx-post="/evaluation/bidder-doc-subtypes"
+              hx-trigger="change delay:150ms from:input[type=checkbox]"
+              hx-swap="none">
           <input type="hidden" name="project_key" value="{{ project_key }}" />
           <input type="hidden" name="bidder_id" value="{{ b.id }}" />
           <input type="hidden" name="document_id" value="{{ doc.id }}" />
-          <div class="tender-role-checkboxes">
+          <div class="tender-role-checkboxes bidder-subtype-checkboxes">
             {% for st in angebot_subtypes %}
             <label class="tender-role-check" title="{{ st }}">
               <input type="checkbox" name="doc_subtypes" value="{{ st }}"
-                {% if st in doc_st %}checked{% endif %}
-                onchange="this.form.submit()" />
+                {% if st in doc_st %}checked{% endif %} />
               <span>{{ st }}</span>
             </label>
             {% endfor %}
@@ -678,5 +681,33 @@ function toggleCritFields() {
   if (phaseField) phaseField.style.display = isEignung ? 'none' : '';
 }
 toggleCritFields();
+
+(function() {
+  const KEY = 'evalScrollY';
+  const ANCHOR = 'evalScrollAnchor';
+  document.querySelectorAll('.bidder-doc-link-form').forEach(function(f) {
+    f.addEventListener('submit', function() {
+      sessionStorage.setItem(KEY, String(window.scrollY));
+      const block = f.closest('.eval-bidder-block');
+      if (block && block.id) sessionStorage.setItem(ANCHOR, block.id);
+    });
+  });
+  const y = sessionStorage.getItem(KEY);
+  if (y !== null) {
+    sessionStorage.removeItem(KEY);
+    const aid = sessionStorage.getItem(ANCHOR);
+    sessionStorage.removeItem(ANCHOR);
+    requestAnimationFrame(function() {
+      if (aid) {
+        const el = document.getElementById(aid);
+        if (el) {
+          el.scrollIntoView({ block: 'nearest' });
+          return;
+        }
+      }
+      window.scrollTo(0, parseInt(y, 10) || 0);
+    });
+  }
+})();
 </script>
 {% endblock %}
