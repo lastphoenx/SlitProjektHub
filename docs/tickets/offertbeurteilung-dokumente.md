@@ -287,4 +287,22 @@ F01-Leak-Filter, `auto_price` ohne Unterfragen.
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~19~~ → ~~20~~
+## Ticket 22 — Gap-Fill fehlender Fragenzeilen ✅ erledigt (`3301d5e`)
+
+Lücken in Nummernfolge deterministisch aus RAG-Kontext (generisch F/T/EK).
+
+---
+
+## Ticket 23 — Abzugsbegründung Beleg + Konsistenz ✅ erledigt
+
+KI-Vorschlag: Prompt Anti-Selbstwiderspruch, `_suggestion_deduction_grounding_issues()`, Retry + LLM-Check, UI-Warnung.
+
+---
+
+## Ticket 24 — Eignungs-Unterfragen EK1-01… ✅ erledigt
+
+Schritt 2 extrahiert Fragenkatalog-Kinder unter EK1/EK2/EK3 analog Zuschlag (Ref `EK1-01`).
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~24~~
