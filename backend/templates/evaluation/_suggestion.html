@@ -49,16 +49,32 @@
       <input type="hidden" name="source_chunk_ref" value="{{ suggestion.source_chunk_ref or '' }}" />
       <button type="submit" class="btn btn-secondary btn-sm">Nur als KI-Vorschlag speichern</button>
     </form>
-    <form method="post" action="/evaluation/score" hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML">
-      <input type="hidden" name="project_key" value="{{ project_key }}" />
-      <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
-      <input type="hidden" name="criterion_id" value="{{ criterion_id }}" />
-      <input type="hidden" name="value" value="{{ suggestion.value }}" />
-      <input type="hidden" name="justification" value="{{ suggestion.justification or '' }}" />
-      <input type="hidden" name="source_chunk_ref" value="{{ suggestion.source_chunk_ref or '' }}" />
-      <button type="submit" class="btn btn-primary btn-sm">Als meine Bewertung übernehmen</button>
-    </form>
   </div>
+
+  <form method="post" action="/evaluation/score" hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML"
+        style="margin-top:.75rem;padding-top:.65rem;border-top:1px solid var(--color-border);display:grid;gap:.45rem">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+    <input type="hidden" name="criterion_id" value="{{ criterion_id }}" />
+    <input type="hidden" name="value" value="{{ suggestion.value }}" />
+    <input type="hidden" name="ai_reference_justification" value="{{ suggestion.justification or '' }}" />
+
+    <p class="eval-ki-suggestion-label" style="margin:0">Als meine Bewertung übernehmen</p>
+    <p class="text-muted" style="font-size:.72rem;margin:0">
+      Begründung lesen und anpassen — wird unter Ihrem Namen gespeichert
+      {% if adopt_requires_justification %}(Pflicht bei Punktabzug){% endif %}.
+    </p>
+    <label class="form-label" for="adopt-justification-{{ criterion_id }}">Ihre Begründung</label>
+    <textarea class="form-input" id="adopt-justification-{{ criterion_id }}" name="justification" rows="5"
+              {% if adopt_requires_justification %}required{% endif %}>{{ suggestion.justification or '' }}</textarea>
+    <label class="form-label" for="adopt-source-{{ criterion_id }}">Zitat/Quelle aus dem Angebot</label>
+    <textarea class="form-input" id="adopt-source-{{ criterion_id }}" name="source_chunk_ref" rows="2"
+              placeholder="Optional — aus KI-Vorschlag übernommen, editierbar">{{ suggestion.source_chunk_ref or '' }}</textarea>
+    <div>
+      <button type="submit" class="btn btn-primary btn-sm">Als meine Bewertung speichern</button>
+    </div>
+  </form>
+
   <p class="text-muted" style="font-size:.75rem;margin-top:.4rem">«Nur als KI-Vorschlag» bleibt als eigene Spalte sichtbar, ohne dir zugeschrieben zu sein. «Als meine Bewertung» zählt in deinen Ø-Wert.</p>
   {% else %}
   <p class="text-muted">Kein Vorschlag — bitte manuell bewerten.</p>

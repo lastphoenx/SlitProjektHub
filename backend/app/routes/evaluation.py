@@ -96,6 +96,7 @@ from src.m15_evaluation import (
     validate_criterion_change_during_evaluation,
     validate_criteria_manage_save,
     validate_tender_cloud_gate,
+    validate_user_score_not_blind_ai_copy,
 )
 from src.m01_config import load_user_settings
 
@@ -486,6 +487,7 @@ async def evaluation_save_score(
     value: float = Form(...),
     justification: str = Form(""),
     source_chunk_ref: str = Form(""),
+    ai_reference_justification: str = Form(""),
     target_user_id: str = Form(""),
 ):
     who = _username(request)
@@ -494,6 +496,13 @@ async def evaluation_save_score(
     uid = get_user_id(who)
     if not uid:
         raise HTTPException(401, "Nicht angemeldet")
+    from src.m15_evaluation import Criterion
+    from src.m03_db import get_session
+
+    with get_session() as session:
+        crit = session.get(Criterion, criterion_id)
+    if not crit:
+        raise HTTPException(404, "Kriterium nicht gefunden")
     # Standard: eigene Zeile. Nur Super-User darf eine fremde (target_user_id) korrigieren.
     write_uid = uid
     if target_user_id.strip():
@@ -501,6 +510,14 @@ async def evaluation_save_score(
             raise HTTPException(403, "Nur Super-User dürfen fremde Bewertungen ändern")
         write_uid = int(target_user_id)
     try:
+        validate_user_score_not_blind_ai_copy(
+            bidder_id,
+            criterion_id,
+            crit,
+            value,
+            justification,
+            ai_reference_justification=ai_reference_justification or None,
+        )
         upsert_score(
             bidder_id,
             criterion_id,
@@ -699,6 +716,11 @@ async def evaluation_suggest(
         model=am or None,
     )
     tpl_ctx["suggestion"] = suggestion
+    tpl_ctx["criterion"] = crit
+    tpl_ctx["adopt_requires_justification"] = (
+        suggestion.get("value") is not None
+        and score_requires_justification(crit, float(suggestion["value"]))
+    )
     tpl_ctx["gate_error"] = None
     return templates.TemplateResponse("evaluation/_suggestion.html", tpl_ctx)
 

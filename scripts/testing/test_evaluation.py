@@ -725,6 +725,29 @@ def test_score_justification_required():
         raise AssertionError("expected ValueError")
 
 
+def test_user_score_rejects_blind_ai_copy():
+    from types import SimpleNamespace
+    from src.m15_evaluation import validate_user_score_not_blind_ai_copy
+
+    crit = SimpleNamespace(kind="zuschlag", scale_max=10, name="F01-001")
+    ai_text = "Positiv: gut.\n\nAbzüge (2 P. unter Max. 10): fehlt X."
+    try:
+        validate_user_score_not_blind_ai_copy(
+            1, 2, crit, 8.0, ai_text, ai_reference_justification=ai_text,
+        )
+    except ValueError as exc:
+        assert "identisch mit dem KI-Vorschlag" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+    validate_user_score_not_blind_ai_copy(
+        1, 2, crit, 8.0, ai_text + " Ergänzt durch Bewerter.",
+        ai_reference_justification=ai_text,
+    )
+    validate_user_score_not_blind_ai_copy(
+        1, 2, crit, 10.0, ai_text, ai_reference_justification=ai_text,
+    )
+
+
 def test_sync_price_criterion_scores_reciprocal_gate():
     engine, evaluator_id = _setup_db()
     project_key = "p-price"
@@ -1317,6 +1340,7 @@ if __name__ == "__main__":
     test_enrichment_ref_diag()
     test_ki_busy_hint()
     test_score_justification_required()
+    test_user_score_rejects_blind_ai_copy()
     test_sync_price_criterion_scores_reciprocal_gate()
     test_build_evaluation_export_includes_justifications()
     test_bidder_doc_subtypes_multi()
