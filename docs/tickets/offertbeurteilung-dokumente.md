@@ -305,4 +305,86 @@ Schritt 2 extrahiert Fragenkatalog-Kinder unter EK1/EK2/EK3 analog Zuschlag (Ref
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~24~~
+## Ticket 25 — Kriterien-Dedup auf `referenz` statt `name` + Konstanten-Tippfehler bereinigen
+
+**Ziel:** Zwei kleine, risikoarme Korrekturen ohne Verhaltensänderung für Endnutzer.
+
+**a) Dedup-Fix:**
+- **Problem:** `import_criteria_payload()` (`m15_evaluation.py:2612`) erkennt bestehende Kriterien
+  aktuell über exakten String-Vergleich auf `name` (Z. 2630, 2660). Da die KI-Extraktion
+  (`extract_criteria_from_tender_docs()`) bei wiederholten Läufen leicht abweichende
+  Formulierungen desselben Kriteriums erzeugen kann, entstehen Dubletten, obwohl der stabile
+  Schlüssel `referenz` (z. B. `F01-001`, seit Ticket 19 durchgängig gepflegt) bereits vorhanden
+  und identisch ist.
+- **Aufgabe:** Dedup-Lookup in `import_criteria_payload()` primär über `Criterion.referenz`
+  (+ `parent_id`/Top-Level-Zuordnung) statt über `name` durchführen. `name`-Vergleich nur noch
+  als Fallback für Kriterien ohne `referenz` (Altbestand vor Ticket 19, falls vorhanden).
+- **Akzeptanzkriterium:** Wiederholte KI-Extraktion mit leicht geänderter Formulierung, aber
+  gleicher `referenz`, erzeugt keine Dublette mehr. Bestehende Projekte ohne `referenz` auf
+  allen Kriterien verhalten sich unverändert (Fallback greift).
+
+**b) Tippfehler-Konstanten:**
+- **Problem:** Die Konstanten `ANGEbot_CLASSIFICATION` / `ANGEbot_SUBTYPES`
+  (`m15_evaluation.py:24`, Ticket-2-Doku oben Z. 37-39/78-79) haben eine inkonsistente
+  Groß-/Kleinschreibung, die sich durchs Modul zieht.
+- **Aufgabe:** Umbenennen zu `ANGEBOT_CLASSIFICATION` / `ANGEBOT_SUBTYPES`, alle Referenzen
+  projektweit anpassen (IDE-Rename reicht, keine funktionale Änderung).
+- **Akzeptanzkriterium:** Kein Verhaltensunterschied; bestehende Tests
+  (`scripts/testing/test_evaluation.py`) laufen unverändert grün.
+
+**Risiko:** niedrig. Beide Punkte sind mechanisch, ohne DB-Migration, ohne UI-Änderung.
+
+---
+
+## Ticket 26 — Referenz-Präfixe & Erfüllungsgrad-Skala projektspezifisch konfigurierbar
+
+**Kontext:** Bevor dieses Ticket begonnen wird, aktuellen Stand der bereits generischen
+Gap-Fill-Logik (Ticket 22: "generisch F/T/EK") gegen die unten genannten Stellen verifizieren —
+Zeilennummern können sich seither verschoben haben.
+
+**Ziel:** Neue Ausschreibungsprojekte mit abweichendem Referenzschema (andere Präfixe als
+`EK`/`F`/`R`/`S`/`T`) oder abweichender Erfüllungsgrad-Skala (andere Punktebänder/-texte als
+0/1-3/4-6/7-9/10) sollen **ohne Code-Änderung**, nur über Projekt-Konfiguration, funktionieren.
+
+**Aktueller Stand (zu verifizieren):**
+- Referenz-Präfixe sind an mehreren Stellen implizit oder explizit auf ein festes Set
+  eingeschränkt: `_criterion_ref_prefix()`-artige Helfer sowie die `role_queries` in
+  `extract_criteria_from_tender_docs()` (ursprünglich um Z. 3676-3688) nennen `EK`/`F`/`R`/`S`/`T`
+  explizit im Prompt-Text.
+- `Criterion.scale_max` ist bereits pro Kriterium konfigurierbar (Zahl), aber die
+  **qualitativen Bandbeschreibungen** (z. B. "10 = vollständig, plausibel, mit Nachweisen
+  erfüllt"; "0 = nicht erfüllt oder keine Antwort") existieren nirgends als Datensatz — sie
+  müssten aktuell pro Bewertungs-Prompt neu formuliert bzw. sind implizit im Prompt-Text
+  verdrahtet.
+
+**Aufgabe:**
+1. Neues Konfigurationsfeld an `EvaluationProjectConfig` (nicht neue Tabelle, sofern
+   projektweit genügt): `ref_prefixes: list[str]` (Default: aktuelle Liste `EK, F, R, S, T`,
+   damit bestehende Projekte unverändert funktionieren) und `scale_bands: list[dict]`
+   (`{min, max, label}`, Default = heutige Unisport-Bänder aus dem Erfüllungsgrad-Screenshot).
+2. Alle Stellen, die Präfixe hartcodiert im Prompt-Text oder in Regex nennen (Audit nötig,
+   mindestens die oben genannten), auf `project_config.ref_prefixes` umstellen.
+3. Bewertungs-Prompt in `suggest_score_with_rag()` baut die Skalen-Beschreibung aus
+   `project_config.scale_bands` statt (falls aktuell so) fest im Prompt-Text zu stehen.
+4. **UI:** Neuer Abschnitt in den Projekt-Einstellungen (dort, wo bereits
+   `vorgaben_ki_*`/`bewertung_ki_*` konfiguriert werden, Ticket 4) zum Bearbeiten von
+   `ref_prefixes` und `scale_bands` — einfache Listen-Editoren, kein Freitext-Template-Sprache.
+5. **Kein** neues generisches "Template"-Objekt mit eigenen `role_queries` etc. in diesem
+   Ticket — die KI-Extraktions-Pässe bleiben vorerst wie sie sind, nur die Präfix-Liste und
+   Skala werden aus der Projekt-Config gelesen. Ein größerer Umbau (auswählbare
+   Extraktions-Templates) ist ein separates Folge-Ticket, falls sich in der Praxis zeigt, dass
+   auch die RAG-Extraktionsfragen selbst pro Ausschreibungsart variieren müssen.
+
+**Akzeptanzkriterien:**
+- Bestehende Projekte (Default-Config) verhalten sich exakt wie heute — keine Breaking Changes.
+- Neues Testprojekt mit z. B. Präfix `A`/`B` statt `EK`/`F` kann Kriterien mit diesem Schema
+  anlegen/extrahieren, ohne dass Code geändert werden muss.
+- Neues Testprojekt mit 3-stufiger statt 5-stufiger Skala liefert Bewertungsvorschläge, die sich
+  auf die konfigurierten Bänder beziehen (nicht auf die Unisport-Standardtexte).
+
+**Risiko:** mittel. Betrifft den zentralen Bewertungsprompt — nach Umbau unbedingt Regressionstest
+mit bestehendem Unisport-Referenzprojekt (Ticket-Historie oben) fahren, bevor produktiv genutzt.
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~24~~ → 25 → 26
