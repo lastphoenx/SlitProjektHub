@@ -387,4 +387,60 @@ mit bestehendem Unisport-Referenzprojekt (Ticket-Historie oben) fahren, bevor pr
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~24~~ → 25 → 26
+## Ticket 27 — Kapitel-/Seiten-Kontext am Chunk verankern (Parent-Child-Chunking light)
+
+**Ziel:** Wenn ein RAG-Treffer einem Bewertungskriterium zugeordnet wird, soll nicht nur das
+1000-Zeichen-Fenster, sondern der zugehörige Abschnitt/das Kapitel als Kontext verfügbar sein —
+und die Quellenangabe soll "Seite X, Kapitel Y" nennen können statt nur Dateiname + Score.
+
+**Aktueller Stand:**
+- `chunk_text()` (`src/m09_docs.py:294`) chunked rein zeichenbasiert (1000 Zeichen, 20 % Overlap,
+  "smart cut" an Satzende) — ohne Bezug zu Kapitel- oder Seitengrenzen.
+- `chunk_meta_prefix()` (`src/m09_docs.py:553`) stellt nur `[{classification} · {doc_subtype} |
+  {filename}]` voran — keine Kapitel- oder Seiteninformation.
+- `DocumentChunk` (`src/m03_db.py:158-171`) hat kein Feld für Seitenzahl oder Abschnittspfad;
+  einziger Positionshinweis ist `chunk_index` (fortlaufende Nummer, kein struktureller Bezug).
+- Für das Pflichtenheft nutzt ihr an anderer Stelle bereits Kapitelüberschriften mit Muster
+  `(Anforderung F02)` zur Parent-Zuordnung (siehe Kriterien-Extraktion) — dieses Muster
+  existiert für Bieter-Dokumente (Grobkonzept, Lösungsvorschlag) nicht, weil deren Gliederung
+  frei ist.
+
+**Aufgabe (bewusst additiv, kein Chunking-Rewrite):**
+1. Neue nullable Felder an `DocumentChunk`: `page_number: Optional[int]`,
+   `section_path: Optional[str]` (z. B. `"4.2 Systemarchitektur"` oder DOCX-Überschriftenpfad).
+   Migration additiv, bestehende Chunks bleiben mit `NULL` gültig — kein Zwangs-Reingest.
+2. Bei der Extraktion (`extract_pdf_text_with_fallback`, `m09_docs.py:231`, bzw. DOCX-Pfad)
+   Seitenumbrüche und Überschriften mitprotokollieren, wo die Quelle das hergibt:
+   - PDF: Seitenzahl aus der Extraktionsbibliothek ohnehin bekannt (Seite-für-Seite-Verarbeitung)
+     — beim Chunking durchreichen statt zu verwerfen.
+   - DOCX: `paragraph.style.name` (`Heading 1/2/3`) als Abschnittspfad mitführen.
+   - Numerierte Überschriften per Regex (`^\d+(\.\d+)*\s+\S`) als Fallback, wenn keine
+     native Formatierung vorliegt (deckt Freitext-Konzepte mit nummerierten Kapiteln ab).
+   - Wenn nichts erkennbar ist: `section_path`/`page_number` bleiben `NULL` — kein Hard-Fail,
+     das Dokument wird trotzdem normal gechunkt wie heute.
+3. `chunk_meta_prefix()` um `section_path`/`page_number` ergänzen, wenn vorhanden, z. B.
+   `[Angebot (Bieter) · Grobkonzept | Datei.docx | Kap. 4.2 | S. 12]`.
+4. In `suggest_score_with_rag()` (`m15_evaluation.py:2378`): wenn ein Chunk-Treffer
+   `section_path` gesetzt hat, optional die Nachbar-Chunks mit demselben `section_path`
+   nachladen und als erweiterten Kontext mitgeben (einfacher Parent-Child-Ersatz ohne eigenes
+   Hierarchie-Modell) — Cap einziehen (z. B. max. 3 zusätzliche Chunks), damit der Prompt nicht
+   unkontrolliert wächst.
+5. Zitat in der Bewertungsausgabe um Seite/Kapitel ergänzen, wo vorhanden (UI + Export),
+   Fallback auf heutiges Verhalten (nur Dateiname) wenn `NULL`.
+
+**Akzeptanzkriterien:**
+- Bestehende Dokumente/Chunks ohne `section_path`/`page_number` funktionieren unverändert
+  (kein Pflicht-Reingest, keine Breaking Changes an Retrieval oder Bewertung).
+- Neu eingelesenes Bieter-Dokument mit erkennbarer Gliederung liefert bei einem RAG-Treffer
+  zusätzlich Kapitel-/Seitenangabe im Bewertungsvorschlag.
+- Prompt-Länge bei aktivem Nachbar-Chunk-Nachladen bleibt innerhalb des bisherigen
+  Token-Budgets (Cap greift nachweislich in Tests).
+
+**Risiko:** mittel — Extraktionslogik wird an mehreren Stellen berührt (PDF/DOCX/CSV-Pfade).
+Empfehlung: zuerst nur PDF-Seitenzahlen (kleinster Umfang, größter Nutzen für Zitate), DOCX-
+Heading-Pfade und Nachbar-Chunk-Nachladen als zweiten Schritt, nach Regressionstest mit dem
+Unisport-Referenzprojekt.
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~24~~ → 25 → 26 → 27
