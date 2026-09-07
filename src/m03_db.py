@@ -165,6 +165,8 @@ class DocumentChunk(SQLModel, table=True):
     embedding_model: Optional[str] = None
     tokens_count: Optional[int] = None
     retrieval_keywords: Optional[str] = None  # JSON-Array: LLM-generierte Suchbegriffe für BM25
+    page_number: Optional[int] = Field(default=None, sa_column=Column(Integer))
+    section_path: Optional[str] = Field(default=None, sa_column=Column(String(200)))
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False, index=True)
@@ -410,6 +412,12 @@ def migrate_db() -> None:
                 conn.execute(text("ALTER TABLE document ADD COLUMN linked_role_keys TEXT;"))
             if not _column_exists("document", "doc_subtype"):
                 conn.execute(text("ALTER TABLE document ADD COLUMN doc_subtype VARCHAR(80);"))
+
+        if _column_exists("document_chunk", "document_id"):
+            if not _column_exists("document_chunk", "page_number"):
+                conn.execute(text("ALTER TABLE document_chunk ADD COLUMN page_number INTEGER;"))
+            if not _column_exists("document_chunk", "section_path"):
+                conn.execute(text("ALTER TABLE document_chunk ADD COLUMN section_path VARCHAR(200);"))
 
         # DocumentChunk table
         if not _column_exists("document_chunk", "document_id"):

@@ -205,6 +205,19 @@
                value="{{ eval_config.rag_chunks_extraction }}" style="width:6rem"
                title="Schritt 1: wie viele Vorgaben-Chunks ans LLM (Standard 36)" />
       </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Referenz-Präfixe (kommagetrennt)</label>
+        <input class="form-input" name="ref_prefixes"
+               value="{{ eval_config.ref_prefixes|join(', ') }}"
+               placeholder="EK, F, R, S, T"
+               title="Für KI-Extraktion und Referenz-Parsing — Default Unisport" />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Erfüllungsgrad-Bänder (JSON)</label>
+        <textarea class="form-input" name="scale_bands_json" rows="5"
+                  style="font-family:monospace;font-size:.72rem"
+                  title="Liste {min, max, label} — für KI-Bewertungsvorschläge">{{ eval_config.scale_bands | tojson }}</textarea>
+      </div>
       {% set form_id = 'vorgaben-config' %}
       {% set picker_title = 'KI-Default für Kriterien- & Preisblatt-KI (②③)' %}
       {% set picker_hint = 'Startwert für Kriterien-Extraktion und Preisblatt-KI. Leer = globale KI-Einstellungen. Pro Lauf im Picker änderbar.' %}

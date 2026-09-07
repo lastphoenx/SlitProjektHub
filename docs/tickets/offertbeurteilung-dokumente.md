@@ -305,4 +305,25 @@ Schritt 2 extrahiert Fragenkatalog-Kinder unter EK1/EK2/EK3 analog Zuschlag (Ref
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~24~~
+## Ticket 25 — Kriterien-Dedup auf `referenz` + Konstanten ✅ erledigt
+
+- `import_criteria_payload()`: Dedup primär über `Criterion.referenz` (+ `parent_id`), Name nur Fallback.
+- `ANGEbot_*` → `ANGEBOT_CLASSIFICATION` / `ANGEBOT_SUBTYPES`.
+
+---
+
+## Ticket 26 — Referenz-Präfixe & Skala projektspezifisch ✅ erledigt
+
+- `EvaluationProjectConfig`: `ref_prefixes_json`, `scale_bands_json` (Defaults Unisport).
+- KI-Extraktion + Bewertungs-Prompt lesen Projekt-Config; UI in Projekt-Einstellungen.
+
+---
+
+## Ticket 27 — Kapitel/Seite am Chunk ✅ erledigt
+
+- `DocumentChunk.page_number`, `section_path`; PDF/DOCX-Ingest; Prefix im Chunk.
+- `suggest_score_with_rag`: Nachbar-Chunks gleicher Section (Cap 3); Zitat mit S./Kap.
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~27~~

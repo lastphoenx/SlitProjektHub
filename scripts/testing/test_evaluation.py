@@ -1341,6 +1341,113 @@ def test_compute_price_reciprocal():
     assert compute_price_criterion_value(10, 120_000, 200_000) == 6.0
 
 
+def test_import_criteria_dedup_by_referenz():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+    ev.migrate_evaluation_db()
+
+    parent = create_criterion("p-dedup", "zuschlag", "F-01 Bereich", referenz="F01")
+    create_criterion(
+        "p-dedup", "zuschlag", "Altes Label F01-001",
+        referenz="F01-001", parent_id=parent.id,
+    )
+    stats = import_criteria_payload(
+        "p-dedup",
+        {
+            "zuschlag": [{
+                "name": "F-01 Bereich neu formuliert",
+                "requirement_ref": "F01",
+                "children": [{
+                    "name": "Neue Formulierung Zeile 1",
+                    "requirement_ref": "F01-001",
+                    "description": "Text",
+                }],
+            }]
+        },
+    )
+    assert stats["skipped"] >= 2
+    assert stats["created"] == 0
+    names = [c.name for c in list_criteria("p-dedup")]
+    assert names.count("Neue Formulierung Zeile 1") == 0
+    assert "Altes Label F01-001" in names
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_ref_prefixes_and_scale_bands_config():
+    from src.m15_evaluation import (
+        DEFAULT_REF_PREFIXES,
+        format_ref_prefixes_prompt,
+        format_scale_bands_prompt,
+        get_evaluation_config,
+        normalize_ref_prefixes,
+        normalize_scale_bands,
+        save_evaluation_config,
+        _normalize_requirement_ref,
+    )
+
+    assert normalize_ref_prefixes(["a", "B", "A"]) == ["A", "B"]
+    assert _normalize_requirement_ref("A01", ["A", "B"]) == "A01"
+    assert _normalize_requirement_ref("F01", DEFAULT_REF_PREFIXES) == "F01"
+    bands = normalize_scale_bands([
+        {"min": 0, "max": 0, "label": "nein"},
+        {"min": 1, "max": 3, "label": "teilweise"},
+    ])
+    prompt = format_scale_bands_prompt(bands, 3)
+    assert "0:" in prompt
+    assert "1–3:" in prompt
+    assert "Mehrbuchstabig" in format_ref_prefixes_prompt(["EK", "F"])
+
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+    ev.migrate_evaluation_db()
+    save_evaluation_config("p-cfg26", ref_prefixes=["A", "B"], scale_bands=bands)
+    cfg = get_evaluation_config("p-cfg26")
+    assert cfg["ref_prefixes"] == ["A", "B"]
+    assert len(cfg["scale_bands"]) == 2
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_chunk_meta_prefix_with_location():
+    from src.m09_docs import chunk_meta_prefix
+
+    p = chunk_meta_prefix(
+        "Angebot (Bieter)", "konzept.pdf", "Grobkonzept",
+        section_path="4.2 Architektur", page_number=12,
+    )
+    assert "Kap. 4.2 Architektur" in p
+    assert "S. 12" in p
+    assert "konzept.pdf" in p
+
+
+def test_section_neighbor_chunks_cap():
+    from src.m15_evaluation import SECTION_NEIGHBOR_CHUNK_CAP, _section_neighbor_chunks
+
+    base = [{
+        "chunk_id": 1,
+        "document_id": 5,
+        "section_path": "4.2",
+        "filename": "x.pdf",
+        "text": "a",
+    }]
+    extras = _section_neighbor_chunks(base, cap=SECTION_NEIGHBOR_CHUNK_CAP)
+    assert len(extras) <= SECTION_NEIGHBOR_CHUNK_CAP
+
+
 if __name__ == "__main__":
     test_create_bidder_and_criterion()
     test_ranking_ko_and_weighted_sum()
@@ -1384,4 +1491,8 @@ if __name__ == "__main__":
     test_evaluation_config_extraction_roundtrip()
     test_criteria_editor_payload_and_save()
     test_compute_price_reciprocal()
+    test_import_criteria_dedup_by_referenz()
+    test_ref_prefixes_and_scale_bands_config()
+    test_chunk_meta_prefix_with_location()
+    test_section_neighbor_chunks_cap()
     print("OK")

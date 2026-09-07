@@ -29,8 +29,8 @@ _CRITERIA_PREVIEW_CACHE: dict[str, dict[str, Any]] = {}
 _CRITERIA_PREVIEW_TTL_SEC = 3600
 
 CRITERION_KINDS = ("eignung", "zuschlag")
-ANGEbot_CLASSIFICATION = "Angebot (Bieter)"
-ANGEbot_SUBTYPES = (
+ANGEBOT_CLASSIFICATION = "Angebot (Bieter)"
+ANGEBOT_SUBTYPES = (
     "Preisblatt",
     "Bilanz/Erfolgsrechnung",
     "Referenzprojektblatt",
@@ -43,6 +43,16 @@ ANGEbot_SUBTYPES = (
     "Vorstellung Lieferantin",
     "Sonstiges",
 )
+
+DEFAULT_REF_PREFIXES = ["EK", "F", "R", "S", "T"]
+DEFAULT_SCALE_BANDS: list[dict[str, Any]] = [
+    {"min": 0, "max": 0, "label": "0 = nicht erfüllt oder keine Antwort"},
+    {"min": 1, "max": 3, "label": "1–3 = kaum oder unzureichend erfüllt"},
+    {"min": 4, "max": 6, "label": "4–6 = teilweise erfüllt, deutliche Lücken"},
+    {"min": 7, "max": 9, "label": "7–9 = weitgehend erfüllt, kleine Abzüge möglich"},
+    {"min": 10, "max": 10, "label": "10 = vollständig, plausibel, mit Nachweisen erfüllt"},
+]
+SECTION_NEIGHBOR_CHUNK_CAP = 3
 
 # Rolle in der Offertbeurteilung (zusätzlich zur globalen DOCUMENT_CLASSIFICATION)
 TENDER_ROLES = (
@@ -139,6 +149,14 @@ class EvaluationProjectConfig(SQLModel, table=True):
     # Default KI für Phase ④ Matrix-Bewertungsvorschlag (ein LLM-Call — nur Output-Rolle)
     bewertung_ki_provider: Optional[str] = Field(default=None, sa_column=Column(String(40)))
     bewertung_ki_model: Optional[str] = Field(default=None, sa_column=Column(String(80)))
+    ref_prefixes_json: str = Field(
+        default=json.dumps(DEFAULT_REF_PREFIXES),
+        sa_column=Column(String(120), nullable=False),
+    )
+    scale_bands_json: str = Field(
+        default=json.dumps(DEFAULT_SCALE_BANDS, ensure_ascii=False),
+        sa_column=Column(String, nullable=False),
+    )
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -1113,7 +1131,7 @@ def set_bidder_doc_subtypes(
     wanted = {
         (s or "").strip()
         for s in subtypes
-        if (s or "").strip() in ANGEbot_SUBTYPES
+        if (s or "").strip() in ANGEBOT_SUBTYPES
     }
     with get_session() as session:
         link = session.exec(
@@ -1260,6 +1278,91 @@ def unlink_tender_doc(project_key: str, document_id: int) -> None:
             session.commit()
 
 
+def normalize_ref_prefixes(raw: Any) -> list[str]:
+    """Projekt-Referenz-Präfixe (Ticket 26), Default Unisport EK/F/R/S/T."""
+    if isinstance(raw, str):
+        raw = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+    if not isinstance(raw, list):
+        return list(DEFAULT_REF_PREFIXES)
+    out: list[str] = []
+    for item in raw:
+        s = str(item).strip().upper()
+        if s and s not in out:
+            out.append(s)
+    return out or list(DEFAULT_REF_PREFIXES)
+
+
+def normalize_scale_bands(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "[]")
+        except json.JSONDecodeError:
+            raw = []
+    if not isinstance(raw, list) or not raw:
+        return [dict(b) for b in DEFAULT_SCALE_BANDS]
+    bands: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            mn = int(item.get("min", 0))
+            mx = int(item.get("max", mn))
+        except (TypeError, ValueError):
+            continue
+        label = str(item.get("label") or "").strip()
+        if not label:
+            continue
+        bands.append({"min": mn, "max": mx, "label": label})
+    return bands or [dict(b) for b in DEFAULT_SCALE_BANDS]
+
+
+def format_ref_prefixes_prompt(prefixes: list[str]) -> str:
+    multi = [p for p in prefixes if len(p) > 1]
+    single = [p for p in prefixes if len(p) == 1]
+    parts: list[str] = []
+    if multi:
+        parts.append(
+            "Mehrbuchstabig: "
+            + ", ".join(f"{m}1" for m in multi[:4])
+        )
+    if single:
+        parts.append(
+            "Einzelbuchstabe: "
+            + ", ".join(f"{s}01" for s in single[:6])
+        )
+    return "; ".join(parts) if parts else ", ".join(prefixes)
+
+
+def format_scale_bands_prompt(bands: list[dict[str, Any]], scale_max: int) -> str:
+    scale_max = max(1, int(scale_max))
+    lines: list[str] = []
+    for band in bands:
+        try:
+            mn = int(band.get("min", 0))
+            mx = int(band.get("max", mn))
+        except (TypeError, ValueError):
+            continue
+        if mn > scale_max:
+            continue
+        mx = min(mx, scale_max)
+        label = str(band.get("label") or "").strip()
+        if not label:
+            label = f"{mn}–{mx}" if mn != mx else str(mn)
+        if mn == mx:
+            lines.append(f"{mn}: {label}")
+        else:
+            lines.append(f"{mn}–{mx}: {label}")
+    return "\n".join(lines) if lines else f"Skala 0 bis {scale_max}"
+
+
+def _multi_ref_prefixes(prefixes: list[str]) -> list[str]:
+    return [p for p in prefixes if len(p) > 1]
+
+
+def _single_ref_prefixes(prefixes: list[str]) -> list[str]:
+    return [p for p in prefixes if len(p) == 1]
+
+
 def get_evaluation_config(project_key: str) -> dict[str, Any]:
     with get_session() as session:
         row = session.get(EvaluationProjectConfig, project_key)
@@ -1274,6 +1377,8 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
             "vorgaben_ki_model": "",
             "bewertung_ki_provider": "",
             "bewertung_ki_model": "",
+            "ref_prefixes": list(DEFAULT_REF_PREFIXES),
+            "scale_bands": [dict(b) for b in DEFAULT_SCALE_BANDS],
         }
     try:
         years = json.loads(row.price_years_json or "[]")
@@ -1297,6 +1402,8 @@ def get_evaluation_config(project_key: str) -> dict[str, Any]:
         "vorgaben_ki_model": (row.vorgaben_ki_model or "").strip(),
         "bewertung_ki_provider": (getattr(row, "bewertung_ki_provider", None) or "").strip(),
         "bewertung_ki_model": (getattr(row, "bewertung_ki_model", None) or "").strip(),
+        "ref_prefixes": normalize_ref_prefixes(getattr(row, "ref_prefixes_json", None)),
+        "scale_bands": normalize_scale_bands(getattr(row, "scale_bands_json", None)),
     }
 
 
@@ -1371,6 +1478,8 @@ def save_evaluation_config(
     vorgaben_ki_model: str | None = None,
     bewertung_ki_provider: str | None = None,
     bewertung_ki_model: str | None = None,
+    ref_prefixes: list[str] | None = None,
+    scale_bands: list[dict[str, Any]] | str | None = None,
 ) -> None:
     cfg = get_evaluation_config(project_key)
     if price_years is not None:
@@ -1392,6 +1501,10 @@ def save_evaluation_config(
         cfg["bewertung_ki_provider"] = (bewertung_ki_provider or "").strip()
     if bewertung_ki_model is not None:
         cfg["bewertung_ki_model"] = (bewertung_ki_model or "").strip()
+    if ref_prefixes is not None:
+        cfg["ref_prefixes"] = normalize_ref_prefixes(ref_prefixes)
+    if scale_bands is not None:
+        cfg["scale_bands"] = normalize_scale_bands(scale_bands)
     with get_session() as session:
         row = session.get(EvaluationProjectConfig, project_key)
         if not row:
@@ -1405,6 +1518,10 @@ def save_evaluation_config(
         row.vorgaben_ki_model = cfg.get("vorgaben_ki_model") or None
         row.bewertung_ki_provider = cfg.get("bewertung_ki_provider") or None
         row.bewertung_ki_model = cfg.get("bewertung_ki_model") or None
+        row.ref_prefixes_json = json.dumps(cfg.get("ref_prefixes") or DEFAULT_REF_PREFIXES)
+        row.scale_bands_json = json.dumps(
+            cfg.get("scale_bands") or DEFAULT_SCALE_BANDS, ensure_ascii=False,
+        )
         row.updated_at = _now()
         session.add(row)
         session.commit()
@@ -1457,7 +1574,7 @@ def recommended_chunk_size(
             return CHUNK_SIZE_HINTS["pflichtenheft"]
         if cls_match == "Anforderung/Feature":
             return CHUNK_SIZE_HINTS["anforderung"]
-    if classification == ANGEbot_CLASSIFICATION or "angebot" in fn:
+    if classification == ANGEBOT_CLASSIFICATION or "angebot" in fn:
         return CHUNK_SIZE_HINTS["angebot"]
     return CHUNK_SIZE_HINTS["default"]
 
@@ -1730,10 +1847,77 @@ def _format_rag_context(docs: list[dict], *, empty_msg: str, max_chunks: int = 5
     parts: list[str] = []
     for i, d in enumerate(docs[:max_chunks], 1):
         text = (d.get("text") or "")[:1200]
-        fname = d.get("filename", "?")
+        meta_bits = [f"Datei: {d.get('filename', '?')}"]
+        if d.get("page_number"):
+            meta_bits.append(f"S. {d['page_number']}")
+        if d.get("section_path"):
+            meta_bits.append(f"Kap. {d['section_path']}")
         chunk_id = d.get("chunk_id")
-        parts.append(f"[{i}] Datei: {fname}, Chunk {chunk_id}\n{text}")
+        if chunk_id:
+            meta_bits.append(f"Chunk {chunk_id}")
+        parts.append(f"[{i}] {', '.join(meta_bits)}\n{text}")
     return "\n\n".join(parts) or empty_msg
+
+
+def _section_neighbor_chunks(
+    docs: list[dict],
+    *,
+    cap: int = SECTION_NEIGHBOR_CHUNK_CAP,
+) -> list[dict]:
+    """Nachbar-Chunks gleicher section_path (Ticket 27), Cap gegen Prompt-Explosion."""
+    from .m03_db import Document, DocumentChunk
+
+    seen_ids: set[int] = {
+        int(d["chunk_id"])
+        for d in docs
+        if d.get("chunk_id") is not None
+    }
+    targets: list[tuple[int, str]] = []
+    seen_pairs: set[tuple[int, str]] = set()
+    for d in docs:
+        sp = (d.get("section_path") or "").strip()
+        did = d.get("document_id")
+        if not sp or not did:
+            continue
+        pair = (int(did), sp)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        targets.append(pair)
+    if not targets:
+        return []
+
+    extras: list[dict] = []
+    with get_session() as session:
+        for doc_id, section_path in targets:
+            if len(extras) >= cap:
+                break
+            q = (
+                select(DocumentChunk, Document)
+                .join(Document, Document.id == DocumentChunk.document_id)
+                .where(DocumentChunk.document_id == doc_id)
+                .where(DocumentChunk.section_path == section_path)
+                .order_by(DocumentChunk.chunk_index)
+            )
+            if seen_ids:
+                q = q.where(DocumentChunk.id.notin_(list(seen_ids)))
+            rows = session.exec(q.limit(cap - len(extras) + 2)).all()
+            for chunk, doc in rows:
+                if chunk.id in seen_ids:
+                    continue
+                seen_ids.add(chunk.id)
+                extras.append({
+                    "chunk_id": chunk.id,
+                    "document_id": doc.id,
+                    "filename": doc.filename,
+                    "classification": doc.classification,
+                    "text": chunk.chunk_text,
+                    "page_number": chunk.page_number,
+                    "section_path": chunk.section_path,
+                })
+                if len(extras) >= cap:
+                    break
+    return extras
 
 
 def validate_evaluation_cloud_gate(
@@ -2362,15 +2546,39 @@ def _parse_suggestion_value(parsed: dict[str, Any], scale_max: int) -> Optional[
     return value_f
 
 
-def _build_suggestion_chunk_ref(parsed: dict[str, Any]) -> Optional[str]:
+def _build_suggestion_chunk_ref(
+    parsed: dict[str, Any],
+    rag_docs: list[dict] | None = None,
+) -> Optional[str]:
     quote = parsed.get("source_quote") or ""
     chunk_id = parsed.get("source_chunk_id")
+    loc = ""
+    if chunk_id and rag_docs:
+        try:
+            cid = int(chunk_id)
+        except (TypeError, ValueError):
+            cid = None
+        if cid is not None:
+            for d in rag_docs:
+                if d.get("chunk_id") == cid:
+                    loc_parts: list[str] = []
+                    if d.get("page_number"):
+                        loc_parts.append(f"S. {d['page_number']}")
+                    if d.get("section_path"):
+                        loc_parts.append(f"Kap. {d['section_path']}")
+                    if loc_parts:
+                        loc = ", ".join(loc_parts)
+                    break
     if chunk_id:
         chunk_ref = f"chunk:{chunk_id}"
+        if loc:
+            chunk_ref = f"{loc} | {chunk_ref}"
         if quote:
             chunk_ref += f" | {quote[:1200]}"
         return chunk_ref
     if quote:
+        if loc:
+            return f"{loc} | {quote[:1200]}"
         return str(quote)[:1200]
     return None
 
@@ -2399,7 +2607,7 @@ def suggest_score_with_rag(
             project_key=project_key,
             limit=limit,
             threshold=0.35,
-            exclude_classification=ANGEbot_CLASSIFICATION,
+            exclude_classification=ANGEBOT_CLASSIFICATION,
         )
         tender_context_raw = _format_rag_context(
             tender_rag.get("documents", []),
@@ -2413,7 +2621,7 @@ def suggest_score_with_rag(
         project_key=project_key,
         limit=limit,
         threshold=0.35,
-        classification_filter=ANGEbot_CLASSIFICATION,
+        classification_filter=ANGEBOT_CLASSIFICATION,
         bidder_id=bidder_id,
         document_ids=tuple(bidder_doc_ids) if bidder_doc_ids else None,
     )
@@ -2427,10 +2635,15 @@ def suggest_score_with_rag(
             bidder_id=bidder_id,
         )
         docs = rag.get("documents", [])
+    neighbor_docs = _section_neighbor_chunks(docs, cap=SECTION_NEIGHBOR_CHUNK_CAP)
+    offer_docs = _dedupe_rag_docs(docs + neighbor_docs)
 
     tender_context = tender_context_raw
+    scale_bands = cfg.get("scale_bands") or DEFAULT_SCALE_BANDS
     offer_context = _format_rag_context(
-        docs, empty_msg="Keine passenden Angebotsstellen gefunden.", max_chunks=limit,
+        offer_docs,
+        empty_msg="Keine passenden Angebotsstellen gefunden.",
+        max_chunks=limit + SECTION_NEIGHBOR_CHUNK_CAP,
     )
     if is_cloud_llm_provider(provider):
         tender_context = sanitize_for_cloud_text(tender_context)
@@ -2451,7 +2664,10 @@ def suggest_score_with_rag(
     user = (
         f"Kriterium ({criterion.kind}): {criterion.name}\n"
         + (f"Anforderungstext: {criterion.description}\n" if criterion.description else "")
-        + f"Skala: 0 bis {scale_max}\n\n"
+        + f"Skala: 0 bis {scale_max}\n"
+        + "Erfüllungsgrade:\n"
+        + format_scale_bands_prompt(scale_bands, scale_max)
+        + "\n\n"
         f"VORGABEN (Ausschreibung):\n{tender_context}\n\n"
         f"ANGEBOT (Bieter):\n{offer_context}\n\n"
         "JSON:"
@@ -2570,14 +2786,14 @@ def suggest_score_with_rag(
                 else warn
             )
 
-    chunk_ref = _build_suggestion_chunk_ref(parsed)
+    chunk_ref = _build_suggestion_chunk_ref(parsed, offer_docs)
 
     return {
         "value": value_f,
         "justification": justification,
         "justification_warning": justification_warning,
         "source_chunk_ref": chunk_ref,
-        "rag_documents": docs,
+        "rag_documents": offer_docs,
         "raw_llm": raw,
     }
 
@@ -2616,9 +2832,32 @@ def import_criteria_payload(
     skip_existing: bool = True,
 ) -> dict[str, int]:
     """Kriterien aus JSON-Payload importieren (Format wie import_evaluation_criteria.py)."""
-    existing_names = {c.name for c in list_criteria(project_key)}
+    all_c = list_criteria(project_key)
+    existing_by_name: dict[tuple[str, Optional[int]], Criterion] = {}
+    existing_by_ref: dict[tuple[str, Optional[int]], Criterion] = {}
+    for c in all_c:
+        existing_by_name[(c.name, c.parent_id)] = c
+        if c.referenz:
+            existing_by_ref[(c.referenz.upper(), c.parent_id)] = c
     created = 0
     skipped = 0
+
+    def _lookup_existing(
+        name: str,
+        parent_id: Optional[int],
+        entry: dict[str, Any],
+    ) -> Optional[Criterion]:
+        ref = _entry_referenz(entry)
+        if ref:
+            hit = existing_by_ref.get((ref.upper(), parent_id))
+            if hit:
+                return hit
+        return existing_by_name.get((name, parent_id))
+
+    def _track_criterion(crit: Criterion) -> None:
+        existing_by_name[(crit.name, crit.parent_id)] = crit
+        if crit.referenz:
+            existing_by_ref[(crit.referenz.upper(), crit.parent_id)] = crit
 
     def _import_kind(kind: str, entries: list[dict]) -> None:
         nonlocal created, skipped
@@ -2627,8 +2866,10 @@ def import_criteria_payload(
             if not name:
                 continue
             parent_id: Optional[int] = None
-            if skip_existing and name in existing_names:
+            existing = _lookup_existing(name, None, entry) if skip_existing else None
+            if existing:
                 skipped += 1
+                parent_id = existing.id
             else:
                 parent = create_criterion(
                     project_key,
@@ -2645,22 +2886,23 @@ def import_criteria_payload(
                     ),
                     referenz=_entry_referenz(entry),
                 )
-                existing_names.add(name)
+                _track_criterion(parent)
                 parent_id = parent.id
                 created += 1
             if parent_id is None:
                 for c in list_criteria(project_key):
-                    if c.name == name:
+                    if c.name == name and c.parent_id is None:
                         parent_id = c.id
                         break
             for child in entry.get("children", []) or []:
                 cname = (child.get("name") or "").strip()
                 if not cname:
                     continue
-                if skip_existing and cname in existing_names:
+                cexisting = _lookup_existing(cname, parent_id, child) if skip_existing else None
+                if cexisting:
                     skipped += 1
                     continue
-                create_criterion(
+                child_crit = create_criterion(
                     project_key,
                     kind,
                     cname,
@@ -2670,7 +2912,7 @@ def import_criteria_payload(
                     description=child.get("description"),
                     referenz=_entry_referenz(child),
                 )
-                existing_names.add(cname)
+                _track_criterion(child_crit)
                 created += 1
 
     _import_kind("eignung", data.get("eignung") or [])
@@ -2679,32 +2921,51 @@ def import_criteria_payload(
     return {"created": created, "skipped": skipped, "warnings": warnings}
 
 
-def _normalize_requirement_ref(raw: str) -> Optional[str]:
+def _normalize_requirement_ref(
+    raw: str,
+    ref_prefixes: list[str] | None = None,
+) -> Optional[str]:
     """F-01 / F01 / EK2 / W-01 → kanonische Referenz für RAG/Suche."""
+    prefixes = ref_prefixes or DEFAULT_REF_PREFIXES
+    multi = _multi_ref_prefixes(prefixes)
+    single = _single_ref_prefixes(prefixes)
     s = (raw or "").strip()
     if not s:
         return None
-    m = re.match(r"^(EK\d+)\b", s, re.I)
-    if m:
-        return m.group(1).upper()
+    for mp in sorted(multi, key=len, reverse=True):
+        m = re.match(rf"^({re.escape(mp)}\d+)\b", s, re.I)
+        if m:
+            return m.group(1).upper()
     m = re.match(r"^([A-Za-z])-?0*(\d+)\b", s)
-    if m:
+    if m and m.group(1).upper() in single:
         return f"{m.group(1).upper()}{int(m.group(2)):02d}"
     if re.match(r"^[A-Za-z]{1,4}\d+", s):
-        return s.upper().replace("-", "")
+        norm = s.upper().replace("-", "")
+        for mp in multi:
+            if norm.startswith(mp):
+                return norm
+        if norm[:1] in single:
+            return norm
     return None
 
 
-def _normalize_line_ref(raw: str) -> Optional[str]:
+def _normalize_line_ref(
+    raw: str,
+    ref_prefixes: list[str] | None = None,
+) -> Optional[str]:
     """Einzelzeile: F01-001, EK1-01, F-01-001 → kanonisch."""
+    prefixes = ref_prefixes or DEFAULT_REF_PREFIXES
+    multi = _multi_ref_prefixes(prefixes)
+    single = _single_ref_prefixes(prefixes)
     s = (raw or "").strip()
     if not s:
         return None
-    m = re.match(r"^(EK\d+)-0*(\d+)\b", s, re.I)
-    if m:
-        return f"{m.group(1).upper()}-{int(m.group(2)):02d}"
+    for mp in sorted(multi, key=len, reverse=True):
+        m = re.match(rf"^({re.escape(mp)}\d+)-0*(\d+)\b", s, re.I)
+        if m:
+            return f"{m.group(1).upper()}-{int(m.group(2)):02d}"
     m = re.match(r"^([A-Za-z])-?0*(\d+)-0*(\d+)\b", s, re.I)
-    if m:
+    if m and m.group(1).upper() in single:
         return f"{m.group(1).upper()}{int(m.group(2)):02d}-{int(m.group(3)):03d}"
     return None
 
@@ -2760,13 +3021,19 @@ def _entry_referenz(entry: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _ensure_criteria_refs(payload: dict[str, Any]) -> list[str]:
-    """Fehlende requirement_ref ergänzen (EK1… für Eignung, Regex für Zuschlag)."""
+def _ensure_criteria_refs(
+    payload: dict[str, Any],
+    ref_prefixes: list[str] | None = None,
+) -> list[str]:
+    """Fehlende requirement_ref ergänzen (Mehrbuchstaben-Präfix für Eignung, Regex für Zuschlag)."""
+    prefixes = ref_prefixes or DEFAULT_REF_PREFIXES
+    multi = _multi_ref_prefixes(prefixes)
+    eignung_base = multi[0] if multi else "EK"
     hints: list[str] = []
     for i, entry in enumerate(payload.get("eignung") or [], 1):
         ref = _entry_referenz(entry)
         if not ref:
-            ref = f"EK{i}"
+            ref = f"{eignung_base}{i}"
             hints.append(f"Eignung «{(entry.get('name') or '?').strip()}»: requirement_ref {ref} ergänzt")
         entry["requirement_ref"] = ref
     for entry in payload.get("zuschlag") or []:
@@ -2785,24 +3052,34 @@ def _criterion_ref_prefix(name: str) -> Optional[str]:
     return _normalize_requirement_ref(name)
 
 
-def _requirement_ref_from_text(text: str) -> Optional[str]:
+def _requirement_ref_from_text(
+    text: str,
+    ref_prefixes: list[str] | None = None,
+) -> Optional[str]:
     """Regex-Fallback: Referenz aus Name oder Beschreibung (z. B. «vgl. F-02»)."""
+    prefixes = ref_prefixes or DEFAULT_REF_PREFIXES
+    multi = _multi_ref_prefixes(prefixes)
+    single = _single_ref_prefixes(prefixes)
     t = (text or "").strip()
     if not t:
         return None
-    m = re.match(r"^(EK\d+)\b", t, re.I)
-    if m:
-        return m.group(1).upper()
+    for mp in sorted(multi, key=len, reverse=True):
+        m = re.match(rf"^({re.escape(mp)}\d+)\b", t, re.I)
+        if m:
+            return m.group(1).upper()
     m = re.match(r"^([A-Za-z])-?0*(\d+)\b", t)
-    if m:
+    if m and m.group(1).upper() in single:
         return f"{m.group(1).upper()}{int(m.group(2)):02d}"
-    for pat in (r"\b(EK\d+)\b", r"\b([A-Za-z])-?0*(\d+)\b"):
+    search_pats = [rf"\b({re.escape(mp)}\d+)\b" for mp in multi]
+    search_pats.append(r"\b([A-Za-z])-?0*(\d+)\b")
+    for pat in search_pats:
         m = re.search(pat, t, re.I)
         if not m:
             continue
         if m.lastindex == 1:
             return m.group(1).upper()
-        return f"{m.group(1).upper()}{int(m.group(2)):02d}"
+        if m.group(1).upper() in single:
+            return f"{m.group(1).upper()}{int(m.group(2)):02d}"
     return None
 
 
@@ -2832,8 +3109,17 @@ def _flatten_eignung_payload(payload: dict[str, Any]) -> list[str]:
     return []
 
 
-def _is_ek_parent_ref(ref: Optional[str]) -> bool:
-    return bool(re.match(r"^EK\d+$", (_normalize_requirement_ref(ref or "") or "").upper()))
+def _is_ek_parent_ref(
+    ref: Optional[str],
+    ref_prefixes: list[str] | None = None,
+) -> bool:
+    norm = (_normalize_requirement_ref(ref or "", ref_prefixes) or "").upper()
+    if not norm:
+        return False
+    for mp in _multi_ref_prefixes(ref_prefixes or DEFAULT_REF_PREFIXES):
+        if re.match(rf"^{re.escape(mp)}\d+$", norm, re.I):
+            return True
+    return False
 
 
 def _child_ref_prefix_from_name(child_name: str) -> Optional[str]:
@@ -3696,15 +3982,17 @@ def extract_criteria_from_tender_docs(
         context = sanitize_for_cloud_text(context)
 
     vergabe_extra = cfg.get("vergabe_notes") or ""
+    ref_prefixes = cfg.get("ref_prefixes") or DEFAULT_REF_PREFIXES
+    prefix_hint = format_ref_prefixes_prompt(ref_prefixes)
     system = (
         f"{VERGABE_SYSTEM_RULES}\n"
         "Extrahiere strukturierte Bewertungskriterien aus Ausschreibungsunterlagen. "
         "Antwort NUR als JSON mit keys eignung und zuschlag (Listen von Objekten). "
         "Jedes Objekt: name (kurz), description (Kapitel-Einleitung / Aufgabenstellung), "
-        "requirement_ref (PFLICHT: Eignung EK1/EK2/EK3; Zuschlag F01, T01, W01, … — unabhängig vom name-Text). "
-        "Eignung Schritt 1: nur Top-Level EK1/EK2/EK3 ohne children; Nachweistext in description "
-        "(z. B. «Referenznummern EK2-01 bis EK2-06»). Unterfragen EK1-01… kommen in Schritt 2. "
-        "Zuschlag: optional children nur in Schritt 2 (Anforderungsblätter F/T). "
+        f"requirement_ref (PFLICHT: {prefix_hint} — unabhängig vom name-Text). "
+        "Eignung Schritt 1: nur Top-Level ohne children; Nachweistext in description "
+        "(z. B. Unterfragen-Referenznummern). Unterfragen kommen in Schritt 2. "
+        "Zuschlag: optional children nur in Schritt 2 (Anforderungsblätter). "
         "Zuschlag: weight_pct, scale_max (default 10), auto_price true nur für reines Preis-Kriterium, "
         "ranking_phase 1 (ZK) oder 2 (Präsentation nach Einladung, z. B. A-01). "
         "Eignung: scale_max immer 1, kein weight_pct."
@@ -3717,7 +4005,7 @@ def extract_criteria_from_tender_docs(
         max_tokens=4000, temperature=0.1, model=model,
     )
     payload = _parse_llm_json_object(raw)
-    ref_hints = _ensure_criteria_refs(payload)
+    ref_hints = _ensure_criteria_refs(payload, ref_prefixes)
     hints_pre = _flatten_eignung_payload(payload)
     child_hints = _enrich_criteria_children_from_requirements(
         project_key, payload, provider, model,
@@ -3827,7 +4115,7 @@ def extract_price_from_bidder_doc(
         project_key=project_key,
         limit=rag_limit,
         threshold=0.28,
-        classification_filter=ANGEbot_CLASSIFICATION,
+        classification_filter=ANGEBOT_CLASSIFICATION,
         bidder_id=bidder_id,
         document_ids=tuple(doc_ids),
     )
@@ -4172,6 +4460,22 @@ def migrate_evaluation_db() -> None:
                 conn.execute(text(
                     "ALTER TABLE evaluation_project_config ADD COLUMN bewertung_ki_model VARCHAR(80)"
                 ))
+            if "ref_prefixes_json" not in cfg_cols:
+                conn.execute(text(
+                    "ALTER TABLE evaluation_project_config ADD COLUMN ref_prefixes_json VARCHAR(120)"
+                ))
+            if "scale_bands_json" not in cfg_cols:
+                conn.execute(text(
+                    "ALTER TABLE evaluation_project_config ADD COLUMN scale_bands_json VARCHAR"
+                ))
+        if "document_chunk" in tables:
+            chunk_cols = {
+                r[1] for r in conn.execute(text("PRAGMA table_info(document_chunk)")).fetchall()
+            }
+            if "page_number" not in chunk_cols:
+                conn.execute(text("ALTER TABLE document_chunk ADD COLUMN page_number INTEGER"))
+            if "section_path" not in chunk_cols:
+                conn.execute(text("ALTER TABLE document_chunk ADD COLUMN section_path VARCHAR(200)"))
 
         if "evaluation_tender_doc" in tables:
             idx_rows = conn.execute(text("PRAGMA index_list('evaluation_tender_doc')")).fetchall()

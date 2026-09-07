@@ -7,6 +7,7 @@ import os
 import hashlib
 import json
 import math
+import re
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
@@ -274,6 +275,184 @@ def extract_pdf_text_with_fallback(
     return text or "", meta
 
 
+_NUM_HEADING_RE = re.compile(r"^(\d+(?:\.\d+)*)\s+\S")
+
+
+def _section_from_line(line: str, current: str | None) -> str | None:
+    m = _NUM_HEADING_RE.match((line or "").strip())
+    if m:
+        return m.group(1)
+    return current
+
+
+def _extract_pdf_pages_native(
+    file_path: Path,
+    *,
+    max_pages: int | None = None,
+) -> list[dict[str, Any]]:
+    """Seitenweise PDF-Text mit page_number und erkanntem section_path."""
+    segments: list[dict[str, Any]] = []
+    current_section: str | None = None
+
+    def _consume_page(page_num: int, text: str) -> None:
+        nonlocal current_section
+        if not (text or "").strip():
+            return
+        for line in text.splitlines():
+            current_section = _section_from_line(line, current_section) or current_section
+        segments.append({
+            "text": text,
+            "page_number": page_num,
+            "section_path": current_section,
+        })
+
+    if PyPDF2:
+        try:
+            with open(file_path, "rb") as f:
+                reader = PyPDF2.PdfReader(f)
+                pages = _slice_pdf_pages(
+                    reader.pages,
+                    max_pages=max_pages,
+                )
+                for idx, page in enumerate(pages, 1):
+                    _consume_page(idx, page.extract_text() or "")
+            if segments:
+                return segments
+        except Exception as e:
+            print(f"PyPDF2 page extraction failed for {file_path}: {e}")
+
+    if pdfplumber:
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                pages = _slice_pdf_pages(pdf.pages, max_pages=max_pages)
+                for idx, page in enumerate(pages, 1):
+                    _consume_page(idx, page.extract_text() or "")
+        except Exception as e:
+            print(f"pdfplumber page extraction failed for {file_path}: {e}")
+
+    return segments
+
+
+def extract_pdf_page_segments_with_fallback(
+    file_path: Path,
+    *,
+    max_pages: int | None = None,
+    use_vision_fallback: bool = True,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """PDF als Segmente (Seite + optional Kapitel) — Basis für Chunk-Metadaten."""
+    from .m11_vision import apply_ocr_to_pdf, is_pdf_scanned, pdf_extracted_text_is_sparse
+
+    meta: dict[str, Any] = {
+        "scanned_detected": False,
+        "ocr_attempted": False,
+        "ocr_success": False,
+        "vision_attempted": False,
+        "vision_success": False,
+        "extraction_method": "native",
+    }
+    segments = _extract_pdf_pages_native(file_path, max_pages=max_pages)
+    full_text = "\n\n".join(s["text"] for s in segments)
+    sparse = pdf_extracted_text_is_sparse(full_text, min_chars=MIN_PDF_TEXT_CHARS)
+    if sparse:
+        meta["scanned_detected"] = is_pdf_scanned(str(file_path)) or not full_text.strip()
+
+    if sparse:
+        meta["ocr_attempted"] = True
+        if apply_ocr_to_pdf(str(file_path)):
+            segments = _extract_pdf_pages_native(file_path, max_pages=max_pages)
+            full_text = "\n\n".join(s["text"] for s in segments)
+            if not pdf_extracted_text_is_sparse(full_text, min_chars=MIN_PDF_TEXT_CHARS):
+                meta["ocr_success"] = True
+                meta["extraction_method"] = "ocrmypdf"
+
+    if use_vision_fallback and pdf_extracted_text_is_sparse(full_text, min_chars=MIN_PDF_TEXT_CHARS):
+        meta["vision_attempted"] = True
+        vision_text = _extract_pdf_text_via_vision(file_path)
+        if not pdf_extracted_text_is_sparse(vision_text, min_chars=MIN_PDF_TEXT_CHARS):
+            meta["vision_success"] = True
+            meta["extraction_method"] = "vision_llm"
+            segments = [{
+                "text": vision_text,
+                "page_number": None,
+                "section_path": None,
+            }]
+
+    return segments, meta
+
+
+def extract_docx_text_segments(file_path: Path) -> list[dict[str, Any]]:
+    """DOCX-Abschnitte mit Heading-Pfad oder nummerierter Überschrift."""
+    if not file_path.exists() or not DocxDocument:
+        return []
+    try:
+        doc = DocxDocument(file_path)
+    except Exception as e:
+        print(f"docx extraction failed for {file_path}: {e}")
+        return []
+
+    heading_stack: list[str] = []
+    segments: list[dict[str, Any]] = []
+    buffer: list[str] = []
+    buffer_section: str | None = None
+
+    def flush() -> None:
+        nonlocal buffer, buffer_section
+        body = "".join(buffer).strip()
+        if body:
+            segments.append({
+                "text": body,
+                "page_number": None,
+                "section_path": buffer_section or (" / ".join(heading_stack) if heading_stack else None),
+            })
+        buffer = []
+
+    for para in doc.paragraphs:
+        text = (para.text or "").strip()
+        if not text:
+            continue
+        style = (para.style.name or "")
+        if re.match(r"Heading\s*\d+", style, re.I):
+            flush()
+            level_m = re.search(r"(\d+)", style)
+            level = int(level_m.group(1)) if level_m else 1
+            while len(heading_stack) >= level:
+                heading_stack.pop()
+            heading_stack.append(text)
+            buffer_section = " / ".join(heading_stack)
+            continue
+        num_heading = _section_from_line(text, None)
+        if num_heading:
+            flush()
+            buffer_section = num_heading
+        buffer.append(text + "\n")
+        if not buffer_section and heading_stack:
+            buffer_section = " / ".join(heading_stack)
+    flush()
+
+    if segments:
+        return segments
+    plain = extract_text_from_docx(file_path)
+    if plain.strip():
+        return [{"text": plain, "page_number": None, "section_path": None}]
+    return []
+
+
+def _chunk_segments(
+    segments: list[dict[str, Any]],
+    chunk_size: int,
+) -> list[dict[str, Any]]:
+    """Zeichen-Chunks aus Segmenten, Metadaten (Seite/Kapitel) pro Segment übernehmen."""
+    out: list[dict[str, Any]] = []
+    for seg in segments:
+        for piece in chunk_text(seg.get("text") or "", chunk_size=chunk_size):
+            out.append({
+                "text": piece,
+                "page_number": seg.get("page_number"),
+                "section_path": seg.get("section_path"),
+            })
+    return out
+
+
 def extract_text_from_docx(file_path: Path) -> str:
     """Extrahiert Text aus einer Word (.docx) Datei."""
     if not file_path.exists():
@@ -435,6 +614,7 @@ def _embed_and_store_chunks(
     *,
     csv_chunks: list[dict] | None = None,
     text_content: str = "",
+    text_segments: list[dict[str, Any]] | None = None,
 ) -> Tuple[bool, str]:
     """Gemeinsame Chunk/Embed-Logik für ingest und force_rechunk."""
     old_chunks = session.exec(
@@ -477,21 +657,38 @@ def _embed_and_store_chunks(
         clear_rag_cache()
         threading.Thread(target=_seed_keywords_for_document, args=(doc.id,), daemon=True).start()
         return True, f"{doc.chunk_count} Tabellenzeilen indexiert"
-    if text_content:
-        chunks = chunk_text(text_content, chunk_size=chunk_size)
-        doc.chunk_count = len(chunks)
+    if text_segments or text_content:
+        if text_segments:
+            chunk_rows = _chunk_segments(text_segments, chunk_size)
+        else:
+            chunk_rows = [
+                {"text": c, "page_number": None, "section_path": None}
+                for c in chunk_text(text_content, chunk_size=chunk_size)
+            ]
+        doc.chunk_count = len(chunk_rows)
         doc.chunk_size_used = chunk_size
         session.add(doc)
-        prefix = chunk_meta_prefix(classification, file_name, doc_subtype)
-        contextual_chunks = [prefix + c for c in chunks]
+        contextual_chunks: list[str] = []
+        for row in chunk_rows:
+            prefix = chunk_meta_prefix(
+                classification,
+                file_name,
+                doc_subtype,
+                section_path=row.get("section_path"),
+                page_number=row.get("page_number"),
+            )
+            contextual_chunks.append(prefix + row["text"])
         embeddings = embed_texts_batch(contextual_chunks)
-        for i, contextual_chunk in enumerate(contextual_chunks):
+        for i, row in enumerate(chunk_rows):
             emb = embeddings[i] if i < len(embeddings) else None
+            contextual_chunk = contextual_chunks[i]
             session.add(DocumentChunk(
                 document_id=doc.id, chunk_index=i, chunk_text=contextual_chunk,
                 embedding=json.dumps(emb) if emb else None,
                 embedding_model=EMBEDDING_MODEL,
                 tokens_count=len(contextual_chunk) // 4,
+                page_number=row.get("page_number"),
+                section_path=row.get("section_path"),
             ))
         session.commit()
         clear_rag_cache()
@@ -513,6 +710,7 @@ def force_rechunk_document(doc_id: int, chunk_size: int | None = None) -> Tuple[
         ext = path.suffix.lower()
         csv_chunks = None
         text_content = ""
+        text_segments: list[dict[str, Any]] | None = None
         if ext == ".csv":
             ok, msg, data = process_csv_to_chunks(path)
             if not ok:
@@ -526,9 +724,11 @@ def force_rechunk_document(doc_id: int, chunk_size: int | None = None) -> Tuple[
                 return False, msg
             csv_chunks = data
         elif ext == ".pdf":
-            text_content, _pdf_meta = extract_pdf_text_with_fallback(path)
+            text_segments, _pdf_meta = extract_pdf_page_segments_with_fallback(path)
+            text_content = "\n\n".join(s["text"] for s in text_segments)
         elif ext == ".docx":
-            text_content = extract_text_from_docx(path)
+            text_segments = extract_docx_text_segments(path)
+            text_content = "\n".join(s["text"] for s in text_segments)
         elif ext in (".md", ".txt", ".json", ".yaml", ".yml"):
             try:
                 text_content = path.read_text(encoding="utf-8")
@@ -541,7 +741,7 @@ def force_rechunk_document(doc_id: int, chunk_size: int | None = None) -> Tuple[
                 pass
         ok, msg = _embed_and_store_chunks(
             session, doc, doc.filename, doc.classification, doc.doc_subtype, size,
-            csv_chunks=csv_chunks, text_content=text_content,
+            csv_chunks=csv_chunks, text_content=text_content, text_segments=text_segments,
         )
         if ok:
             doc.chunk_size_used = size
@@ -554,11 +754,20 @@ def chunk_meta_prefix(
     classification: str,
     file_name: str,
     doc_subtype: str | None = None,
+    *,
+    section_path: str | None = None,
+    page_number: int | None = None,
 ) -> str:
-    """Chunk-Prefix für RAG: optionaler Subtyp übersteuert nur die Anzeige, nicht den Dateiname-Boost."""
+    """Chunk-Prefix für RAG: optionaler Subtyp, Kapitel, Seite."""
+    label = classification
     if doc_subtype:
-        return f"[{classification} · {doc_subtype} | {file_name}]\n"
-    return f"[{classification} | {file_name}]\n"
+        label = f"{classification} · {doc_subtype}"
+    parts = [label, file_name]
+    if section_path:
+        parts.append(f"Kap. {section_path}")
+    if page_number:
+        parts.append(f"S. {page_number}")
+    return f"[{' | '.join(parts)}]\n"
 
 
 def _ingest_status_from_meta(meta: dict[str, Any], *, has_chunks: bool) -> str:
@@ -655,6 +864,7 @@ def ingest_document(
 
         # Text extrahieren
         text_content = ""
+        text_segments: list[dict[str, Any]] | None = None
         csv_chunks = None  # Für strukturierte CSV-Verarbeitung
         ext = file_path.suffix.lower()
 
@@ -671,11 +881,13 @@ def ingest_document(
                 return IngestResult(False, f"XLSX-Verarbeitung fehlgeschlagen: {message}", "error")
             csv_chunks = csv_data
         elif ext == ".pdf":
-            text_content, pdf_meta = extract_pdf_text_with_fallback(
+            text_segments, pdf_meta = extract_pdf_page_segments_with_fallback(
                 file_path, use_vision_fallback=use_vision_fallback,
             )
+            text_content = "\n\n".join(s["text"] for s in text_segments)
         elif ext == ".docx":
-            text_content = extract_text_from_docx(file_path)
+            text_segments = extract_docx_text_segments(file_path)
+            text_content = "\n".join(s["text"] for s in text_segments)
         elif ext in [".md", ".txt", ".json", ".yaml", ".yml"]:
             try:
                 text_content = file_path.read_text(encoding="utf-8")
@@ -717,7 +929,7 @@ def ingest_document(
 
             ok, msg = _embed_and_store_chunks(
                 session2, doc, file_name, classification, doc_subtype, chunk_size,
-                csv_chunks=csv_chunks, text_content=text_content,
+                csv_chunks=csv_chunks, text_content=text_content, text_segments=text_segments,
             )
             if csv_chunks or text_content:
                 if ok:

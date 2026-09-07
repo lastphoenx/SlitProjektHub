@@ -845,7 +845,7 @@ def _keyword_search(
         # Vorteil: der BM25-Index beschreibt WAS im Chunk steht, nicht WIE es steht.
         # Fallback auf chunk_text für ältere Chunks ohne Keywords.
         tokenized_corpus = []
-        chunk_metadata = []  # (chunk_id, document_id, chunk_text, doc_object, token_set)
+        chunk_metadata = []  # (chunk_id, document_id, chunk_text, doc_object, token_set, page_number, section_path)
         
         for chunk in chunks:
             # WICHTIG: Wir ignorieren retrieval_keywords komplett!
@@ -862,7 +862,11 @@ def _keyword_search(
             
             if tokens:  # nur Chunks mit Content
                 tokenized_corpus.append(tokens)
-                chunk_metadata.append((chunk.id, chunk.document_id, chunk.chunk_text, docs_map.get(chunk.document_id), set(tokens)))
+                chunk_metadata.append((
+                    chunk.id, chunk.document_id, chunk.chunk_text,
+                    docs_map.get(chunk.document_id), set(tokens),
+                    chunk.page_number, chunk.section_path,
+                ))
         
         if not tokenized_corpus:
             return []
@@ -930,7 +934,7 @@ def _keyword_search(
         active_priority_parts = [part for part in priority_parts if part in lowered_query]
         for idx, score in enumerate(scores):
             if score > 0:  # nur Matches
-                chunk_id, doc_id, chunk_text, doc, chunk_tokens = chunk_metadata[idx]
+                chunk_id, doc_id, chunk_text, doc, chunk_tokens, page_number, section_path = chunk_metadata[idx]
                 if doc:
                     coverage = 0.0
                     idf_bonus = 0.0
@@ -960,6 +964,8 @@ def _keyword_search(
                         "keyword_coverage": round(coverage, 3),
                         "priority_hits": priority_hits,
                         "matched_terms": sorted(matched_tokens),
+                        "page_number": page_number,
+                        "section_path": section_path,
                     })
         
         results.sort(key=lambda x: x["match_score"], reverse=True)
@@ -1964,7 +1970,9 @@ def retrieve_relevant_chunks(
                         "filename": doc.filename,
                         "classification": doc.classification,
                         "text": chunk.chunk_text,
-                        "similarity": round(similarity, 3)
+                        "similarity": round(similarity, 3),
+                        "page_number": chunk.page_number,
+                        "section_path": chunk.section_path,
                     })
             except Exception:
                 continue

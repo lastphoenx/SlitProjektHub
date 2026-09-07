@@ -32,7 +32,7 @@ from src.m14_auth import (
     session_username,
 )
 from src.m15_evaluation import (
-    ANGEbot_CLASSIFICATION,
+    ANGEBOT_CLASSIFICATION,
     CRITERION_KINDS,
     create_bidder,
     create_criterion,
@@ -206,11 +206,11 @@ with tab_bidders:
 
     offer_docs = [
         d for d in get_project_documents(project_key)
-        if d.classification == ANGEbot_CLASSIFICATION
+        if d.classification == ANGEBOT_CLASSIFICATION
     ]
     if not offer_docs:
         st.caption(
-            f"Keine Dokumente mit Klassifikation «{ANGEbot_CLASSIFICATION}» im Projekt. "
+            f"Keine Dokumente mit Klassifikation «{ANGEBOT_CLASSIFICATION}» im Projekt. "
             "In Stammdaten hochladen und dem Projekt zuordnen."
         )
 

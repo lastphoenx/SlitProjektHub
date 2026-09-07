@@ -27,8 +27,8 @@ from src.m14_auth import (
     session_username,
 )
 from src.m15_evaluation import (
-    ANGEbot_CLASSIFICATION,
-    ANGEbot_SUBTYPES,
+    ANGEBOT_CLASSIFICATION,
+    ANGEBOT_SUBTYPES,
     CRITERION_KINDS,
     PRICE_FORMULA_LABELS,
     PRICE_FORMULAS,
@@ -261,11 +261,11 @@ async def evaluation_page(request: Request, project_key: str = ""):
         all_project_docs = get_project_documents(project_key)
         offer_docs = [
             d for d in all_project_docs
-            if d.classification == ANGEbot_CLASSIFICATION
+            if d.classification == ANGEBOT_CLASSIFICATION
         ]
         project_source_docs = [
             d for d in all_project_docs
-            if d.classification != ANGEbot_CLASSIFICATION
+            if d.classification != ANGEBOT_CLASSIFICATION
         ]
         for row in list_tender_docs(project_key):
             tender_doc_roles.setdefault(row.document_id, []).append(row.tender_role)
@@ -320,8 +320,8 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "evaluator_discrepancies": list_evaluator_score_discrepancies(project_key) if project_key else [],
         "evaluation_started": project_evaluation_started(project_key) if project_key else False,
         "price_offers_status": price_offers_status(project_key) if project_key else {},
-        "angebot_class": ANGEbot_CLASSIFICATION,
-        "angebot_subtypes": ANGEbot_SUBTYPES,
+        "angebot_class": ANGEBOT_CLASSIFICATION,
+        "angebot_subtypes": ANGEBOT_SUBTYPES,
         "zero_chunk_offer_docs": [
             d for d in offer_docs if (d.chunk_count or 0) == 0
         ] if project_key else [],
@@ -911,13 +911,13 @@ async def evaluation_bidder_doc_upload(
     if not file_bytes or not file.filename:
         return RedirectResponse(url=f"{redirect}&doc_upload=error", status_code=303)
 
-    cls = (classification or "").strip() or ANGEbot_CLASSIFICATION
+    cls = (classification or "").strip() or ANGEBOT_CLASSIFICATION
     subtype = (doc_subtype or "").strip() or None
-    if subtype and subtype not in ANGEbot_SUBTYPES:
+    if subtype and subtype not in ANGEBOT_SUBTYPES:
         subtype = None
     subtypes = [
         s.strip() for s in doc_subtypes
-        if s.strip() in ANGEbot_SUBTYPES
+        if s.strip() in ANGEBOT_SUBTYPES
     ]
     if not subtypes and subtype:
         subtypes = [subtype]
@@ -971,6 +971,8 @@ async def evaluation_save_config(
     visual_llm_model: str = Form(""),
     bewertung_ki_provider: str = Form(""),
     bewertung_ki_model: str = Form(""),
+    ref_prefixes: str = Form(""),
+    scale_bands_json: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -990,6 +992,8 @@ async def evaluation_save_config(
         vorgaben_ki_model=visual_llm_model,
         bewertung_ki_provider=bewertung_ki_provider,
         bewertung_ki_model=bewertung_ki_model,
+        ref_prefixes=[p.strip() for p in ref_prefixes.replace(";", ",").split(",") if p.strip()] or None,
+        scale_bands=(scale_bands_json or "").strip() or None,
     )
     return RedirectResponse(url=f"/evaluation?project_key={project_key}&config_saved=1", status_code=303)
 
