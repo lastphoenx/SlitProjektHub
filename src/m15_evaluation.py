@@ -2609,6 +2609,8 @@ def _build_suggestion_chunk_ref(
             for d in rag_docs:
                 if d.get("chunk_id") == cid:
                     loc_parts: list[str] = []
+                    if d.get("filename"):
+                        loc_parts.append(str(d["filename"]))
                     if d.get("page_number"):
                         loc_parts.append(f"S. {d['page_number']}")
                     if d.get("section_path"):
@@ -2619,7 +2621,7 @@ def _build_suggestion_chunk_ref(
     if chunk_id:
         chunk_ref = f"chunk:{chunk_id}"
         if loc:
-            chunk_ref = f"{loc} | {chunk_ref}"
+            chunk_ref += f" · {loc}"
         if quote:
             chunk_ref += f" | {quote[:1200]}"
         return chunk_ref

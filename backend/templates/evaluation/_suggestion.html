@@ -29,7 +29,13 @@
   <div class="eval-ki-suggestion-quote">
     {% if suggestion.source_chunk_ref.startswith('chunk:') %}
       {% set chunk_parts = suggestion.source_chunk_ref.split(' | ', 1) %}
-      <span class="badge badge-neutral eval-ki-suggestion-chunk-id">{{ chunk_parts[0] }}</span>
+      {% set head_parts = chunk_parts[0].split(' · ', 1) %}
+      <span class="badge badge-neutral eval-ki-suggestion-chunk-id">{{ head_parts[0] }}</span>
+      {% if head_parts|length > 1 %}
+      <span class="text-muted" style="font-size:.72rem;margin-left:.4rem">📄 {{ head_parts[1] }}</span>
+      {% else %}
+      <span class="text-muted" style="font-size:.72rem;margin-left:.4rem">— Dokument/Seite unbekannt (kein Metadaten-Tag beim Ingest)</span>
+      {% endif %}
       {% if chunk_parts|length > 1 %}
       <div>{{ chunk_parts[1] }}</div>
       {% endif %}

@@ -1,5 +1,5 @@
 <div class="modal-backdrop">
-  <div class="modal" style="max-width:min(96vw,720px);width:min(96vw,720px);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:min(94vw,1180px);width:min(94vw,1180px);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true">
     <div class="modal-header" style="flex-shrink:0">
       <div style="min-width:0">
         <h2 class="modal-title" style="font-size:.95rem">{{ bidder.name }} — {{ criterion.name }}</h2>
@@ -39,7 +39,9 @@
                 <div class="eval-ki-suggestion-quote" style="margin-top:.35rem;max-height:6rem">
                   {% if ai_row.source_chunk_ref.startswith('chunk:') %}
                     {% set chunk_parts = ai_row.source_chunk_ref.split(' | ', 1) %}
-                    <span class="badge badge-neutral eval-ki-suggestion-chunk-id">{{ chunk_parts[0] }}</span>
+                    {% set head_parts = chunk_parts[0].split(' · ', 1) %}
+                    <span class="badge badge-neutral eval-ki-suggestion-chunk-id">{{ head_parts[0] }}</span>
+                    {% if head_parts|length > 1 %}<span class="text-muted" style="font-size:.7rem;margin-left:.35rem">📄 {{ head_parts[1] }}</span>{% endif %}
                     {% if chunk_parts|length > 1 %}<div>{{ chunk_parts[1] }}</div>{% endif %}
                   {% else %}
                     {{ ai_row.source_chunk_ref }}
