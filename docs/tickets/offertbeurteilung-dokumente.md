@@ -366,7 +366,7 @@ Hybrid-Suche allein kann die richtige Tabellenzeile verfehlen oder Narrativ-Kapi
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~27~~ → ~~28~~
+**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~27~~ → ~~28~~ → ~~30~~
 
 ---
 
@@ -416,3 +416,34 @@ Screenshot nicht sichtbar. Ursachenanalyse:
   zugrunde lagen.
 - Deployment-Runbook (README/Docs) erwähnt explizit: Template-/Route-Änderungen erfordern
   Service-Neustart (kein Hot-Reload in Produktion).
+
+---
+
+## Ticket 30 — RAG-Basis: Score-Anzeige + Chunk-IDs in Begründung ✅ erledigt
+
+**Anlass:** Live-Check nach Ticket-28-Deployment (Screenshots F01-001, Apps With Love).
+Ticket 28 funktioniert wie geplant (Dateiname am Zitat, RAG-Basis mit 19 Quellen, Methoden,
+Parent-Ref-Hinweis). Zwei reine Bugs/Qualitätsprobleme beim genauen Lesen.
+
+**Befund 1 — Prozentangabe kaputt:** RAG-Basis-Panel zeigte Werte wie 918 %, 2469 %, 3566 %.
+Ursache: `_rag_basis_doc_entry()` nutzte rohen BM25 `match_score` (kann >> 1) statt
+`normalized_match_score` (0–1). Nur Anzeige-Bug, kein Einfluss auf Retrieval-Ranking.
+
+**Befund 2 — Chunk-IDs in KI-Begründung:** Texte wie «…im Kontext (Chunk 1124)…» /
+«…Ausschreibungsunterlagen (Chunk 1449)…». Ursache: `_format_rag_context()` labelte Blöcke mit
+`Chunk {id}`; Modell übernahm das in die rekursfähige Begründung — für BöB/IVöB unbrauchbar.
+
+**Umsetzung:**
+
+1. `_rag_basis_doc_entry()`: `normalized_match_score` statt `match_score` für `entry["score"]`.
+2. `_format_rag_context()`: kein `Chunk {id}` mehr im LLM-Kontext (Datei/S./Kap. bleiben).
+3. System-Prompt `suggest_score_with_rag()`: explizites Verbot interner Chunk-/DB-IDs.
+4. `_sanitize_suggestion_justification()`: entfernt `(Chunk NNN)` als Sicherheitsnetz.
+
+**Akzeptanzkriterien:**
+- RAG-Basis-Prozentwerte liegen in 0–100 % (keine vierstelligen Werte).
+- Neue KI-Begründungen enthalten keine `(Chunk …)`-Verweise.
+- Chunk-ID bleibt im RAG-Basis-Panel (Admin-Transparenz) sichtbar.
+
+**Hinweis:** Bereits gespeicherte 🤖-Vorschläge behalten alte Texte/Scores bis zum erneuten
+KI-Lauf.

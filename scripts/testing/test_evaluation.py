@@ -420,6 +420,77 @@ def test_upsert_score_persists_rag_basis_json():
     ev.get_session = old_get
 
 
+def test_rag_basis_doc_entry_normalized_score():
+    from src.m15_evaluation import _rag_basis_doc_entry
+
+    entry = _rag_basis_doc_entry(
+        {
+            "chunk_id": 944,
+            "filename": "angebot.pdf",
+            "text": "F01-001 Text",
+            "retrieval_method": "hybrid",
+            "similarity": 0.0,
+            "match_score": 9.18,
+            "normalized_match_score": 0.856,
+        }
+    )
+    assert entry["score"] == 0.856
+    assert entry["score"] <= 1.0
+
+
+def test_format_rag_context_omits_chunk_id():
+    from src.m15_evaluation import _format_rag_context
+
+    ctx = _format_rag_context(
+        [
+            {
+                "chunk_id": 1124,
+                "filename": "Pflichtenheft.docx",
+                "page_number": 12,
+                "section_path": "3.2",
+                "text": "Anforderung KI",
+            }
+        ],
+        empty_msg="leer",
+    )
+    assert "Chunk 1124" not in ctx
+    assert "Pflichtenheft.docx" in ctx
+    assert "S. 12" in ctx
+    assert "Kap. 3.2" in ctx
+
+
+def test_sanitize_suggestion_justification_strips_chunk_refs():
+    from src.m15_evaluation import _sanitize_suggestion_justification
+
+    raw = (
+        "Zwar wird im Kontext (Chunk 1124) KI erwähnt, "
+        "die in den Ausschreibungsunterlagen (Chunk 1449) als wesentliche Anforderungen genannt werden."
+    )
+    cleaned = _sanitize_suggestion_justification(raw)
+    assert "Chunk" not in cleaned
+    assert "1124" not in cleaned
+    assert "1449" not in cleaned
+    assert "KI erwähnt" in cleaned
+
+
+def test_compose_suggestion_justification_sanitizes_chunk_refs():
+    from src.m15_evaluation import Criterion, _compose_suggestion_justification
+
+    crit = Criterion(
+        id=1,
+        project_key="p",
+        kind="zuschlag",
+        name="F01-001",
+        scale_max=10,
+    )
+    parsed = {
+        "strengths": "Gutes Verständnis laut Angebot.",
+        "deductions": "Innovation fehlt laut (Chunk 1124) im Kontext.",
+    }
+    out = _compose_suggestion_justification(crit, 7.0, parsed)
+    assert "Chunk" not in out
+
+
 def test_offer_suggestion_side_docs_no_parent_literal():
     from unittest.mock import patch
     from src.m15_evaluation import Criterion, _retrieve_suggestion_offer_docs
@@ -1584,6 +1655,10 @@ if __name__ == "__main__":
     test_literal_line_ref_excludes_sibling_rows()
     test_suggest_score_rag_basis_in_return()
     test_upsert_score_persists_rag_basis_json()
+    test_rag_basis_doc_entry_normalized_score()
+    test_format_rag_context_omits_chunk_id()
+    test_sanitize_suggestion_justification_strips_chunk_refs()
+    test_compose_suggestion_justification_sanitizes_chunk_refs()
     test_offer_suggestion_side_docs_no_parent_literal()
     test_tender_doc_link_and_roles()
     test_import_criteria_payload_skip_existing()

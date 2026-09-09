@@ -1884,9 +1884,6 @@ def _format_rag_context(docs: list[dict], *, empty_msg: str, max_chunks: int = 5
             meta_bits.append(f"S. {d['page_number']}")
         if d.get("section_path"):
             meta_bits.append(f"Kap. {d['section_path']}")
-        chunk_id = d.get("chunk_id")
-        if chunk_id:
-            meta_bits.append(f"Chunk {chunk_id}")
         parts.append(f"[{i}] {', '.join(meta_bits)}\n{text}")
     return "\n\n".join(parts) or empty_msg
 
@@ -2414,8 +2411,21 @@ def _compose_suggestion_justification(
                 parts.append(f"Nicht erfüllt: {m.group(1).strip()}")
 
     if parts:
-        return "\n\n".join(parts)
-    return plain
+        return _sanitize_suggestion_justification("\n\n".join(parts))
+    return _sanitize_suggestion_justification(plain)
+
+
+_CHUNK_ID_IN_JUSTIFICATION = re.compile(r"\(\s*Chunk\s+\d+\s*\)|\bChunk\s+\d+\b", re.I)
+
+
+def _sanitize_suggestion_justification(text: str) -> str:
+    """Entfernt interne Chunk-IDs aus exportierbarer Begründung (BöB/IVöB)."""
+    if not text:
+        return text
+    cleaned = _CHUNK_ID_IN_JUSTIFICATION.sub("", text)
+    cleaned = re.sub(r"  +", " ", cleaned)
+    cleaned = re.sub(r"\(\s*\)", "", cleaned)
+    return cleaned.strip()
 
 
 def _suggestion_missing_deduction_rationale(
@@ -2878,7 +2888,11 @@ def _retrieve_suggestion_offer_docs(
 
 
 def _rag_basis_doc_entry(d: dict[str, Any]) -> dict[str, Any]:
-    score = max(float(d.get("similarity") or 0), float(d.get("match_score") or 0), 0.0)
+    score = max(
+        float(d.get("similarity") or 0),
+        float(d.get("normalized_match_score") or 0),
+        0.0,
+    )
     entry: dict[str, Any] = {
         "chunk_id": d.get("chunk_id"),
         "document_id": d.get("document_id"),
@@ -2980,6 +2994,8 @@ def suggest_score_with_rag(
         "des Bieters und bewerte ein Kriterium. Begründungen müssen rekursfähig sein (BöB/IVöB): "
         "bei jeder Punktzahl unter dem Maximum präzise benennen, welche Vorgaben im Angebot "
         "fehlen, unklar oder unzureichend belegt sind — nicht nur Lob wiederholen. "
+        "In der Begründung niemals interne Chunk-IDs, Datenbank-IDs oder Kontext-Nummern "
+        "(z. B. «Chunk 1449») — nur Dateiname, Kapitel/Seite oder inhaltliche Paraphrase. "
         "Vor «Abzüge:» den «Positiv»-Text und den Angebotsauszug gegenprüfen: nichts als fehlend "
         "behaupten, was dort bereits belegt ist (kein Selbstwiderspruch).\n"
         + _suggestion_json_keys_instruction(scale_max, criterion.kind)
