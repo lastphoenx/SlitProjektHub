@@ -44,7 +44,7 @@ ANGEBOT_SUBTYPES = (
     "Sonstiges",
 )
 
-DEFAULT_REF_PREFIXES = ["EK", "F", "R", "S", "T"]
+DEFAULT_REF_PREFIXES = ["EK", "F", "R", "S", "T", "W"]
 DEFAULT_SCALE_BANDS: list[dict[str, Any]] = [
     {"min": 0, "max": 0, "label": "0 = nicht erfüllt oder keine Antwort"},
     {"min": 1, "max": 3, "label": "1–3 = kaum oder unzureichend erfüllt"},
