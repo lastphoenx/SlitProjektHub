@@ -1279,9 +1279,16 @@ def unlink_tender_doc(project_key: str, document_id: int) -> None:
 
 
 def normalize_ref_prefixes(raw: Any) -> list[str]:
-    """Projekt-Referenz-Präfixe (Ticket 26), Default Unisport EK/F/R/S/T."""
+    """Projekt-Referenz-Präfixe (Ticket 26), Default Unisport EK/F/R/S/T/W."""
     if isinstance(raw, str):
-        raw = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+        s = raw.strip()
+        if s.startswith("["):
+            try:
+                raw = json.loads(s)
+            except json.JSONDecodeError:
+                raw = [p.strip() for p in s.replace(";", ",").split(",") if p.strip()]
+        else:
+            raw = [p.strip() for p in s.replace(";", ",").split(",") if p.strip()]
     if not isinstance(raw, list):
         return list(DEFAULT_REF_PREFIXES)
     out: list[str] = []

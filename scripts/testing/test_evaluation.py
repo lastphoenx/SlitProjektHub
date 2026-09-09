@@ -1394,6 +1394,7 @@ def test_ref_prefixes_and_scale_bands_config():
     )
 
     assert normalize_ref_prefixes(["a", "B", "A"]) == ["A", "B"]
+    assert normalize_ref_prefixes('["A", "B"]') == ["A", "B"]
     assert _normalize_requirement_ref("A01", ["A", "B"]) == "A01"
     assert _normalize_requirement_ref("F01", DEFAULT_REF_PREFIXES) == "F01"
     bands = normalize_scale_bands([
