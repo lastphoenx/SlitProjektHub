@@ -47,6 +47,9 @@
                 </div>
                 {% endif %}
                 {% if not ai_row.justification and not ai_row.source_chunk_ref %}—{% endif %}
+                {% if rag_basis %}
+                {% include "evaluation/_rag_basis.html" %}
+                {% endif %}
               </td>
             </tr>
             {% endif %}

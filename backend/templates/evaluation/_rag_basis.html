@@ -1,0 +1,47 @@
+{% if rag_basis %}
+<details class="eval-rag-basis" style="margin-top:.5rem;font-size:.78rem">
+  <summary style="cursor:pointer;color:var(--color-text-muted);user-select:none">
+    📎 RAG-Basis ({{ (rag_basis.tender|length) + (rag_basis.offer|length) }} Quellen)
+    {% if rag_basis.line_ref %} · Zeile {{ rag_basis.line_ref }}{% endif %}
+  </summary>
+  <div style="margin-top:.45rem;display:grid;gap:.55rem">
+    {% if rag_basis.tender %}
+    <div>
+      <div style="font-weight:600;font-size:.72rem;color:var(--color-text-muted);margin-bottom:.25rem">Vorgaben</div>
+      {% for item in rag_basis.tender %}
+      <div style="padding:.35rem 0;border-bottom:1px solid var(--color-border);line-height:1.35">
+        <span class="badge badge-neutral" style="font-size:.65rem">{{ item.method }}</span>
+        <strong>{{ item.filename }}</strong>
+        {% if item.page_number %} · S. {{ item.page_number }}{% endif %}
+        {% if item.section_path %} · {{ item.section_path }}{% endif %}
+        {% if item.chunk_id %} · chunk:{{ item.chunk_id }}{% endif %}
+        {% if item.score is defined and item.score %} · {{ (item.score * 100)|round|int }}%{% endif %}
+        <div class="text-muted" style="margin-top:.15rem;font-size:.72rem">{{ item.preview }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if rag_basis.offer %}
+    <div>
+      <div style="font-weight:600;font-size:.72rem;color:var(--color-text-muted);margin-bottom:.25rem">Angebot</div>
+      {% for item in rag_basis.offer %}
+      <div style="padding:.35rem 0;border-bottom:1px solid var(--color-border);line-height:1.35">
+        <span class="badge badge-neutral" style="font-size:.65rem">{{ item.method }}</span>
+        <strong>{{ item.filename }}</strong>
+        {% if item.page_number %} · S. {{ item.page_number }}{% endif %}
+        {% if item.section_path %} · {{ item.section_path }}{% endif %}
+        {% if item.chunk_id %} · chunk:{{ item.chunk_id }}{% endif %}
+        {% if item.score is defined and item.score %} · {{ (item.score * 100)|round|int }}%{% endif %}
+        <div class="text-muted" style="margin-top:.15rem;font-size:.72rem">{{ item.preview }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if rag_basis.parent_ref and rag_basis.line_ref %}
+    <p class="text-muted" style="font-size:.68rem;margin:0">
+      Parent-Ref {{ rag_basis.parent_ref }} nur in Vorgaben (literal_parent). Angebot: nur {{ rag_basis.line_ref }}.
+    </p>
+    {% endif %}
+  </div>
+</details>
+{% endif %}

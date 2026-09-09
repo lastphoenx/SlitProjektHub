@@ -550,6 +550,7 @@ async def evaluation_save_ai_score(
     value: float = Form(...),
     justification: str = Form(""),
     source_chunk_ref: str = Form(""),
+    rag_basis_json: str = Form(""),
 ):
     """Speichert einen KI-Vorschlag als eigene, klar markierte Spalte (source='ai') -
     NICHT als Bewertung einer Person. Getrennt von /evaluation/score."""
@@ -563,6 +564,7 @@ async def evaluation_save_ai_score(
         value=value,
         justification=justification or None,
         source_chunk_ref=source_chunk_ref or None,
+        rag_basis_json=rag_basis_json or None,
         as_source="ai",
     )
     if request.headers.get("hx-request"):
@@ -580,7 +582,7 @@ async def evaluation_cell(
 ):
     """Detail-Panel einer Matrix-Zelle: KI-Vorschlag + jede Bewerter-Zeile einzeln,
     plus Formular fuer die eigene Bewertung. Das ist die 'mehrere Spalten'-Ansicht."""
-    from src.m15_evaluation import Criterion, Bidder
+    from src.m15_evaluation import Criterion, Bidder, parse_rag_basis_json
     from src.m03_db import get_session
 
     who = _username(request)
@@ -646,6 +648,7 @@ async def evaluation_cell(
         "bidder": bidder,
         "criterion": crit,
         "ai_row": ai_row,
+        "rag_basis": parse_rag_basis_json(ai_row.rag_basis_json) if ai_row else None,
         "user_rows": user_rows,
         "official": official_score(bidder_id, crit, cell_scores),
         "may_evaluate": can_evaluate(who),
@@ -717,6 +720,7 @@ async def evaluation_suggest(
     )
     tpl_ctx["suggestion"] = suggestion
     tpl_ctx["criterion"] = crit
+    tpl_ctx["rag_basis"] = suggestion.get("rag_basis")
     tpl_ctx["adopt_requires_justification"] = (
         suggestion.get("value") is not None
         and score_requires_justification(crit, float(suggestion["value"]))
@@ -786,6 +790,7 @@ async def evaluation_suggest_batch_step(
         value=float(suggestion["value"]),
         justification=suggestion.get("justification") or None,
         source_chunk_ref=suggestion.get("source_chunk_ref") or None,
+        rag_basis_json=suggestion.get("rag_basis_json") or None,
         as_source="ai",
     )
     return JSONResponse({

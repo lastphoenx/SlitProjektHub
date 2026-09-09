@@ -315,6 +315,130 @@ def test_suggest_score_skips_sanitize_for_local_provider():
     assert "Maria Muster" in captured["user"]
 
 
+def test_literal_line_ref_excludes_sibling_rows():
+    from src.m15_evaluation import _literal_chunks_for_line_ref
+
+    class FakeChunk:
+        def __init__(self, cid, text, doc_id=1, page=None):
+            self.id = cid
+            self.chunk_text = text
+            self.document_id = doc_id
+            self.page_number = page
+            self.section_path = "Tabelle"
+
+    class FakeDoc:
+        filename = "angebot.pdf"
+        classification = "Angebot (Bieter)"
+        is_deleted = False
+
+    rows = [
+        (FakeChunk(1, "F01-001 Ja Kommentar ESCADA2 headless"), FakeDoc()),
+        (FakeChunk(2, "F01-002 Ja anderer Kommentar"), FakeDoc()),
+    ]
+
+    from unittest.mock import patch
+
+    with patch("src.m03_db.get_session") as mock_sess:
+        mock_sess.return_value.__enter__.return_value.exec.return_value.all.return_value = rows
+        hits = _literal_chunks_for_line_ref((99,), "F01-001")
+    assert len(hits) == 1
+    assert hits[0]["chunk_id"] == 1
+    assert hits[0]["retrieval_method"] == "literal_line"
+
+
+def test_suggest_score_rag_basis_in_return():
+    from unittest.mock import patch
+    from src.m15_evaluation import Criterion, suggest_score_with_rag
+
+    crit = Criterion(
+        id=2,
+        project_key="p",
+        kind="zuschlag",
+        name="F01-001",
+        referenz="F01-001",
+        scale_max=10,
+    )
+    tender_doc = {
+        "chunk_id": 10,
+        "filename": "pflichtenheft.docx",
+        "text": "F01-001 Anforderung Gesamtverständnis",
+        "retrieval_method": "literal_line",
+    }
+    offer_doc = {
+        "chunk_id": 20,
+        "filename": "angebot.pdf",
+        "text": "F01-001 Ja ESCADA2",
+        "retrieval_method": "literal_line",
+    }
+
+    def fake_tender(*a, **k):
+        return [tender_doc]
+
+    def fake_offer(*a, **k):
+        return [offer_doc]
+
+    with patch("src.m15_evaluation._retrieve_suggestion_tender_docs", side_effect=fake_tender):
+        with patch("src.m15_evaluation._retrieve_suggestion_offer_docs", side_effect=fake_offer):
+            with patch(
+                "src.m15_evaluation.try_models_with_messages",
+                return_value='{"value": 7, "justification": "ok", "source_quote": "x", "source_chunk_id": 20}',
+            ):
+                out = suggest_score_with_rag("p", 1, crit, provider="ollama", model="qwen3.8:27b")
+
+    assert out.get("rag_basis")
+    assert out["rag_basis"]["line_ref"] == "F01-001"
+    assert len(out["rag_basis"]["tender"]) == 1
+    assert len(out["rag_basis"]["offer"]) == 1
+    assert out.get("rag_basis_json")
+
+
+def test_upsert_score_persists_rag_basis_json():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+    ev.migrate_evaluation_db()
+
+    b = create_bidder("p1", "Bieter A")
+    c = create_criterion("p1", "zuschlag", "F01-001", scale_max=10, referenz="F01-001")
+    payload = '{"line_ref":"F01-001","tender":[],"offer":[]}'
+    sc = upsert_score(
+        b.id, c.id, 0, 7.0,
+        justification="ki",
+        as_source="ai",
+        rag_basis_json=payload,
+    )
+    assert sc.rag_basis_json == payload
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_offer_suggestion_side_docs_no_parent_literal():
+    from unittest.mock import patch
+    from src.m15_evaluation import Criterion, _retrieve_suggestion_offer_docs
+
+    crit = Criterion(id=1, project_key="p", kind="zuschlag", name="F01-001", referenz="F01-001")
+    captured: dict = {}
+
+    def fake_side(query, **kwargs):
+        captured["include_parent_literal"] = kwargs.get("include_parent_literal")
+        return [{"chunk_id": 1, "text": "F01-001", "filename": "a.pdf"}]
+
+    with patch("src.m15_evaluation.bidder_doc_ids_for_criterion", return_value=[5]):
+        with patch("src.m15_evaluation._retrieve_suggestion_side_docs", side_effect=fake_side):
+            with patch("src.m15_evaluation._section_neighbor_chunks", return_value=[]):
+                _retrieve_suggestion_offer_docs("p", 1, crit, "q", limit=12)
+
+    assert captured.get("include_parent_literal") is False
+
+
 def test_tender_doc_link_and_roles():
     engine, _ = _setup_db()
     import src.m15_evaluation as ev
@@ -1457,6 +1581,10 @@ if __name__ == "__main__":
     test_validate_evaluation_cloud_gate()
     test_suggest_score_sanitizes_cloud_context()
     test_suggest_score_skips_sanitize_for_local_provider()
+    test_literal_line_ref_excludes_sibling_rows()
+    test_suggest_score_rag_basis_in_return()
+    test_upsert_score_persists_rag_basis_json()
+    test_offer_suggestion_side_docs_no_parent_literal()
     test_tender_doc_link_and_roles()
     test_import_criteria_payload_skip_existing()
     test_seed_and_merge_price_structure()

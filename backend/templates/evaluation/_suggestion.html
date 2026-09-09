@@ -39,6 +39,8 @@
   </div>
   {% endif %}
 
+  {% include "evaluation/_rag_basis.html" %}
+
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.65rem">
     <form method="post" action="/evaluation/score/ai" hx-post="/evaluation/score/ai" hx-target="#modal-slot" hx-swap="innerHTML">
       <input type="hidden" name="project_key" value="{{ project_key }}" />
@@ -47,6 +49,9 @@
       <input type="hidden" name="value" value="{{ suggestion.value }}" />
       <input type="hidden" name="justification" value="{{ suggestion.justification or '' }}" />
       <input type="hidden" name="source_chunk_ref" value="{{ suggestion.source_chunk_ref or '' }}" />
+      {% if suggestion.rag_basis_json %}
+      <input type="hidden" name="rag_basis_json" value="{{ suggestion.rag_basis_json | e }}" />
+      {% endif %}
       <button type="submit" class="btn btn-secondary btn-sm">Nur als KI-Vorschlag speichern</button>
     </form>
   </div>

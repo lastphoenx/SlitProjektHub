@@ -326,4 +326,44 @@ Schritt 2 extrahiert Fragenkatalog-Kinder unter EK1/EK2/EK3 analog Zuschlag (Ref
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~27~~
+## Ticket 28 — Matrix KI-Vorschlag: RAG-Protokoll + Referenz-Pinning ✅ erledigt
+
+**Ziel:** Nachvollziehbarkeit wie Batch QA (`_RAG_Chunks`): welche Vorgaben- und Angebots-Passagen
+der KI-Vorschlag tatsächlich als Kontext hatte — nicht nur das vom Modell gewählte Zitat.
+Zusätzlich deterministisches Retrieval für Unterfragen (F01-001 …), damit Tabellenzeilen in
+Merge-PDFs (~200 Seiten) nicht dem Semantic-Ranking zum Opfer fallen.
+
+**Problem:** `source_chunk_ref` = ein LLM-Zitat; `rag_documents` war intern, nicht persistiert.
+Hybrid-Suche allein kann die richtige Tabellenzeile verfehlen oder Narrativ-Kapitel bevorzugen.
+
+**Umsetzung:**
+
+1. **Referenz-Pinning (Dual-RAG erweitert)**
+   - `_resolve_suggestion_line_ref()` / `_literal_chunks_for_line_ref()` — exakte Zeilennummer
+     (z. B. `F01-001`) per Volltext-Scan + BM25-Ref-Pass (`_line_ref_enrichment_query`).
+   - **Vorgaben:** zusätzlich Parent-Ref (`F01`) via bestehendem `_literal_chunks_for_requirement_ref`
+     — Block-Kontext aus Pflichtenheft/Bewertungsvorgaben.
+   - **Angebot:** **nur Zeilen-Ref** (`F01-001`), **kein** Parent/Sibling-Pass (F01-002 …) —
+     Tabellenform: Vermischung getrennter Anforderungen vermeiden.
+   - Section-Nachbarn am Angebot nur, wenn der Nachbar-Chunk dieselbe Zeilennummer enthält
+     (Chunk-Grenze, kein F01-002).
+
+2. **RAG-Protokoll**
+   - `Score.rag_basis_json`: strukturierte Liste Vorgaben + Angebot (Datei, S./Kap., Chunk-ID,
+     Methode `hybrid|literal_line|literal_parent|ref_pass|neighbor`, Score, Preview).
+   - UI: aufklappbar unter KI-Vorschlag (`_rag_basis.html`); persistiert bei «Nur als KI-Vorschlag»
+     und Stapelverarbeitung.
+   - `suggest_score_with_rag()` liefert `rag_basis` + `tender_rag_documents` / `offer_rag_documents`.
+
+3. **Tests:** Literal nur F01-001 (nicht F01-002); Parent nur Vorgaben; `rag_basis` im Return;
+   `upsert_score(..., rag_basis_json=...)`.
+
+**Akzeptanzkriterien:**
+- Nach KI-Vorschlag F01-001 sind alle verwendeten Quellen (Pflichtenheft + Angebot-PDF) sichtbar
+  und nach Reload noch in der 🤖-Zeile abrufbar.
+- Angebots-RAG enthält garantiert die Zeile `F01-001`, zieht aber **nicht** F01-002 als Literal/Nachbar.
+- Vorgaben-RAG kann optional Parent-Block `F01` mitliefern.
+
+---
+
+**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~27~~ → ~~28~~

@@ -215,6 +215,7 @@ class Score(SQLModel, table=True):
     value: float = Field(sa_column=Column(Float, nullable=False))
     justification: Optional[str] = None
     source_chunk_ref: Optional[str] = None
+    rag_basis_json: Optional[str] = Field(default=None, sa_column=Column(String))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -996,6 +997,7 @@ def upsert_score(
     value: float,
     justification: str | None = None,
     source_chunk_ref: str | None = None,
+    rag_basis_json: str | None = None,
     as_source: str | None = None,
 ) -> Score:
     """
@@ -1034,6 +1036,8 @@ def upsert_score(
             existing.value = value
             existing.justification = justification
             existing.source_chunk_ref = source_chunk_ref
+            if rag_basis_json is not None:
+                existing.rag_basis_json = rag_basis_json or None
             existing.updated_at = now
             session.add(existing)
             session.commit()
@@ -1048,6 +1052,7 @@ def upsert_score(
             value=value,
             justification=justification,
             source_chunk_ref=source_chunk_ref,
+            rag_basis_json=rag_basis_json or None,
             created_at=now,
             updated_at=now,
         )
@@ -1767,15 +1772,35 @@ def criteria_apply_requires_confirm(data: dict[str, Any]) -> bool:
 
 
 def _dedupe_rag_docs(docs: list[dict]) -> list[dict]:
-    seen: set[int] = set()
-    out: list[dict] = []
+    """Dedupliziert nach chunk_id; behält die präzisere retrieval_method."""
+    method_priority = {
+        "literal_line": 0,
+        "literal_parent": 1,
+        "ref_pass": 2,
+        "neighbor": 3,
+        "hybrid": 4,
+    }
+    by_id: dict[int, dict] = {}
+    order: list[int] = []
+    extras: list[dict] = []
     for d in docs:
         cid = d.get("chunk_id")
-        if cid in seen:
+        if cid is None:
+            extras.append(dict(d))
             continue
-        seen.add(cid)
-        out.append(d)
-    return out
+        cid = int(cid)
+        if cid not in by_id:
+            by_id[cid] = dict(d)
+            order.append(cid)
+            continue
+        existing = by_id[cid]
+        old_pri = method_priority.get(str(existing.get("retrieval_method") or "hybrid"), 9)
+        new_pri = method_priority.get(str(d.get("retrieval_method") or "hybrid"), 9)
+        if new_pri < old_pri:
+            merged = dict(existing)
+            merged.update(d)
+            by_id[cid] = merged
+    return [by_id[cid] for cid in order] + extras
 
 
 def _retrieve_tender_context_multi(
@@ -2605,6 +2630,302 @@ def _build_suggestion_chunk_ref(
     return None
 
 
+def _resolve_suggestion_line_ref(criterion: Criterion) -> Optional[str]:
+    """Einzelzeile F01-001 / EK1-03 aus Criterion.referenz oder name."""
+    raw = (criterion.referenz or "").strip()
+    if not raw:
+        raw = _entry_referenz({"name": criterion.name or ""}) or ""
+    return _normalize_line_ref(raw)
+
+
+def _resolve_suggestion_parent_ref(criterion: Criterion) -> Optional[str]:
+    """Parent-Ref F01 / EK1 — für Vorgaben-Block-Kontext, nicht Angebot-Siblings."""
+    line = _resolve_suggestion_line_ref(criterion)
+    if line:
+        if re.match(r"^EK\d+-\d+$", line, re.I):
+            return line.split("-", 1)[0].upper()
+        m = re.match(r"^([A-Z]\d{2})-\d+$", line)
+        if m:
+            return m.group(1).upper()
+    raw = (criterion.referenz or "").strip()
+    if raw and not _normalize_line_ref(raw):
+        return _normalize_requirement_ref(raw)
+    if criterion.parent_id:
+        from .m03_db import get_session
+
+        with get_session() as session:
+            parent = session.get(Criterion, criterion.parent_id)
+        if parent and (parent.referenz or "").strip():
+            return _normalize_requirement_ref(parent.referenz) or parent.referenz.strip().upper()
+    return None
+
+
+def _line_ref_enrichment_query(line_ref: str) -> str:
+    """BM25-Query für exakte Anforderungszeile (ohne Geschwister F01-002…)."""
+    line = _normalize_line_ref(line_ref) or (line_ref or "").strip()
+    if not line:
+        return ""
+    parts = [line, line.replace("-", " ")]
+    m = re.match(r"^([A-Z]\d{2})-(\d{3})$", line)
+    if m:
+        letter, block, num = m.group(1)[0], m.group(1)[1:], m.group(2)
+        parts.append(f"{letter}-{block}-{num}")
+        parts.append(f"{letter}{block}-{num}")
+    m_ek = re.match(r"^(EK\d+)-(\d{2})$", line, re.I)
+    if m_ek:
+        parts.append(f"{m_ek.group(1).upper()}-{m_ek.group(2)}")
+    parts.append("Referenz Fragenr Kommentar Lieferant Anforderung")
+    return " ".join(p for p in parts if p)
+
+
+def _chunk_contains_line_ref(text: str, line_ref: str) -> bool:
+    line = _normalize_line_ref(line_ref) or (line_ref or "").strip()
+    if not line or not text:
+        return False
+    return bool(re.search(_line_label_regex(line), text, re.I))
+
+
+def _literal_chunks_for_line_ref(
+    document_ids: tuple[int, ...],
+    line_ref: str,
+    *,
+    max_chunks: int = 8,
+) -> list[dict[str, Any]]:
+    """Volltext-Scan: nur exakte Zeilennummer (F01-001), keine Ref-Gruppe F01-002…"""
+    from sqlmodel import select
+
+    from .m03_db import Document, DocumentChunk, get_session
+
+    line = _normalize_line_ref(line_ref) or (line_ref or "").strip()
+    if not line or not document_ids:
+        return []
+    pat = _line_label_regex(line)
+    flat_needle = line.lower().replace("-", "").replace(" ", "")
+    scored: list[tuple[int, dict[str, Any]]] = []
+    with get_session() as session:
+        rows = session.exec(
+            select(DocumentChunk, Document)
+            .join(Document, Document.id == DocumentChunk.document_id)
+            .where(DocumentChunk.document_id.in_(list(document_ids)))
+            .where(Document.is_deleted == False)  # noqa: E712
+        ).all()
+    for chunk, doc in rows:
+        text = chunk.chunk_text or ""
+        score = 2 if re.search(pat, text, re.I) else 0
+        if score <= 0 and flat_needle:
+            flat = text.lower().replace("-", "").replace(" ", "")
+            if flat_needle in flat:
+                score = 1
+        if score <= 0:
+            continue
+        scored.append((
+            score,
+            {
+                "chunk_id": chunk.id,
+                "document_id": chunk.document_id,
+                "filename": doc.filename or "",
+                "text": text,
+                "page_number": chunk.page_number,
+                "section_path": chunk.section_path,
+                "classification": doc.classification or "",
+                "retrieval_method": "literal_line",
+            },
+        ))
+    scored.sort(key=lambda x: (-x[0], x[1].get("chunk_id") or 0))
+    return [row for _, row in scored[:max_chunks]]
+
+
+def _tag_rag_docs(docs: list[dict], method: str) -> list[dict]:
+    out: list[dict] = []
+    for d in docs:
+        row = dict(d)
+        row.setdefault("retrieval_method", method)
+        out.append(row)
+    return out
+
+
+def _retrieve_suggestion_side_docs(
+    query: str,
+    *,
+    project_key: str,
+    document_ids: tuple[int, ...] | None,
+    limit: int,
+    threshold: float,
+    line_ref: Optional[str] = None,
+    parent_ref: Optional[str] = None,
+    include_parent_literal: bool = False,
+    classification_filter: str | None = None,
+    exclude_classification: str | None = None,
+    bidder_id: int | None = None,
+) -> list[dict]:
+    """Hybrid-RAG + optional Literal/Ref-Pässe (Ticket 28)."""
+    rag_docs: list[dict] = []
+    rag = retrieve_relevant_chunks_hybrid(
+        query,
+        project_key=project_key,
+        limit=limit,
+        threshold=threshold,
+        classification_filter=classification_filter,
+        exclude_classification=exclude_classification,
+        bidder_id=bidder_id,
+        document_ids=document_ids,
+    )
+    rag_docs.extend(_tag_rag_docs(list(rag.get("documents", [])), "hybrid"))
+
+    ids = document_ids or ()
+    if line_ref and ids:
+        ref_q = _line_ref_enrichment_query(line_ref)
+        if ref_q:
+            ref_rag = retrieve_relevant_chunks_hybrid(
+                ref_q,
+                project_key=project_key,
+                limit=limit,
+                threshold=min(threshold, 0.12),
+                classification_filter=classification_filter,
+                exclude_classification=exclude_classification,
+                bidder_id=bidder_id,
+                document_ids=ids,
+            )
+            rag_docs.extend(_tag_rag_docs(list(ref_rag.get("documents", [])), "ref_pass"))
+        literal_line = _literal_chunks_for_line_ref(ids, line_ref, max_chunks=limit)
+        rag_docs.extend(literal_line)
+
+    if include_parent_literal and parent_ref and ids:
+        literal_parent = _literal_chunks_for_requirement_ref(ids, parent_ref, max_chunks=limit)
+        for row in literal_parent:
+            tagged = dict(row)
+            tagged["retrieval_method"] = "literal_parent"
+            rag_docs.append(tagged)
+
+    return _dedupe_rag_docs(rag_docs)
+
+
+def _retrieve_suggestion_tender_docs(
+    project_key: str,
+    criterion: Criterion,
+    query: str,
+    *,
+    limit: int,
+) -> list[dict]:
+    roles = tender_roles_for_criterion(criterion)
+    ids = get_tender_document_ids(project_key, roles=roles)
+    line_ref = _resolve_suggestion_line_ref(criterion)
+    parent_ref = _resolve_suggestion_parent_ref(criterion)
+    if ids:
+        return _retrieve_suggestion_side_docs(
+            query,
+            project_key=project_key,
+            document_ids=tuple(ids),
+            limit=limit,
+            threshold=0.28,
+            line_ref=line_ref,
+            parent_ref=parent_ref,
+            include_parent_literal=bool(parent_ref),
+        )
+    rag = retrieve_relevant_chunks_hybrid(
+        query,
+        project_key=project_key,
+        limit=limit,
+        threshold=0.35,
+        exclude_classification=ANGEBOT_CLASSIFICATION,
+    )
+    return _tag_rag_docs(list(rag.get("documents", [])), "hybrid")
+
+
+def _retrieve_suggestion_offer_docs(
+    project_key: str,
+    bidder_id: int,
+    criterion: Criterion,
+    query: str,
+    *,
+    limit: int,
+) -> list[dict]:
+    line_ref = _resolve_suggestion_line_ref(criterion)
+    bidder_doc_ids = bidder_doc_ids_for_criterion(bidder_id, criterion)
+    doc_ids = tuple(bidder_doc_ids) if bidder_doc_ids else None
+    docs = _retrieve_suggestion_side_docs(
+        query,
+        project_key=project_key,
+        document_ids=doc_ids,
+        limit=limit,
+        threshold=0.35,
+        line_ref=line_ref,
+        include_parent_literal=False,
+        classification_filter=ANGEBOT_CLASSIFICATION,
+        bidder_id=bidder_id,
+    )
+    if not docs:
+        docs = _retrieve_suggestion_side_docs(
+            query,
+            project_key=project_key,
+            document_ids=None,
+            limit=limit,
+            threshold=0.35,
+            line_ref=line_ref,
+            include_parent_literal=False,
+            bidder_id=bidder_id,
+        )
+    neighbor_raw = _section_neighbor_chunks(docs, cap=SECTION_NEIGHBOR_CHUNK_CAP)
+    if line_ref:
+        neighbor_raw = [
+            n for n in neighbor_raw
+            if _chunk_contains_line_ref(n.get("text") or "", line_ref)
+        ]
+    neighbor_docs = _tag_rag_docs(neighbor_raw, "neighbor")
+    return _dedupe_rag_docs(docs + neighbor_docs)
+
+
+def _rag_basis_doc_entry(d: dict[str, Any]) -> dict[str, Any]:
+    score = max(float(d.get("similarity") or 0), float(d.get("match_score") or 0), 0.0)
+    entry: dict[str, Any] = {
+        "chunk_id": d.get("chunk_id"),
+        "document_id": d.get("document_id"),
+        "filename": d.get("filename") or "?",
+        "method": d.get("retrieval_method") or "hybrid",
+        "preview": (d.get("text") or "")[:220].replace("\n", " "),
+    }
+    if d.get("page_number"):
+        entry["page_number"] = d["page_number"]
+    if d.get("section_path"):
+        entry["section_path"] = d["section_path"]
+    if score > 0:
+        entry["score"] = round(score, 3)
+    return entry
+
+
+def build_suggestion_rag_basis(
+    *,
+    line_ref: Optional[str],
+    parent_ref: Optional[str],
+    tender_docs: list[dict],
+    offer_docs: list[dict],
+    queries: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "line_ref": line_ref,
+        "parent_ref": parent_ref,
+        "queries": queries,
+        "tender": [_rag_basis_doc_entry(d) for d in tender_docs],
+        "offer": [_rag_basis_doc_entry(d) for d in offer_docs],
+    }
+
+
+def serialize_rag_basis(basis: dict[str, Any] | None) -> str | None:
+    if not basis:
+        return None
+    return json.dumps(basis, ensure_ascii=False)
+
+
+def parse_rag_basis_json(raw: str | None) -> dict[str, Any] | None:
+    if not raw or not str(raw).strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def suggest_score_with_rag(
     project_key: str,
     bidder_id: int,
@@ -2618,58 +2939,38 @@ def suggest_score_with_rag(
 
     cfg = get_evaluation_config(project_key)
     limit = cfg["rag_chunks_per_role"]
-    roles = tender_roles_for_criterion(criterion)
-    role_groups = [(roles, req_query)]
-    tender_context_raw = _retrieve_tender_context_multi(
-        project_key, role_groups, limit_per_role=limit
-    )
-    if tender_context_raw == "Keine passenden Vorgaben-Stellen gefunden.":
-        tender_rag = retrieve_relevant_chunks_hybrid(
-            req_query,
-            project_key=project_key,
-            limit=limit,
-            threshold=0.35,
-            exclude_classification=ANGEBOT_CLASSIFICATION,
-        )
-        tender_context_raw = _format_rag_context(
-            tender_rag.get("documents", []),
-            empty_msg="Keine passenden Vorgaben-Stellen gefunden.",
-            max_chunks=limit,
-        )
+    line_ref = _resolve_suggestion_line_ref(criterion)
+    parent_ref = _resolve_suggestion_parent_ref(criterion)
 
-    bidder_doc_ids = bidder_doc_ids_for_criterion(bidder_id, criterion)
-    rag = retrieve_relevant_chunks_hybrid(
-        offer_query,
-        project_key=project_key,
-        limit=limit,
-        threshold=0.35,
-        classification_filter=ANGEBOT_CLASSIFICATION,
-        bidder_id=bidder_id,
-        document_ids=tuple(bidder_doc_ids) if bidder_doc_ids else None,
+    tender_docs = _retrieve_suggestion_tender_docs(
+        project_key, criterion, req_query, limit=limit
     )
-    docs = rag.get("documents", [])
-    if not docs:
-        rag = retrieve_relevant_chunks_hybrid(
-            offer_query,
-            project_key=project_key,
-            limit=limit,
-            threshold=0.35,
-            bidder_id=bidder_id,
-        )
-        docs = rag.get("documents", [])
-    neighbor_docs = _section_neighbor_chunks(docs, cap=SECTION_NEIGHBOR_CHUNK_CAP)
-    offer_docs = _dedupe_rag_docs(docs + neighbor_docs)
+    offer_docs = _retrieve_suggestion_offer_docs(
+        project_key, bidder_id, criterion, offer_query, limit=limit
+    )
 
-    tender_context = tender_context_raw
-    scale_bands = cfg.get("scale_bands") or DEFAULT_SCALE_BANDS
+    format_cap = limit + SECTION_NEIGHBOR_CHUNK_CAP
+    tender_context = _format_rag_context(
+        tender_docs,
+        empty_msg="Keine passenden Vorgaben-Stellen gefunden.",
+        max_chunks=min(len(tender_docs), limit),
+    )
     offer_context = _format_rag_context(
         offer_docs,
         empty_msg="Keine passenden Angebotsstellen gefunden.",
-        max_chunks=limit + SECTION_NEIGHBOR_CHUNK_CAP,
+        max_chunks=min(len(offer_docs), format_cap),
+    )
+    rag_basis = build_suggestion_rag_basis(
+        line_ref=line_ref,
+        parent_ref=parent_ref,
+        tender_docs=tender_docs[:limit],
+        offer_docs=offer_docs[:format_cap],
+        queries={"tender": req_query, "offer": offer_query},
     )
     if is_cloud_llm_provider(provider):
         tender_context = sanitize_for_cloud_text(tender_context)
         offer_context = sanitize_for_cloud_text(offer_context)
+    scale_bands = cfg.get("scale_bands") or DEFAULT_SCALE_BANDS
     scale_max = max(1, criterion.scale_max)
     system = (
         f"{VERGABE_SYSTEM_RULES}\n"
@@ -2819,6 +3120,10 @@ def suggest_score_with_rag(
         "justification_warning": justification_warning,
         "source_chunk_ref": chunk_ref,
         "rag_documents": offer_docs,
+        "tender_rag_documents": tender_docs,
+        "offer_rag_documents": offer_docs,
+        "rag_basis": rag_basis,
+        "rag_basis_json": serialize_rag_basis(rag_basis),
         "raw_llm": raw,
         "suggest_error": (
             "Keine LLM-Antwort (Ollama timeout oder Modell nicht geladen)."
@@ -4421,6 +4726,8 @@ def migrate_evaluation_db() -> None:
                 conn.execute(text("ALTER TABLE price_item ADD COLUMN bemerkung VARCHAR(500)"))
 
         score_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(score)")).fetchall()}
+        if "rag_basis_json" not in score_cols:
+            conn.execute(text("ALTER TABLE score ADD COLUMN rag_basis_json VARCHAR"))
         if "source_key" not in score_cols:
             # Alte Score-Tabelle: 1 Zeile pro (bidder, criterion). Neue: 1 Zeile pro
             # (bidder, criterion, source_key) - Rebuild, SQLite kann Unique-Constraints
