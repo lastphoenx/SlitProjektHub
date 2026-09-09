@@ -103,6 +103,64 @@ def strip_llm_reasoning_wrappers(text: str | None) -> str:
     return s.strip()
 
 
+def _ollama_native_chat(
+    model_id: str,
+    system: str,
+    messages: list[dict],
+    *,
+    max_tokens: int,
+    temperature: float,
+    json_format: bool = False,
+    timeout: float = 600.0,
+) -> str:
+    """Ollama /api/chat — think:false zuverlässig (OpenAI-Shim liefert bei qwen3.8 oft nur «{»)."""
+    import json as json_mod
+    import urllib.error
+    import urllib.request
+
+    root = _ollama_root_url()
+    if not root:
+        raise LLMError("Ollama nicht konfiguriert")
+    chat_messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+    for m in messages:
+        role = str(m.get("role") or "user")
+        content = m.get("content", "")
+        if isinstance(content, list):
+            text_parts = [
+                str(p.get("text", ""))
+                for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
+            content = "\n".join(t for t in text_parts if t)
+        chat_messages.append({"role": role, "content": str(content or "")})
+    payload: dict = {
+        "model": model_id,
+        "messages": chat_messages,
+        "stream": False,
+        "think": False,
+        "options": {"temperature": temperature, "num_predict": max_tokens},
+    }
+    if json_format:
+        payload["format"] = "json"
+    req = urllib.request.Request(
+        f"{root}/api/chat",
+        data=json_mod.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json_mod.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:300]
+        raise LLMError(f"Ollama HTTP {e.code}: {body}") from e
+    except TimeoutError as e:
+        raise LLMError(f"Ollama timeout ({model_id})") from e
+    msg = data.get("message") or {}
+    content = msg.get("content") or ""
+    return strip_llm_reasoning_wrappers(str(content))
+
+
 def _ollama_env_url() -> str:
     return (
         (os.getenv("OLLAMA_BASE_URL") or "")
@@ -478,7 +536,7 @@ def _apply_images_to_messages(
     return out
 
 
-def try_models_with_messages(provider: str, system: str, messages: list[dict], *, max_tokens: int, temperature: float, model: str | None = None, _used_model: list | None = None, images: list[tuple[bytes, str]] | None = None) -> str | None:
+def try_models_with_messages(provider: str, system: str, messages: list[dict], *, max_tokens: int, temperature: float, model: str | None = None, _used_model: list | None = None, images: list[tuple[bytes, str]] | None = None, json_format: bool = False) -> str | None:
     """
     Provider-agnostische Chat-Funktion mit Model & Temperature Support.
 
@@ -511,24 +569,36 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
     if provider == "ollama" and have_key("ollama"):
         from .ollama_lock import ollama_inference_lock, resolve_lock_holder
 
-        client = _openai_client("ollama", timeout=600)
         model_id = get_model_id("ollama", model)
-        all_messages = [{"role": "system", "content": system}] + msgs
+        all_messages = msgs
         with ollama_inference_lock(resolve_lock_holder(), model=model_id):
             try:
-                ollama_extra = _ollama_chat_extra_body(model_id)
-                resp = client.chat.completions.create(
-                    model=model_id,
-                    messages=all_messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    **({"extra_body": ollama_extra} if ollama_extra else {}),
-                )
+                if images and model_supports_vision("ollama", model_id):
+                    client = _openai_client("ollama", timeout=600)
+                    all_messages = [{"role": "system", "content": system}] + msgs
+                    ollama_extra = _ollama_chat_extra_body(model_id)
+                    resp = client.chat.completions.create(
+                        model=model_id,
+                        messages=all_messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        **({"extra_body": ollama_extra} if ollama_extra else {}),
+                    )
+                    content = resp.choices[0].message.content
+                    text = strip_llm_reasoning_wrappers(content or "")
+                else:
+                    text = _ollama_native_chat(
+                        model_id,
+                        system,
+                        msgs,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        json_format=json_format,
+                    )
                 if _used_model is not None:
                     _used_model.clear()
                     _used_model += [model_id, ""]
-                content = resp.choices[0].message.content
-                return strip_llm_reasoning_wrappers(content or "")
+                return text
             except Exception as e:
                 raise LLMError(f"Ollama ({model_id}): {e}") from e
 
@@ -683,13 +753,12 @@ def test_connection(provider: str, timeout: float = 10.0, model: str | None = No
             if not names:
                 return (False, f"Ollama nicht erreichbar oder keine Modelle ({root})")
             model_id = _resolve_ollama_model(model)
-            client = _openai_client("ollama", timeout=timeout)
-            ollama_extra = _ollama_chat_extra_body(model_id)
-            client.chat.completions.create(
-                model=model_id,
-                messages=[{"role": "user", "content": "hi"}],
+            _ollama_native_chat(
+                model_id,
+                "Du antwortest kurz.",
+                [{"role": "user", "content": "hi"}],
                 max_tokens=10,
-                **({"extra_body": ollama_extra} if ollama_extra else {}),
+                temperature=0.0,
             )
             return (True, "")
         except Exception as e:
@@ -1466,16 +1535,13 @@ def test_provider_connection(provider: str) -> tuple[bool, str]:
 
         elif provider == "ollama":
             model_id = _resolve_ollama_model(None)
-            client = _openai_client("ollama")
-            ollama_extra = _ollama_chat_extra_body(model_id)
-            resp = client.chat.completions.create(
-                model=model_id,
-                messages=[{"role": "user", "content": user}],
+            ans = _ollama_native_chat(
+                model_id,
+                system,
+                [{"role": "user", "content": user}],
                 max_tokens=10,
                 temperature=0.0,
-                **({"extra_body": ollama_extra} if ollama_extra else {}),
             )
-            ans = resp.choices[0].message.content.strip()
             return (True, f"Verbunden ({model_id}: {ans[:20]})")
         
         return (False, "Unbekannter Provider")

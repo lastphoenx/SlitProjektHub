@@ -31,6 +31,13 @@ def test_ollama_think_disabled_for_qwen38():
     assert extra == {"think": False}
 
 
+def test_parse_suggestion_json_bare_object():
+    from src.m15_evaluation import _parse_suggestion_llm_json
+
+    data = _parse_suggestion_llm_json('{"value": 8, "strengths": "ok"}')
+    assert data.get("value") == 8
+
+
 def test_strip_llm_reasoning_wrappers():
     from src.m08_llm import strip_llm_reasoning_wrappers
 
@@ -42,5 +49,6 @@ if __name__ == "__main__":
     test_ollama_default_model()
     test_normalize_legacy_ollama_models()
     test_ollama_think_disabled_for_qwen38()
+    test_parse_suggestion_json_bare_object()
     test_strip_llm_reasoning_wrappers()
     print("OK")

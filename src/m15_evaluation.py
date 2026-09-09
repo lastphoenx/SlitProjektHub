@@ -2306,6 +2306,10 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 
 
+def _ollama_wants_json(provider: str) -> bool:
+    return (provider or "").strip().lower() == "ollama"
+
+
 def _suggestion_json_keys_instruction(scale_max: int, kind: str) -> str:
     """LLM-JSON-Schema für rekursfähige Bewertungsvorschläge."""
     parts = [
@@ -2523,6 +2527,7 @@ def _llm_deduction_contradiction_check(
         max_tokens=220,
         temperature=0.0,
         model=model,
+        json_format=_ollama_wants_json(provider),
     )
     parsed = _parse_suggestion_llm_json(raw)
     return bool(parsed.get("contradiction"))
@@ -2532,16 +2537,24 @@ def _parse_suggestion_llm_json(raw: str | None) -> dict[str, Any]:
     if not raw:
         return {}
     cleaned = strip_llm_reasoning_wrappers(raw)
+    if not cleaned:
+        return {}
+    candidates: list[str] = []
     m = _JSON_BLOCK_RE.search(cleaned)
-    if not m:
-        log.warning("LLM JSON block not found: %s", cleaned[:200])
-        return {}
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        log.warning("LLM JSON parse failed: %s", cleaned[:200])
-        return {}
-    return data if isinstance(data, dict) else {}
+    if m:
+        candidates.append(m.group(0))
+    stripped = cleaned.strip()
+    if stripped.startswith("{"):
+        candidates.append(stripped)
+    for blob in candidates:
+        try:
+            data = json.loads(blob)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    log.warning("LLM JSON block not found: %s", cleaned[:400])
+    return {}
 
 
 def _parse_suggestion_value(parsed: dict[str, Any], scale_max: int) -> Optional[float]:
@@ -2689,6 +2702,7 @@ def suggest_score_with_rag(
         max_tokens=1500,
         temperature=0.2,
         model=model,
+        json_format=_ollama_wants_json(provider),
     )
     parsed = _parse_suggestion_llm_json(raw)
     value_f = _parse_suggestion_value(parsed, scale_max)
@@ -2711,6 +2725,7 @@ def suggest_score_with_rag(
             max_tokens=1500,
             temperature=0.15,
             model=model,
+            json_format=_ollama_wants_json(provider),
         )
         parsed_retry = _parse_suggestion_llm_json(raw_retry)
         value_retry = _parse_suggestion_value(parsed_retry, scale_max)
@@ -2762,6 +2777,7 @@ def suggest_score_with_rag(
             max_tokens=1500,
             temperature=0.1,
             model=model,
+            json_format=_ollama_wants_json(provider),
         )
         parsed_ground = _parse_suggestion_llm_json(raw_ground)
         value_ground = _parse_suggestion_value(parsed_ground, scale_max)
@@ -2815,17 +2831,7 @@ def suggest_score_with_rag(
 
 
 def _parse_llm_json_object(raw: str | None) -> dict[str, Any]:
-    if not raw:
-        return {}
-    m = _JSON_BLOCK_RE.search(raw)
-    if not m:
-        return {}
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        log.warning("LLM JSON parse failed: %s", raw[:200])
-        return {}
-    return data if isinstance(data, dict) else {}
+    return _parse_suggestion_llm_json(raw)
 
 
 def validate_tender_cloud_gate(
@@ -3868,6 +3874,7 @@ def _enrich_single_criteria_entry_children(
         max_tokens=4500,
         temperature=0.1,
         model=model,
+        json_format=_ollama_wants_json(provider),
     )
     sub = _parse_llm_json_object(raw)
     children = sub.get("children") if isinstance(sub, dict) else []
@@ -4019,6 +4026,7 @@ def extract_criteria_from_tender_docs(
     raw = try_models_with_messages(
         provider, system, [{"role": "user", "content": user}],
         max_tokens=4000, temperature=0.1, model=model,
+        json_format=_ollama_wants_json(provider),
     )
     payload = _parse_llm_json_object(raw)
     ref_hints = _ensure_criteria_refs(payload, ref_prefixes)
@@ -4103,6 +4111,7 @@ def extract_price_structure_from_tender(
     raw = try_models_with_messages(
         provider, system, [{"role": "user", "content": f"Preisblatt-Vorlage:\n{context}\n\nJSON:"}],
         max_tokens=3000, temperature=0.1, model=model,
+        json_format=_ollama_wants_json(provider),
     )
     structure = _parse_llm_json_object(raw)
     einmalig, wiederkehrend = _price_rows_from_llm(structure)
@@ -4152,6 +4161,7 @@ def extract_price_from_bidder_doc(
     raw = try_models_with_messages(
         provider, system, [{"role": "user", "content": f"Bieter-Preisblatt:\n{context}\n\nJSON:"}],
         max_tokens=3000, temperature=0.1, model=model,
+        json_format=_ollama_wants_json(provider),
     )
     structure = _parse_llm_json_object(raw)
     einmalig, wiederkehrend = _price_rows_from_llm(structure)
