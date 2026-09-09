@@ -32,6 +32,9 @@
               <td>🤖 KI-Vorschlag</td>
               <td>{{ ("Ja" if ai_row.value == 1 else "Nein") if criterion.scale_max == 1 else ai_row.value }}</td>
               <td style="font-size:.8rem">
+                {% if rag_basis %}
+                {% include "evaluation/_rag_basis_summary.html" %}
+                {% endif %}
                 {% if ai_row.justification %}
                 <div>{{ ai_row.justification }}</div>
                 {% endif %}

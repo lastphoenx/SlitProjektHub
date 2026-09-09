@@ -1,8 +1,7 @@
 {% if rag_basis %}
 <details class="eval-rag-basis" style="margin-top:.5rem;font-size:.78rem">
   <summary style="cursor:pointer;color:var(--color-text-muted);user-select:none">
-    📎 RAG-Basis ({{ (rag_basis.tender|length) + (rag_basis.offer|length) }} Quellen)
-    {% if rag_basis.line_ref %} · Zeile {{ rag_basis.line_ref }}{% endif %}
+    Alle Quellen anzeigen (Details)
   </summary>
   <div style="margin-top:.45rem;display:grid;gap:.55rem">
     {% if rag_basis.tender %}

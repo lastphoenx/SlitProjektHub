@@ -366,11 +366,11 @@ Hybrid-Suche allein kann die richtige Tabellenzeile verfehlen oder Narrativ-Kapi
 
 ---
 
-**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~27~~ → ~~28~~ → ~~30~~
+**Reihenfolge-Empfehlung:** ~~3~~ → … → ~~27~~ → ~~28~~ → ~~29~~ → ~~30~~
 
 ---
 
-## Ticket 29 — RAG-Basis: Sichtbarkeit im UI + Deployment-Check
+## Ticket 29 — RAG-Basis: Sichtbarkeit im UI + Deployment-Check ✅ erledigt
 
 **Anlass:** Rückfrage nach Prüfung eines KI-Vorschlags (F01-001, Wert 7.0): "Ist die Begründung
 nur auf die sichtbare Tabellenzeile/den Screenshot gestützt, oder auf das ganze Pflichtenheft +
@@ -416,6 +416,11 @@ Screenshot nicht sichtbar. Ursachenanalyse:
   zugrunde lagen.
 - Deployment-Runbook (README/Docs) erwähnt explizit: Template-/Route-Änderungen erfordern
   Service-Neustart (kein Hot-Reload in Produktion).
+
+**Umsetzung UX (Sep 2026):** `_rag_basis_summary.html` — kompakte Zeile direkt unter «Wert: X»
+(📎 N Quellen · Zeile F01-001 · Aufteilung Vorgaben/Angebot); volle Liste bleibt in
+`_rag_basis.html` als aufklappbare Details darunter. Einbindung in `_suggestion.html` und
+`_cell.html` (🤖-Zeile in der Matrix).
 
 ---
 

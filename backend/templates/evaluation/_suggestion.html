@@ -11,6 +11,10 @@
   {% if suggestion.value is not none %}
   <p style="margin:.35rem 0 0">Wert: <strong>{{ suggestion.value }}</strong></p>
 
+  {% if rag_basis or suggestion.rag_basis %}
+  {% include "evaluation/_rag_basis_summary.html" %}
+  {% endif %}
+
   {% if suggestion.justification_warning %}
   <div class="card" style="margin:.5rem 0;padding:.45rem .55rem;border-color:#fbbf24;background:rgba(245,158,11,.08)">
     <p style="font-size:.78rem;margin:0;color:#fcd34d">⚠ {{ suggestion.justification_warning }}</p>
