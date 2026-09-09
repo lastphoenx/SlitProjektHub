@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 # ==================== MODEL CONFIGURATION ====================
 
 ANTHROPIC_MODEL_DEFAULT = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+OLLAMA_DEFAULT_MODEL = "qwen3.8:27b"
+OLLAMA_LEGACY_MODEL_MAP = {
+    "qwen3:32b": OLLAMA_DEFAULT_MODEL,
+    "qwen3.6:27b": OLLAMA_DEFAULT_MODEL,
+}
 
 AVAILABLE_MODELS = {
     "anthropic": {
@@ -51,10 +56,12 @@ AVAILABLE_MODELS = {
         "large": "mistral-large-latest",
     },
     "ollama": {
-        # Modellname = Ollama-Tag auf dem Server (z. B. llama3.2)
+        # Modellname = Ollama-Tag auf gmk-evo (siehe doku/evo-gmktec/gmk-evo-setup.md §4)
+        OLLAMA_DEFAULT_MODEL: OLLAMA_DEFAULT_MODEL,
+        "qwen2.5:32b": "qwen2.5:32b",
+        "llama3.3:70b": "llama3.3:70b",
+        "qwen3:8b": "qwen3:8b",
         "llama3.2": "llama3.2",
-        "qwen2.5": "qwen2.5",
-        "mistral": "mistral",
     },
 }
 
@@ -62,8 +69,22 @@ DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-4-6",
     "openai": "gpt-4o-mini",
     "mistral": "mistral-large-latest",
-    "ollama": "llama3.2",
+    "ollama": OLLAMA_DEFAULT_MODEL,
 }
+
+
+def normalize_ollama_model(name: str | None) -> str:
+    """Legacy-Tags (qwen3:32b, qwen3.6:27b) auf Produktivmodell mappen."""
+    raw = (name or "").strip()
+    return OLLAMA_LEGACY_MODEL_MAP.get(raw, raw)
+
+
+def _ollama_chat_extra_body(model_id: str) -> dict:
+    """Hybrid-Thinking-Modelle (qwen3.8): Reasoning für JSON/RAG deaktivieren."""
+    m = (model_id or "").lower()
+    if "qwen3.8" in m or m.startswith("qwen3:"):
+        return {"think": False}
+    return {}
 
 
 def _ollama_env_url() -> str:
@@ -181,7 +202,9 @@ def ollama_runtime_status(wanted_model: str | None = None) -> dict:
 
 def _resolve_ollama_model(model_name: str | None) -> str:
     names = _fetch_ollama_model_names()
-    want = (model_name or "").strip() or DEFAULT_MODELS.get("ollama", "llama3.2")
+    want = normalize_ollama_model(
+        (model_name or "").strip() or DEFAULT_MODELS.get("ollama", OLLAMA_DEFAULT_MODEL)
+    )
     if not names:
         return want
     if want in names:
@@ -368,7 +391,7 @@ def _anthropic_try_models_with_messages(system: str, messages: list[dict], *, ma
 _VISION_HINTS: dict[str, tuple[str, ...]] = {
     "openai": ("gpt-4o", "gpt-5", "gpt-4-turbo", "vision"),
     "anthropic": ("claude",),
-    "ollama": ("llava", "vision", "vl", "moondream", "bakllava", "minicpm-v", "gemma3"),
+    "ollama": ("llava", "vision", "vl", "moondream", "bakllava", "minicpm-v", "gemma3", "qwen3.8"),
     "mistral": ("pixtral",),
 }
 
@@ -477,11 +500,13 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
         all_messages = [{"role": "system", "content": system}] + msgs
         with ollama_inference_lock(resolve_lock_holder(), model=model_id):
             try:
+                ollama_extra = _ollama_chat_extra_body(model_id)
                 resp = client.chat.completions.create(
                     model=model_id,
                     messages=all_messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    **({"extra_body": ollama_extra} if ollama_extra else {}),
                 )
                 if _used_model is not None:
                     _used_model.clear()
@@ -642,10 +667,12 @@ def test_connection(provider: str, timeout: float = 10.0, model: str | None = No
                 return (False, f"Ollama nicht erreichbar oder keine Modelle ({root})")
             model_id = _resolve_ollama_model(model)
             client = _openai_client("ollama", timeout=timeout)
+            ollama_extra = _ollama_chat_extra_body(model_id)
             client.chat.completions.create(
                 model=model_id,
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=10,
+                **({"extra_body": ollama_extra} if ollama_extra else {}),
             )
             return (True, "")
         except Exception as e:
@@ -1423,11 +1450,13 @@ def test_provider_connection(provider: str) -> tuple[bool, str]:
         elif provider == "ollama":
             model_id = _resolve_ollama_model(None)
             client = _openai_client("ollama")
+            ollama_extra = _ollama_chat_extra_body(model_id)
             resp = client.chat.completions.create(
                 model=model_id,
                 messages=[{"role": "user", "content": user}],
                 max_tokens=10,
                 temperature=0.0,
+                **({"extra_body": ollama_extra} if ollama_extra else {}),
             )
             ans = resp.choices[0].message.content.strip()
             return (True, f"Verbunden ({model_id}: {ans[:20]})")

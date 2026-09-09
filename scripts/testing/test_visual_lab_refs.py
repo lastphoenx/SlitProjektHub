@@ -19,6 +19,7 @@ from src.m17_visual_lab_refs import (
 
 def test_model_supports_vision_ollama_vl():
     assert model_supports_vision("ollama", "qwen2.5vl:7b")
+    assert model_supports_vision("ollama", "qwen3.8:27b")
     assert not model_supports_vision("ollama", "qwen3:32b")
 
 

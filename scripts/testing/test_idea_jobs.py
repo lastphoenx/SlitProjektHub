@@ -17,21 +17,21 @@ def test_ollama_runtime_other_model_loaded():
         "src.m08_llm._fetch_ollama_ps",
         return_value=[{"name": "qwen2.5vl:7b"}],
     ):
-        st = ollama_runtime_status("qwen3:32b")
+        st = ollama_runtime_status("qwen3.8:27b")
     assert st["ok"] is True
     assert st["switching"] is True
     assert "qwen2.5vl:7b" in st["other_loaded"]
     assert "qwen2.5vl" in st["message"]
-    assert "qwen3:32b" in st["message"]
+    assert "qwen3.8:27b" in st["message"]
     assert "Warteschlange" in st["message"]
 
 
 def test_ollama_runtime_same_model_loaded():
     with patch("src.m08_llm._ollama_root_url", return_value="http://127.0.0.1:11434"), patch(
         "src.m08_llm._fetch_ollama_ps",
-        return_value=[{"name": "qwen3:32b"}],
+        return_value=[{"name": "qwen3.8:27b"}],
     ):
-        st = ollama_runtime_status("qwen3:32b")
+        st = ollama_runtime_status("qwen3.8:27b")
     assert st["switching"] is False
     assert st["other_loaded"] == []
     assert "bereits geladen" in st["message"]
@@ -41,7 +41,7 @@ def test_ollama_runtime_free():
     with patch("src.m08_llm._ollama_root_url", return_value="http://127.0.0.1:11434"), patch(
         "src.m08_llm._fetch_ollama_ps", return_value=[]
     ):
-        st = ollama_runtime_status("qwen3:32b")
+        st = ollama_runtime_status("qwen3.8:27b")
     assert st["switching"] is False
     assert "frei" in st["message"]
 

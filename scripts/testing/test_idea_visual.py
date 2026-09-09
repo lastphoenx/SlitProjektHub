@@ -96,7 +96,7 @@ def test_validate_assess_cloud_gate():
     )
     assert err == "cloud_confirm"
     ok = validate_assess_cloud_gates(
-        idea, "ollama", "qwen3:32b", "ollama", set(DEFAULT_SOURCE_TASKS), False, False,
+        idea, "ollama", "qwen3.8:27b", "ollama", set(DEFAULT_SOURCE_TASKS), False, False,
     )
     assert ok is None
 

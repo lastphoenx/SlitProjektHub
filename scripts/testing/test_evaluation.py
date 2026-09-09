@@ -309,7 +309,7 @@ def test_suggest_score_skips_sanitize_for_local_provider():
     with patch("src.m15_evaluation.retrieve_relevant_chunks_hybrid", return_value=rag):
         with patch("src.m15_evaluation.try_models_with_messages", side_effect=fake_try):
             with patch("src.m15_evaluation.sanitize_for_cloud_text") as mock_s:
-                suggest_score_with_rag("p", 1, crit, provider="ollama", model="qwen3:32b")
+                suggest_score_with_rag("p", 1, crit, provider="ollama", model="qwen3.8:27b")
 
     mock_s.assert_not_called()
     assert "Maria Muster" in captured["user"]
@@ -492,13 +492,13 @@ def test_evaluation_config_roundtrip():
 
     from src.m15_evaluation import resolve_bewertung_ki
 
-    save_evaluation_config("p1", bewertung_ki_provider="ollama", bewertung_ki_model="qwen3:32b")
+    save_evaluation_config("p1", bewertung_ki_provider="ollama", bewertung_ki_model="qwen3.8:27b")
     cfg3 = get_evaluation_config("p1")
     assert cfg3["bewertung_ki_provider"] == "ollama"
-    assert cfg3["bewertung_ki_model"] == "qwen3:32b"
+    assert cfg3["bewertung_ki_model"] == "qwen3.8:27b"
     p3, m3 = resolve_bewertung_ki("p1", "", "", global_provider="openai", global_model="gpt-4o-mini")
     assert p3 == "ollama"
-    assert m3 == "qwen3:32b"
+    assert m3 == "qwen3.8:27b"
 
     db.engine = old_engine
     ev.engine = old_engine

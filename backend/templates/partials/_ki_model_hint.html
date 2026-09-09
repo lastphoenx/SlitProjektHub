@@ -42,7 +42,7 @@
       <div>
         <strong style="color:var(--color-text);font-size:.8rem">Chat, Rollen-/Projekt-KI-Vorschläge</strong>
         <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
-          <li><code>qwen3:32b</code> — Standard: RAG-Kontext, Deutsch, gute Balance</li>
+          <li><code>qwen3.8:27b</code> — Standard: RAG-Kontext, Deutsch, gute Balance</li>
           <li><code>llama3.3:70b</code> — komplexe Pflichtenheft-Fragen, mehr Tiefe</li>
           <li><code>qwen3:8b</code> — schnelle Tests (weniger zuverlässig)</li>
         </ol>
@@ -51,7 +51,7 @@
       <div>
         <strong style="color:var(--color-text);font-size:.8rem">Batch QA (viele Fragen + RAG)</strong>
         <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
-          <li><code>qwen3:32b</code> — Standard: hunderte Aufrufe, RAG pro Zeile</li>
+          <li><code>qwen3.8:27b</code> — Standard: hunderte Aufrufe, RAG pro Zeile</li>
           <li><code>llama3.3:70b</code> — wenn Antworten zu oberflächlich</li>
           <li><code>qwen3:8b</code> — nur Smoke-Tests mit wenigen Zeilen</li>
         </ol>
@@ -59,7 +59,7 @@
       <div>
         <strong style="color:var(--color-text);font-size:.8rem">Task-Generator</strong>
         <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
-          <li><code>qwen3:32b</code> — strukturierte Aufgabenlisten aus Pflichtenheft-RAG</li>
+          <li><code>qwen3.8:27b</code> — strukturierte Aufgabenlisten aus Pflichtenheft-RAG</li>
           <li><code>llama3.3:70b</code> — feinere Zerlegung bei komplexen Rollen</li>
         </ol>
       </div>
@@ -71,7 +71,7 @@
         </p>
         <p style="margin:.25rem 0 .15rem;font-size:.72rem"><em>Ollama (lokal, bevorzugt bei Bieter-Dokumenten mit PII)</em></p>
         <ol style="margin:.2rem 0 .35rem;padding-left:1.25rem;display:flex;flex-direction:column;gap:.25rem">
-          <li><code>qwen3:32b</code> — ④ viele Zell-Vorschläge (Dual-RAG Vorgabe + Angebot)</li>
+          <li><code>qwen3.8:27b</code> — ④ viele Zell-Vorschläge (Dual-RAG Vorgabe + Angebot)</li>
           <li><code>llama3.3:70b</code> — ② Kriterien-Extraktion, ③ Preisstruktur, schwierige Zuschlagskriterien</li>
           <li><code>qwen3:8b</code> — nur Smoke-Tests</li>
         </ol>
@@ -85,7 +85,7 @@
         <strong style="color:var(--color-text);font-size:.8rem">Projektideen (Ersteinschätzung)</strong>
         <ol style="margin:.35rem 0 0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.3rem">
           <li><code>llama3.3:70b</code> — beste Phasen-/PT-/CHF-Schätzung (ein Aufruf pro Idee)</li>
-          <li><code>qwen3:32b</code> — schneller Allround, strukturiertes JSON</li>
+          <li><code>qwen3.8:27b</code> — schneller Allround, strukturiertes JSON</li>
           <li><code>llama3:8b</code> — nur Tests, nicht für Portfolio-Entscheide</li>
         </ol>
         <p style="margin:.35rem 0 0;font-size:.72rem">Folien noch ohne Vision — später <code>qwen2.5vl:7b</code> / <code>qwen2.5vl:32b</code>.</p>
@@ -98,14 +98,14 @@
         </p>
       </div>
       <p style="margin:0;font-size:.72rem;border-top:1px solid var(--color-border);padding-top:.5rem">
-        <strong>Pragmatischer Default für alles:</strong> <code>qwen3:32b</code> — wenn du nicht ständig umschalten willst.<br>
+        <strong>Pragmatischer Default für alles:</strong> <code>qwen3.8:27b</code> — wenn du nicht ständig umschalten willst.<br>
         Nicht geeignet: <code>llama3.2:1b</code> (zu klein), Coding-Modelle (<code>qwen2.5-coder</code>) für Vergabe/Portfolio.
       </p>
     </div>
     {% elif hint_context == 'idea' %}
     <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
       <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — beste Ersteinschätzung (Phasen, PT/CHF, Risiken, Empfehlung).</li>
-      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — schneller Allround, zuverlässiges JSON.</li>
+      <li><strong style="color:var(--color-text)"><code>qwen3.8:27b</code></strong> — schneller Allround, zuverlässiges JSON.</li>
       <li><strong style="color:var(--color-text)"><code>llama3:8b</code></strong> — nur zum Testen.</li>
     </ol>
   {% elif hint_context == 'evaluation' %}
@@ -119,21 +119,21 @@
       <div>
         <strong style="color:var(--color-text);font-size:.78rem">④ Matrix-Zell-Vorschläge</strong> <span style="font-size:.68rem">(viele Aufrufe, Dual-RAG)</span>
         <ul style="margin:.3rem 0 0;padding-left:1.1rem;font-size:.75rem;display:flex;flex-direction:column;gap:.25rem">
-          <li><strong>Ollama:</strong> <code>qwen3:32b</code> Standard · <code>llama3.3:70b</code> bei feiner Abgrenzung</li>
+          <li><strong>Ollama:</strong> <code>qwen3.8:27b</code> Standard · <code>llama3.3:70b</code> bei feiner Abgrenzung</li>
           <li><strong>OpenAI:</strong> <code>gpt-4o-mini</code> · <strong>Anthropic:</strong> <code>haiku-4.5</code></li>
         </ul>
       </div>
       <div>
         <strong style="color:var(--color-text);font-size:.78rem">② Kriterien aus Vorgaben</strong> <span style="font-size:.68rem">(einmalig, grosses JSON, Multi-Pass-RAG)</span>
         <ul style="margin:.3rem 0 0;padding-left:1.1rem;font-size:.75rem;display:flex;flex-direction:column;gap:.25rem">
-          <li><strong>Ollama:</strong> <code>llama3.3:70b</code> · <code>qwen3:32b</code> als schnellerer Kompromiss</li>
+          <li><strong>Ollama:</strong> <code>llama3.3:70b</code> · <code>qwen3.8:27b</code> als schnellerer Kompromiss</li>
           <li><strong>OpenAI:</strong> <code>gpt-4o</code> · <strong>Anthropic:</strong> <code>sonnet-4.6</code></li>
         </ul>
       </div>
       <div>
         <strong style="color:var(--color-text);font-size:.78rem">③ Preisblatt-KI</strong> <span style="font-size:.68rem">(Struktur Vorlage / Bieter-PDF einlesen)</span>
         <ul style="margin:.3rem 0 0;padding-left:1.1rem;font-size:.75rem;display:flex;flex-direction:column;gap:.25rem">
-          <li><strong>Ollama:</strong> <code>qwen3:32b</code> bei sauberen Tabellen · <code>llama3.3:70b</code> bei unübersichtlichen PDFs</li>
+          <li><strong>Ollama:</strong> <code>qwen3.8:27b</code> bei sauberen Tabellen · <code>llama3.3:70b</code> bei unübersichtlichen PDFs</li>
           <li><strong>OpenAI:</strong> <code>gpt-4o-mini</code> / <code>gpt-4o</code> · <strong>Anthropic:</strong> <code>sonnet-4.6</code></li>
         </ul>
       </div>
@@ -144,20 +144,20 @@
     </div>
   {% elif hint_context == 'chat' %}
     <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
-      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard für Chat mit RAG im Projekt-Kontext.</li>
+      <li><strong style="color:var(--color-text)"><code>qwen3.8:27b</code></strong> — Standard für Chat mit RAG im Projekt-Kontext.</li>
       <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — tiefe Pflichtenheft-Antworten, mehr Kontext-Tiefe.</li>
       <li><strong style="color:var(--color-text)"><code>qwen3:8b</code></strong> — schnelle Tests, weniger zuverlässig.</li>
     </ol>
     <p style="margin:.5rem 0 0;font-size:.72rem">Gilt auch für KI-Vorschläge in Rollen- und Projekt-Formularen.</p>
   {% elif hint_context == 'batch-qa' %}
     <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
-      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard: viele Zeilen, RAG pro Frage, Checkpoint-tauglich.</li>
+      <li><strong style="color:var(--color-text)"><code>qwen3.8:27b</code></strong> — Standard: viele Zeilen, RAG pro Frage, Checkpoint-tauglich.</li>
       <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — wenn Antworten zu knapp oder ungenau.</li>
       <li><strong style="color:var(--color-text)"><code>qwen3:8b</code></strong> — nur kurze Testläufe (wenige Fragen).</li>
     </ol>
   {% elif hint_context == 'taskgen' %}
     <ol style="margin:0;padding-left:1.25rem;display:flex;flex-direction:column;gap:.45rem">
-      <li><strong style="color:var(--color-text)"><code>qwen3:32b</code></strong> — Standard: Aufgaben aus Pflichtenheft-RAG (Rolle).</li>
+      <li><strong style="color:var(--color-text)"><code>qwen3.8:27b</code></strong> — Standard: Aufgaben aus Pflichtenheft-RAG (Rolle).</li>
       <li><strong style="color:var(--color-text)"><code>llama3.3:70b</code></strong> — komplexe Rollen, feinere Aufgabenzerlegung.</li>
     </ol>
     {% endif %}

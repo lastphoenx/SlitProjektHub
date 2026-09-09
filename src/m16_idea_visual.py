@@ -26,7 +26,14 @@ from pptx.dml.color import RGBColor
 
 from .m01_config import get_settings
 from .m03_db import get_session
-from .m08_llm import get_available_models, have_key, try_models_with_messages, model_supports_vision
+from .m08_llm import (
+    OLLAMA_DEFAULT_MODEL,
+    get_available_models,
+    have_key,
+    model_supports_vision,
+    normalize_ollama_model,
+    try_models_with_messages,
+)
 from .m16_idea import ProjectIdea, get_idea
 
 log = logging.getLogger(__name__)
@@ -45,20 +52,20 @@ VISUAL_TEXT_MODELS: dict[str, list[str]] = {
     "openai": ["gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"],
     "anthropic": ["sonnet-4.6", "opus-4.6", "haiku-4.5"],
     "ollama": [
+        OLLAMA_DEFAULT_MODEL,
         "qwen2.5vl:7b",
         "qwen2.5vl:32b",
-        "llava:13b",
-        "llava:34b",
-        "qwen3:32b",
         "llama3.3:70b",
         "qwen3:8b",
+        "llava:13b",
+        "llava:34b",
         "llama3.2",
     ],
 }
 VISUAL_TEXT_DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-5.4",
     "anthropic": "sonnet-4.6",
-    "ollama": "qwen3:32b",
+    "ollama": OLLAMA_DEFAULT_MODEL,
 }
 
 IDEA_VISUAL_OUTPUT_FORMATS: dict[str, str] = {
@@ -190,7 +197,7 @@ def resolve_visual_llm(
     vp = (visual_provider or "").strip().lower()
     if vp and vp in VISUAL_TEXT_PROVIDERS and have_key(vp):
         models = VISUAL_TEXT_MODELS.get(vp, [])
-        vm = (visual_model or "").strip()
+        vm = normalize_ollama_model((visual_model or "").strip()) if vp == "ollama" else (visual_model or "").strip()
         if vm and vm in models:
             return vp, vm
         default = VISUAL_TEXT_DEFAULT_MODELS.get(vp, "")
@@ -210,7 +217,7 @@ def default_local_assess_llm() -> tuple[str, str]:
         return "", ""
     live = get_available_models("ollama")
     preferred = VISUAL_TEXT_DEFAULT_MODELS.get("ollama", "")
-    if preferred and preferred in live and not model_supports_vision("ollama", preferred):
+    if preferred and preferred in live:
         return "ollama", preferred
     for cand in live:
         if not model_supports_vision("ollama", cand):
