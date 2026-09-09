@@ -78,6 +78,13 @@
   <p class="text-muted" style="font-size:.75rem;margin-top:.4rem">«Nur als KI-Vorschlag» bleibt als eigene Spalte sichtbar, ohne dir zugeschrieben zu sein. «Als meine Bewertung» zählt in deinen Ø-Wert.</p>
   {% else %}
   <p class="text-muted">Kein Vorschlag — bitte manuell bewerten.</p>
+  {% if suggestion.suggest_error %}
+  <p class="text-muted" style="font-size:.78rem;margin-top:.35rem;color:#fcd34d">{{ suggestion.suggest_error }}</p>
+  {% endif %}
+  <p class="text-muted" style="font-size:.72rem;margin-top:.35rem">
+    Matrix-Vorschlag nutzt <strong>Text-RAG</strong> (eingespielte PDF-Chunks), nicht PDF-Vision —
+    auch bei «qwen3.8:27b · Vision» werden hier keine Seitenbilder geschickt.
+  </p>
   {% endif %}
   {% endif %}
 </div>

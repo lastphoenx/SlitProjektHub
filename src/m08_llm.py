@@ -87,6 +87,22 @@ def _ollama_chat_extra_body(model_id: str) -> dict:
     return {}
 
 
+def strip_llm_reasoning_wrappers(text: str | None) -> str:
+    """Entfernt Thinking-Blöcke und Markdown-Fences vor JSON-Parse (qwen3.8)."""
+    if not text:
+        return ""
+    s = str(text)
+    s = re.sub(
+        r"<think>.*?</think>",
+        "",
+        s,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    s = re.sub(r"```json\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"```\s*$", "", s.strip())
+    return s.strip()
+
+
 def _ollama_env_url() -> str:
     return (
         (os.getenv("OLLAMA_BASE_URL") or "")
@@ -511,7 +527,8 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
                 if _used_model is not None:
                     _used_model.clear()
                     _used_model += [model_id, ""]
-                return resp.choices[0].message.content.strip()
+                content = resp.choices[0].message.content
+                return strip_llm_reasoning_wrappers(content or "")
             except Exception as e:
                 raise LLMError(f"Ollama ({model_id}): {e}") from e
 

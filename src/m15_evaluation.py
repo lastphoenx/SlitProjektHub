@@ -18,7 +18,7 @@ from sqlalchemy import Boolean, Column, Float, Integer, String, UniqueConstraint
 from sqlmodel import Field, Session, SQLModel, select
 
 from .m03_db import engine, get_session
-from .m08_llm import try_models_with_messages
+from .m08_llm import strip_llm_reasoning_wrappers, try_models_with_messages
 from .m09_docs import get_document_by_id
 from .m09_rag import retrieve_relevant_chunks_hybrid
 from .m16_idea_visual import is_cloud_llm_provider, sanitize_for_cloud_text
@@ -2531,13 +2531,15 @@ def _llm_deduction_contradiction_check(
 def _parse_suggestion_llm_json(raw: str | None) -> dict[str, Any]:
     if not raw:
         return {}
-    m = _JSON_BLOCK_RE.search(raw)
+    cleaned = strip_llm_reasoning_wrappers(raw)
+    m = _JSON_BLOCK_RE.search(cleaned)
     if not m:
+        log.warning("LLM JSON block not found: %s", cleaned[:200])
         return {}
     try:
         data = json.loads(m.group(0))
     except json.JSONDecodeError:
-        log.warning("LLM JSON parse failed: %s", raw[:200])
+        log.warning("LLM JSON parse failed: %s", cleaned[:200])
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -2802,6 +2804,13 @@ def suggest_score_with_rag(
         "source_chunk_ref": chunk_ref,
         "rag_documents": offer_docs,
         "raw_llm": raw,
+        "suggest_error": (
+            "Keine LLM-Antwort (Ollama timeout oder Modell nicht geladen)."
+            if not raw
+            else "Antwort enthielt kein gültiges JSON mit «value» — bei qwen3.8 ggf. erneut versuchen."
+            if value_f is None
+            else None
+        ),
     }
 
 
