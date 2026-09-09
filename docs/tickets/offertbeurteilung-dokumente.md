@@ -367,3 +367,52 @@ Hybrid-Suche allein kann die richtige Tabellenzeile verfehlen oder Narrativ-Kapi
 ---
 
 **Reihenfolge-Empfehlung:** ~~3~~ → … → ~~27~~ → ~~28~~
+
+---
+
+## Ticket 29 — RAG-Basis: Sichtbarkeit im UI + Deployment-Check
+
+**Anlass:** Rückfrage nach Prüfung eines KI-Vorschlags (F01-001, Wert 7.0): "Ist die Begründung
+nur auf die sichtbare Tabellenzeile/den Screenshot gestützt, oder auf das ganze Pflichtenheft +
+den ganzen Angebotskontext?" — Antwort per Code-Review von Ticket 28 (`2ed64c4`): **Ja, breit
+abgestützt.** `suggest_score_with_rag()` (`src/m15_evaluation.py:2929`) holt für **Vorgaben**
+alle projektweiten Tender-Dokumente (`get_tender_document_ids`, gefiltert nach Rolle) und für
+**Angebot** alle mit dem Bieter verknüpften Dokumente (`bidder_doc_ids_for_criterion`) — jeweils
+per Hybrid-RAG (`retrieve_relevant_chunks_hybrid`, bis zu `rag_chunks_per_role` = 12 Chunks,
+projektseitig 4–24 einstellbar) **plus** deterministischem Volltext-Scan auf die exakte Zeile
+(z. B. `F01-001`), damit die Tabellenzeile in ~200-seitigen Merge-PDFs nicht dem semantischen
+Ranking zum Opfer fällt. Vorgabenseitig kommt zusätzlich der Parent-Block (`F01`) als Kontext
+dazu; angebotsseitig bewusst **nicht** (keine Vermischung mit F01-002 etc.). Das ist also klar
+mehr als "nur die 2 Screenshot-Bilder" — die zwei Bilder zeigen nur eine UI-Momentaufnahme *eines*
+Laufs, nicht den tatsächlichen Kontextumfang.
+
+**Beobachtetes Problem:** Genau die neue Transparenz aus Ticket 28 (`📎 RAG-Basis (X Quellen)`,
+`_rag_basis.html`) — die diese Frage im Livebetrieb selbst beantworten würde — war im
+Screenshot nicht sichtbar. Ursachenanalyse:
+1. **Layout:** `_rag_basis.html` wird in `_suggestion.html`/`_cell.html` erst **nach** Begründung
+   und "Angebotszitat (RAG-Quelle)" eingebunden — im Screenshot endet die sichtbare Fläche exakt
+   beim Zitat (Scroll-Indikator am unteren Rand sichtbar). Sehr wahrscheinlich einfach nicht
+   weit genug gescrollt.
+2. **Deployment:** `backend/main.py:2798` läuft mit `reload=False`; Template-/Code-Änderungen aus
+   `2ed64c4` werden auf einer laufenden Produktivinstanz erst nach einem Service-Neustart
+   (`deployment/systemd/projekthub-backend.service.example`) wirksam. Falls die getestete Instanz
+   seit dem Merge nicht neu gestartet wurde, fehlt der Block tatsächlich.
+
+**Aufgabe:**
+1. **Sofort-Check (kein Code):** Auf der Zielinstanz prüfen, ob `git log -1` `2ed64c4` oder neuer
+   zeigt, und den Backend-Service neu starten, falls nicht bereits geschehen. Danach denselben
+   KI-Vorschlag erneut auslösen und im Suggestion-Panel bis unter das Zitat scrollen — dort sollte
+   `📎 RAG-Basis (… Quellen) · Zeile F01-001` erscheinen und aufklappbar sein.
+2. **Sichtbarkeit erhöhen (UX):** In beiden Vorkommen (`_suggestion.html`, `_cell.html`) ist
+   `_rag_basis.html` immer eine Einzel-Instanz (Modal bzw. Zellen-Dialog je Kriterium — keine
+   Listen-Wiederholung), Auto-Aufklappen würde also nicht wie in einer Matrixzeile "fluten".
+   Vorschlag: kompakte Quellen-Zusammenfassung (z. B. "📎 7 Quellen · Zeile F01-001") direkt unter
+   "Wert: X" plazieren (vor Begründung/Zitat), Detail-Liste bleibt weiterhin per Klick aufklappbar
+   darunter an bisheriger Stelle — macht die Nachvollziehbarkeit sofort sichtbar, ohne die
+   bestehende Reihenfolge (Wert → Begründung → Zitat → Details) inhaltlich zu verändern.
+
+**Akzeptanzkriterien:**
+- Ohne zu scrollen ist am KI-Vorschlag sofort erkennbar, wie viele Quellen (Vorgaben + Angebot)
+  zugrunde lagen.
+- Deployment-Runbook (README/Docs) erwähnt explizit: Template-/Route-Änderungen erfordern
+  Service-Neustart (kein Hot-Reload in Produktion).
