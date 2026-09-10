@@ -65,7 +65,7 @@ Reihenfolge: Ticket 1 (Daten + Tabellen) vor Ticket 2 (HTML/DOCX) — gemeinsame
 - Route `GET /evaluation/export.pdf` (gleiche Query-Parameter wie CSV)
 - UI-Button PDF
 
-**Server:** `pip install weasyprint` + Linux-Pakete (Pango/Cairo), siehe WeasyPrint-Doku.
+**Server:** `pip install weasyprint` + Linux-Pakete (Pango/Cairo), siehe `docs/SERVER_SETUP.md` §9 und `deployment/update-server.sh`.
 
 ---
 

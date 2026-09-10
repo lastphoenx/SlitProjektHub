@@ -29,6 +29,10 @@ In Proxmox: Ubuntu 24.04 LXC, empfohlene Ressourcen:
 ```bash
 apt update && apt install -y python3.11 python3.11-venv git
 
+# Optional, aber empfohlen für PDF-Export Offertbeurteilung (WeasyPrint) — Details §9
+# apt install -y libpango-1.0-0 libpangocairo-1.0-0 libpangoft2-1.0-0 libcairo2 \
+#   libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-dejavu-core
+
 git clone https://github.com/lastphoenx/SlitProjektHub.git /opt/slitprojekthub
 cd /opt/slitprojekthub
 
@@ -321,10 +325,153 @@ Zum Deaktivieren: `wal_mode: false`.
 
 ## 8. Updates einspielen
 
+### Schnell (empfohlen): Update-Skript
+
+Auf dem Server (LXC), nach `git clone` einmal ausführbar machen:
+
+```bash
+chmod +x /opt/slitprojekthub/deployment/update-server.sh
+```
+
+Standard-Update (pull, apt-Libs für PDF, pip, Service-Restart):
+
+```bash
+sudo /opt/slitprojekthub/deployment/update-server.sh
+```
+
+Homelab mit anderen Pfaden/Service-Namen (Beispiel CT mit `projekthub-*`):
+
+```bash
+sudo APP_ROOT=/opt/projekthub \
+     BACKEND_SERVICE=projekthub-backend \
+     FRONTEND_SERVICE=projekthub-frontend \
+     SERVICE_USER=projekthub \
+     /opt/projekthub/deployment/update-server.sh
+```
+
+Optional Tests nach dem Update:
+
+```bash
+sudo RUN_TESTS=1 /opt/slitprojekthub/deployment/update-server.sh
+```
+
+Ohne apt-Pakete (nur Git + pip — PDF bleibt ggf. kaputt):
+
+```bash
+sudo INSTALL_WEASYPRINT_APT=0 /opt/slitprojekthub/deployment/update-server.sh
+```
+
+### Manuell (Einzelbefehle)
+
 ```bash
 cd /opt/slitprojekthub
 source .venv/bin/activate
+
+# System-Libs für PDF (einmalig oder nach OS-Upgrade)
+sudo apt update
+sudo apt install -y --no-install-recommends \
+  libpango-1.0-0 libpangocairo-1.0-0 libpangoft2-1.0-0 libcairo2 \
+  libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-dejavu-core
+
 git pull
-pip install -r requirements.txt   # nur nötig wenn requirements geändert
+pip install -r requirements.txt
+
+# Smoke-Test PDF
+python -c "from weasyprint import HTML; assert HTML(string='<p>t</p>').write_pdf()[:4]==b'%PDF'; print('OK')"
+
 systemctl restart slitproj-backend slitproj-frontend
+# bzw. projekthub-backend projekthub-frontend — je nach Installation
 ```
+
+Siehe **Abschnitt 9** für PDF-Export-Funktion und Troubleshooting.
+
+---
+
+## 9. PDF-Export Offertbeurteilung (WeasyPrint)
+
+Ab Ticket 3+4 liefert `/evaluation` pro Bieter und Quelle (KI / Bewerter) auch **PDF**
+und **ZIP** (`/evaluation/export.pdf`, `/evaluation/export.zip?format=pdf`).
+
+Technik: HTML-Protokoll (`export_report.html`) → **WeasyPrint** → PDF-Bytes.
+Python-Paket: `weasyprint` (in `requirements.txt`). Zusätzlich **native Libraries**
+(Pango/Cairo) — reines `pip install` reicht auf Linux nicht.
+
+### System-Pakete (Debian / Ubuntu LXC)
+
+```bash
+sudo apt update
+sudo apt install -y --no-install-recommends \
+  libpango-1.0-0 \
+  libpangocairo-1.0-0 \
+  libpangoft2-1.0-0 \
+  libcairo2 \
+  libgdk-pixbuf-2.0-0 \
+  libffi-dev \
+  shared-mime-info \
+  fonts-dejavu-core
+```
+
+`fonts-dejavu-core`: Umlaute/Layout in PDFs; ohne Font-Paket oft Fallback-Glyphen.
+
+### Python (venv)
+
+```bash
+cd /opt/slitprojekthub   # oder APP_ROOT
+source .venv/bin/activate
+pip install -r requirements.txt   # enthält weasyprint>=62.0
+```
+
+### Verifizieren
+
+```bash
+cd /opt/slitprojekthub
+.venv/bin/python -c "
+from weasyprint import HTML
+pdf = HTML(string='<html><body><p>Test äöü</p></body></html>').write_pdf()
+assert pdf[:4] == b'%PDF'
+print('WeasyPrint OK,', len(pdf), 'bytes')
+"
+
+# Optional: Evaluation-Unit-Tests (ZIP/PDF-Logik ohne Browser)
+.venv/bin/python scripts/testing/test_evaluation.py
+```
+
+**Im Browser** (nach Login): Offertbeurteilung → Export → Bieter + Quelle wählen → **PDF**,
+oder **ZIP herunterladen** mit Format «PDF».
+
+Direkt-URL (Beispiel):
+
+```text
+/evaluation/export.pdf?project_key=MEIN_PROJEKT&bidder_id=1&source=ai
+/evaluation/export.zip?project_key=MEIN_PROJEKT&format=pdf
+```
+
+> **Hinweis:** PDF/ZIP-Export läuft über das **FastAPI-Backend** (Port 8000). nginx muss
+> `/evaluation/*` zum Backend proxen, wenn die UI nicht nur Streamlit nutzt. Bei reiner
+> Streamlit-Installation ggf. Backend-Route über bestehenden API-Proxy prüfen.
+
+### Deployment-Ablauf (Checkliste)
+
+1. Auf dem LXC einloggen
+2. `sudo /opt/slitprojekthub/deployment/update-server.sh` (oder manuelle Befehle oben)
+3. Smoke-Test WeasyPrint (CLI)
+4. Im UI einen PDF-Export testen
+5. Bei Fehler: `journalctl -u slitproj-backend -n 50` (Service-Name anpassen)
+
+### Troubleshooting
+
+| Symptom | Ursache | Fix |
+|---------|---------|-----|
+| HTTP 500 «WeasyPrint nicht installiert» | `pip install` fehlte / falsches venv | `pip install -r requirements.txt` im Service-venv |
+| `OSError: cannot load library 'libpango…'` | apt-Pakete fehlen | Abschnitt 9 apt-Zeile + `update-server.sh` |
+| PDF leer / kaputte Zeichen | Fonts fehlen | `fonts-dejavu-core` installieren |
+| «Keine exportierbaren Bewertungen» (ZIP) | Keine Scores gespeichert | Mindestens eine KI- oder Bewerter-Zeile pro Bieter |
+| Export 403 Person | Rolle `auftraggeber` | Nur Aggregate — kein Einzel-Bewerter-Export |
+
+WeasyPrint-Doku: https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#installation
+
+---
+
+## 10. (archiviert) Updates — alter Kurzblock
+
+Der frühere Ein-Zeiler ist in **Abschnitt 8** aufgegangen (`update-server.sh` + manuelle Schritte).
