@@ -1042,7 +1042,128 @@ def test_build_evaluation_export_includes_justifications():
     auth14.engine = old_auth_engine
 
 
-def test_bidder_doc_subtypes_multi():
+def test_build_evaluation_export_context_filtered():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-export-filter"
+    with Session(engine) as session:
+        b = Bidder(project_key=project_key, name="Bieter A")
+        b2 = Bidder(project_key=project_key, name="Bieter B")
+        session.add(b)
+        session.add(b2)
+        session.commit()
+        session.refresh(b)
+        session.refresh(b2)
+        crit = Criterion(project_key=project_key, kind="zuschlag", name="Qualität", scale_max=10, weight_pct=50)
+        session.add(crit)
+        session.commit()
+        session.refresh(crit)
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=crit.id,
+                source_key="ai",
+                evaluator_user_id=None,
+                value=6.0,
+                justification="KI sagt mittel",
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=crit.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=7.0,
+                justification="Person sagt gut",
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b2.id,
+                criterion_id=crit.id,
+                source_key="ai",
+                evaluator_user_id=None,
+                value=3.0,
+                justification="Andere Bieter KI",
+            )
+        )
+        session.commit()
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    from src.m15_evaluation import (
+        build_evaluation_export_context,
+        build_evaluation_docx_bytes,
+        context_to_tabular_sheets,
+        export_source_label,
+    )
+
+    ctx_ai = build_evaluation_export_context(
+        project_key, b.id, "ai", project_title="Test", may_see_evaluators=True
+    )
+    assert ctx_ai.bidder_name == "Bieter A"
+    assert ctx_ai.source_label == "KI-Vorschlag"
+    assert len(ctx_ai.top_rows) == 1
+    assert ctx_ai.top_rows[0].value == 6.0
+    assert ctx_ai.top_rows[0].justification == "KI sagt mittel"
+
+    ctx_user = build_evaluation_export_context(
+        project_key, b.id, f"user:{evaluator_id}", project_title="Test", may_see_evaluators=True
+    )
+    assert ctx_user.top_rows[0].value == 7.0
+    assert ctx_user.top_rows[0].justification == "Person sagt gut"
+
+    sheets = context_to_tabular_sheets(ctx_ai)
+    headers, rows = sheets["Bewertungen"]
+    assert rows and rows[0][headers.index("Wert")] == 6.0
+    assert "Bieter A" in rows[0]
+
+    docx = build_evaluation_docx_bytes(ctx_ai)
+    assert docx[:2] == b"PK"
+
+    assert export_source_label("ai") == "KI-Vorschlag"
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_build_evaluation_export_context_permission():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-export-perm"
+    with Session(engine) as session:
+        b = Bidder(project_key=project_key, name="X")
+        session.add(b)
+        session.commit()
+        session.refresh(b)
+        bidder_id = b.id
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    from src.m15_evaluation import build_evaluation_export_context
+
+    try:
+        build_evaluation_export_context(
+            project_key, bidder_id, f"user:{evaluator_id}", may_see_evaluators=False
+        )
+        assert False, "expected PermissionError"
+    except PermissionError:
+        pass
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
     engine, _ = _setup_db()
     import src.m15_evaluation as ev
     import src.m03_db as db
@@ -1678,6 +1799,8 @@ if __name__ == "__main__":
     test_user_score_rejects_blind_ai_copy()
     test_sync_price_criterion_scores_reciprocal_gate()
     test_build_evaluation_export_includes_justifications()
+    test_build_evaluation_export_context_filtered()
+    test_build_evaluation_export_context_permission()
     test_bidder_doc_subtypes_multi()
     test_criteria_manage_confirm_after_scores()
     test_evaluator_score_discrepancies()

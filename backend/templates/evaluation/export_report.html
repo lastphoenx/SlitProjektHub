@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Offertbeurteilung — {{ ctx.bidder_name }}</title>
+  <style>
+    :root { color-scheme: light; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      line-height: 1.45;
+      color: #1a1a1a;
+      max-width: 960px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: .25rem; }
+    .meta { color: #555; font-size: .9rem; margin-bottom: 1.5rem; }
+    .meta p { margin: .2rem 0; }
+    h2 { font-size: 1.1rem; margin: 1.75rem 0 .75rem; border-bottom: 1px solid #ccc; padding-bottom: .35rem; }
+    table { width: 100%; border-collapse: collapse; font-size: .88rem; margin-bottom: 1rem; }
+    th, td { border: 1px solid #ccc; padding: .45rem .55rem; vertical-align: top; text-align: left; }
+    th { background: #f3f3f3; font-weight: 600; }
+    .justification { white-space: pre-wrap; }
+    .chunk-ref { font-size: .8rem; color: #444; margin-top: .35rem; font-style: italic; }
+    .rag { font-size: .78rem; color: #555; margin-top: .5rem; padding: .5rem; background: #f8f8f8; border-left: 3px solid #bbb; }
+    .rag-item { margin-bottom: .45rem; }
+    .footer { margin-top: 2rem; font-size: .75rem; color: #777; }
+    @media print {
+      body { margin: 0; max-width: none; }
+      h2 { page-break-after: avoid; }
+      tr { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Offertbeurteilung — {{ ctx.bidder_name }}</h1>
+  <div class="meta">
+    <p><strong>Projekt:</strong> {{ ctx.project_title }}</p>
+    <p><strong>Quelle:</strong> {{ ctx.source_label }}</p>
+    <p><strong>Exportiert:</strong> {{ ctx.exported_at.strftime('%Y-%m-%d %H:%M UTC') }}</p>
+    {% if ctx.ranking %}
+    <p><strong>Rangfolge (offiziell):</strong>
+      Rang {{ 'K.O.' if ctx.ranking.get('ko') else (ctx.ranking.get('rank') or 'offen') }},
+      Gesamt {{ '%.2f'|format(ctx.ranking.get('total_score')) ~ '%' if ctx.ranking.get('total_score') is not none else '—' }}
+    </p>
+    {% endif %}
+  </div>
+
+  {% macro criteria_table(rows, show_weight=false) %}
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Kriterium</th>
+        <th>Art</th>
+        {% if show_weight %}<th>Gewicht %</th>{% endif %}
+        <th>Skala</th>
+        <th>Wert</th>
+        <th>Begründung</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.criterion_name }}</td>
+        <td>{{ row.criterion_kind }}</td>
+        {% if show_weight %}<td>{{ row.weight_pct if row.weight_pct is not none else '—' }}</td>{% endif %}
+        <td>0–{{ row.scale_max }}</td>
+        <td>{{ row.value_display or '—' }}</td>
+        <td>
+          {% if row.justification %}<div class="justification">{{ row.justification }}</div>{% endif %}
+          {% if row.source_chunk_ref %}<div class="chunk-ref">{{ row.source_chunk_ref }}</div>{% endif %}
+          {% if row.rag_basis and ctx.source_key == 'ai' %}
+          <div class="rag">
+            {% for section_key, section_title in [('tender', 'Vorgaben'), ('offer', 'Angebot')] %}
+              {% set items = row.rag_basis.get(section_key) or [] %}
+              {% if items %}
+              <div><strong>{{ section_title }}</strong></div>
+              {% for item in items[:5] %}
+              <div class="rag-item">
+                <strong>{{ item.filename or '—' }}</strong>
+                {% if item.page_number %} · S. {{ item.page_number }}{% endif %}
+                {% if item.preview %}<div>{{ item.preview }}</div>{% endif %}
+              </div>
+              {% endfor %}
+              {% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if not row.justification and not row.source_chunk_ref %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endmacro %}
+
+  <h2>Eignungskriterien</h2>
+  {{ criteria_table(eignung_rows) }}
+
+  <h2>Zuschlagskriterien</h2>
+  {{ criteria_table(zuschlag_rows, show_weight=true) }}
+
+  {% if ctx.child_rows %}
+  <h2>Einzelanforderungen</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Übergeordnet</th>
+        <th>Anforderung</th>
+        <th>Art</th>
+        <th>Skala</th>
+        <th>Wert</th>
+        <th>Begründung</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in ctx.child_rows %}
+      <tr>
+        <td>{{ row.parent_name }}</td>
+        <td>{{ row.criterion_name }}</td>
+        <td>{{ row.criterion_kind }}</td>
+        <td>0–{{ row.scale_max }}</td>
+        <td>{{ row.value_display or '—' }}</td>
+        <td class="justification">{{ row.justification or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <p class="footer">SlitProjektHub — Offertbeurteilung (Export)</p>
+</body>
+</html>

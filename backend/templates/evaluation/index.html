@@ -705,9 +705,51 @@
 
 <div class="card">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Export</h2>
+
+  <p class="text-muted" style="font-size:.8rem;margin-bottom:.5rem"><strong>Projektweit</strong> (alle Bieter, alle Bewerter):</p>
   <a class="btn btn-secondary" href="/evaluation/export.csv?project_key={{ project_key }}">CSV</a>
   <a class="btn btn-secondary" href="/evaluation/export.xlsx?project_key={{ project_key }}" style="margin-left:.5rem">Excel</a>
-  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Export enthält Werte und Begründungen je Bewerter (sowie KI/System), plus Blatt «Einzelanforderungen» für Unterfragen.</p>
+
+  {% if bidders %}
+  <hr style="margin:1rem 0;border:none;border-top:1px solid var(--color-border)">
+  <p class="text-muted" style="font-size:.8rem;margin-bottom:.65rem"><strong>Pro Bieter und Quelle</strong> (KI oder einzelner Bewerter):</p>
+  <div style="display:flex;flex-wrap:wrap;gap:.65rem;align-items:flex-end;margin-bottom:.75rem">
+    <div>
+      <label class="form-label" for="export-bidder-id">Bieter</label>
+      <select class="form-select" id="export-bidder-id" style="min-width:180px">
+        {% for b in bidders %}
+        <option value="{{ b.id }}">{{ b.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="form-label" for="export-source">Quelle</label>
+      <select class="form-select" id="export-source" style="min-width:160px">
+        <option value="ai">🤖 KI-Vorschlag</option>
+        {% if may_see_evaluators %}
+        <option value="user">Bewerter (Person)</option>
+        {% endif %}
+      </select>
+    </div>
+    {% if may_see_evaluators and export_evaluators %}
+    <div id="export-evaluator-wrap">
+      <label class="form-label" for="export-evaluator-id">Bewerter</label>
+      <select class="form-select" id="export-evaluator-id" style="min-width:160px">
+        {% for ev in export_evaluators %}
+        <option value="{{ ev.id }}">{{ ev.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem">
+    <a class="btn btn-secondary" id="export-filtered-csv" href="#">CSV</a>
+    <a class="btn btn-secondary" id="export-filtered-xlsx" href="#">Excel</a>
+    <a class="btn btn-secondary" id="export-filtered-html" href="#" target="_blank">HTML</a>
+    <a class="btn btn-secondary" id="export-filtered-docx" href="#">Word</a>
+  </div>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Gefilterter Export enthält Werte und Begründungen nur der gewählten Quelle; Excel zusätzlich Blatt «Einzelanforderungen».</p>
+  {% endif %}
 </div>
 
 <div id="modal-slot"></div>
@@ -785,6 +827,60 @@ toggleCritFields();
       window.scrollTo(0, parseInt(y, 10) || 0);
     });
   }
+})();
+</script>
+<script>
+(function() {
+  const projectKey = {{ project_key|tojson }};
+  const bidderEl = document.getElementById('export-bidder-id');
+  const sourceEl = document.getElementById('export-source');
+  const evaluatorEl = document.getElementById('export-evaluator-id');
+  const evaluatorWrap = document.getElementById('export-evaluator-wrap');
+  if (!bidderEl || !sourceEl) return;
+
+  function syncEvaluatorVisibility() {
+    if (!evaluatorWrap) return;
+    evaluatorWrap.style.display = sourceEl.value === 'user' ? '' : 'none';
+  }
+
+  function buildFilteredExportUrl(format, opts) {
+    const params = new URLSearchParams({
+      project_key: projectKey,
+      bidder_id: bidderEl.value,
+      source: sourceEl.value,
+    });
+    if (sourceEl.value === 'user' && evaluatorEl) {
+      params.set('evaluator_id', evaluatorEl.value);
+    }
+    if (opts && opts.download) {
+      params.set('download', '1');
+    }
+    return '/evaluation/export.' + format + '?' + params.toString();
+  }
+
+  function wireExportLink(id, format) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('click', function(e) {
+      e.preventDefault();
+      if (sourceEl.value === 'user' && evaluatorEl && !evaluatorEl.value) {
+        alert('Bitte einen Bewerter wählen.');
+        return;
+      }
+      if (format === 'html') {
+        window.open(buildFilteredExportUrl(format), '_blank');
+        return;
+      }
+      window.location.href = buildFilteredExportUrl(format, { download: true });
+    });
+  }
+
+  sourceEl.addEventListener('change', syncEvaluatorVisibility);
+  syncEvaluatorVisibility();
+  wireExportLink('export-filtered-csv', 'csv');
+  wireExportLink('export-filtered-xlsx', 'xlsx');
+  wireExportLink('export-filtered-html', 'html');
+  wireExportLink('export-filtered-docx', 'docx');
 })();
 </script>
 {% endblock %}

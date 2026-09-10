@@ -5,6 +5,7 @@ import asyncio
 import csv
 import io
 import json
+import re
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -23,6 +24,7 @@ from src.m14_auth import (
     can_evaluate,
     can_view_evaluator_details,
     get_user_id,
+    get_username_by_id,
     is_super_user,
     session_username,
 )
@@ -38,6 +40,10 @@ from src.m15_evaluation import (
     TENDER_ROLES,
     compute_bidder_tco,
     build_evaluation_export_sheets,
+    build_evaluation_export_context,
+    build_evaluation_docx_bytes,
+    context_to_tabular_sheets,
+    list_evaluator_ids_for_project,
     compute_rankings,
     create_bidder,
     create_criterion,
@@ -327,6 +333,18 @@ async def evaluation_page(request: Request, project_key: str = ""):
         ] if project_key else [],
         "may_evaluate": can_evaluate(who),
         "may_see_evaluators": can_view_evaluator_details(who),
+        "export_evaluators": [
+            {
+                "id": uid,
+                "name": get_username_by_id(uid) or f"Bewerter {uid}",
+            }
+            for uid in (
+                list_evaluator_ids_for_project(project_key)
+                if project_key and can_view_evaluator_details(who)
+                else []
+            )
+        ],
+        "has_ai_scores": any(s.source_key == "ai" for s in scores) if project_key else False,
         "super_user": is_super_user(who),
         "user_id": user_id,
         "error": None,
@@ -610,6 +628,7 @@ async def evaluation_cell(
             child_rows.append(
                 {
                     "criterion": ch,
+                    "display_name": format_requirement_ref_display(ch.referenz) or ch.name,
                     "official": official_score(bidder_id, ch, cell),
                     "ai_value": ai_row.value if ai_row else None,
                     "evaluator_count": len([s for s in cell if s.source_key.startswith("user:")]),
@@ -1363,12 +1382,105 @@ def _export_rows(project_key: str, may_see: bool) -> tuple[list[str], list[list]
     return sheets["Bewertungen"]
 
 
+def _safe_export_stem(*parts: str) -> str:
+    cleaned = [re.sub(r"[^\w\-]+", "_", p)[:40].strip("_") for p in parts if p]
+    return "_".join(cleaned) or "bewertung"
+
+
+def _resolve_export_source_key(source: str, evaluator_id: int | None) -> str:
+    if source == "ai":
+        return "ai"
+    if source == "system":
+        return "system"
+    if source == "user":
+        if not evaluator_id:
+            raise HTTPException(400, "evaluator_id erforderlich für source=user")
+        return f"user:{evaluator_id}"
+    raise HTTPException(400, f"Unbekannte Quelle: {source}")
+
+
+def _build_filtered_export_context(
+    project_key: str,
+    bidder_id: int,
+    source: str,
+    evaluator_id: int | None,
+    may_see: bool,
+):
+    source_key = _resolve_export_source_key(source, evaluator_id)
+    try:
+        return build_evaluation_export_context(
+            project_key,
+            bidder_id,
+            source_key,
+            project_title=_project_title(project_key),
+            may_see_evaluators=may_see,
+        )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+def _filtered_export_filename(ctx, ext: str) -> str:
+    stem = _safe_export_stem("bewertung", ctx.project_key, ctx.bidder_name, ctx.source_label)
+    return f"{stem}.{ext}"
+
+
+def _write_filtered_xlsx(ctx) -> io.BytesIO:
+    import openpyxl
+
+    sheets = context_to_tabular_sheets(ctx)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Bewertungen"
+    headers, rows = sheets["Bewertungen"]
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    detail_headers, detail_rows = sheets.get("Einzelanforderungen", ([], []))
+    if detail_rows:
+        ws_detail = wb.create_sheet("Einzelanforderungen")
+        ws_detail.append(detail_headers)
+        for row in detail_rows:
+            ws_detail.append(row)
+    if ctx.ranking:
+        ws_rank = wb.create_sheet("Rangfolge")
+        ws_rank.append(["Rang", "Bieter", "Gesamt %", "KO"])
+        ws_rank.append([
+            ctx.ranking.get("rank"),
+            ctx.bidder_name,
+            ctx.ranking.get("total_score"),
+            ctx.ranking.get("ko"),
+        ])
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out
+
+
 @router.get("/evaluation/export.csv")
-async def evaluation_export_csv(request: Request, project_key: str):
+async def evaluation_export_csv(
+    request: Request,
+    project_key: str,
+    bidder_id: int | None = None,
+    source: str = "",
+    evaluator_id: int | None = None,
+):
     who = _username(request)
     if not who:
         raise HTTPException(401)
-    headers, rows = _export_rows(project_key, can_view_evaluator_details(who))
+    may_see = can_view_evaluator_details(who)
+
+    if bidder_id is not None:
+        if not source:
+            raise HTTPException(400, "source erforderlich (ai oder user)")
+        ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
+        sheets = context_to_tabular_sheets(ctx)
+        headers, rows = sheets["Bewertungen"]
+        filename = _filtered_export_filename(ctx, "csv")
+    else:
+        headers, rows = _export_rows(project_key, may_see)
+        filename = f"bewertung_{project_key[:24]}.csv"
 
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -1378,12 +1490,18 @@ async def evaluation_export_csv(request: Request, project_key: str):
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=bewertung_{project_key[:24]}.csv"},
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
 @router.get("/evaluation/export.xlsx")
-async def evaluation_export_xlsx(request: Request, project_key: str):
+async def evaluation_export_xlsx(
+    request: Request,
+    project_key: str,
+    bidder_id: int | None = None,
+    source: str = "",
+    evaluator_id: int | None = None,
+):
     who = _username(request)
     if not who:
         raise HTTPException(401)
@@ -1392,11 +1510,25 @@ async def evaluation_export_xlsx(request: Request, project_key: str):
     except ImportError:
         raise HTTPException(500, "openpyxl nicht installiert")
 
-    headers, rows = _export_rows(project_key, can_view_evaluator_details(who))
+    may_see = can_view_evaluator_details(who)
+
+    if bidder_id is not None:
+        if not source:
+            raise HTTPException(400, "source erforderlich (ai oder user)")
+        ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
+        out = _write_filtered_xlsx(ctx)
+        filename = _filtered_export_filename(ctx, "xlsx")
+        return StreamingResponse(
+            out,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    headers, rows = _export_rows(project_key, may_see)
     sheets = build_evaluation_export_sheets(
         project_key,
         project_title=_project_title(project_key),
-        may_see_evaluators=can_view_evaluator_details(who),
+        may_see_evaluators=may_see,
     )
 
     wb = openpyxl.Workbook()
@@ -1462,4 +1594,58 @@ async def evaluation_export_xlsx(request: Request, project_key: str):
         out,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=bewertung_{project_key[:24]}.xlsx"},
+    )
+
+
+@router.get("/evaluation/export.html", response_class=HTMLResponse)
+async def evaluation_export_html(
+    request: Request,
+    project_key: str,
+    bidder_id: int,
+    source: str,
+    evaluator_id: int | None = None,
+    download: int = 0,
+):
+    who = _username(request)
+    if not who:
+        raise HTTPException(401)
+    may_see = can_view_evaluator_details(who)
+    ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
+    filename = _filtered_export_filename(ctx, "html")
+    response = templates.TemplateResponse(
+        "evaluation/export_report.html",
+        {
+            "request": request,
+            "ctx": ctx,
+            "eignung_rows": [r for r in ctx.top_rows if r.criterion_kind == "eignung"],
+            "zuschlag_rows": [r for r in ctx.top_rows if r.criterion_kind == "zuschlag"],
+        },
+    )
+    if download:
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    return response
+
+
+@router.get("/evaluation/export.docx")
+async def evaluation_export_docx(
+    request: Request,
+    project_key: str,
+    bidder_id: int,
+    source: str,
+    evaluator_id: int | None = None,
+):
+    who = _username(request)
+    if not who:
+        raise HTTPException(401)
+    may_see = can_view_evaluator_details(who)
+    ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
+    try:
+        data = build_evaluation_docx_bytes(ctx)
+    except ImportError:
+        raise HTTPException(500, "python-docx nicht installiert")
+    filename = _filtered_export_filename(ctx, "docx")
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )

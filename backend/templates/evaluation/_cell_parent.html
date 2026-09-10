@@ -25,7 +25,7 @@
       <div class="card" style="margin-bottom:.75rem;background:var(--color-surface-2)">
         <strong style="font-size:.85rem">KI-Stapelverarbeitung</strong>
         <p class="text-muted" style="font-size:.72rem;margin:.35rem 0 .5rem">
-          Alle {{ total }} Unterfragen nacheinander als KI-Vorschlag (RAG) — speichert je Kind unter 🤖, ohne deine Bewerter-Zeile.
+          Alle {{ child_rows|length }} Unterfragen nacheinander als KI-Vorschlag (RAG) — speichert je Kind unter 🤖, ohne deine Bewerter-Zeile.
         </p>
         <div id="parent-batch-llm-picker" style="margin:.25rem 0 .5rem">
           {% set form_id = 'eval-parent-' ~ bidder.id ~ '-' ~ criterion.id %}
@@ -45,7 +45,7 @@
         </div>
         {% endif %}
         <button type="button" class="btn btn-secondary btn-sm" id="parent-batch-ki-btn" onclick="parentBatchKiStart(this)">
-          <span class="ki-btn-idle">KI für alle {{ total }} Anforderungen</span>
+          <span class="ki-btn-idle">KI für alle {{ child_rows|length }} Anforderungen</span>
           <span class="ki-btn-busy" hidden>
             <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
             KI läuft …
@@ -55,7 +55,7 @@
           <div style="height:.45rem;border-radius:999px;background:rgba(148,163,184,.2);overflow:hidden">
             <div id="parent-batch-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#6366f1,#818cf8);transition:width .25s ease"></div>
           </div>
-          <p id="parent-batch-status" class="text-muted" style="font-size:.72rem;margin:.4rem 0 0">0 / {{ total }}</p>
+          <p id="parent-batch-status" class="text-muted" style="font-size:.72rem;margin:.4rem 0 0">0 / {{ child_rows|length }}</p>
           <ul id="parent-batch-log" style="font-size:.7rem;margin:.35rem 0 0;padding-left:1rem;max-height:6rem;overflow:auto"></ul>
         </div>
       </div>
@@ -67,9 +67,11 @@
           <tbody>
             {% for row in child_rows %}
             <tr style="cursor:pointer"
+                data-criterion-id="{{ row.criterion.id }}"
+                data-criterion-label="{{ row.display_name }}"
                 hx-get="/evaluation/cell?bidder_id={{ bidder.id }}&criterion_id={{ row.criterion.id }}&project_key={{ project_key }}"
                 hx-target="#modal-slot" hx-swap="innerHTML">
-              <td>{{ row.criterion.name }}</td>
+              <td>{{ row.display_name }}</td>
               <td>
                 {{ "%.1f"|format(row.official) if row.official is not none else "—" }}
                 <span style="font-size:.7rem;color:var(--color-text-muted)">
@@ -103,13 +105,19 @@
   syncGate();
 })();
 
-const parentBatchChildren = [
-  {% for row in child_rows %}
-  { id: {{ row.criterion.id }}, name: {{ row.criterion.name | tojson }} }{% if not loop.last %},{% endif %}
-  {% endfor %}
-];
+function parentBatchCollectChildren(btn) {
+  const root = btn ? btn.closest('.modal') : null;
+  if (!root) return [];
+  return Array.from(root.querySelectorAll('tr[data-criterion-id]')).map(function(tr) {
+    return {
+      id: parseInt(tr.getAttribute('data-criterion-id'), 10),
+      name: tr.getAttribute('data-criterion-label') || (tr.querySelector('td') && tr.querySelector('td').textContent.trim()) || '',
+    };
+  }).filter(function(c) { return Number.isFinite(c.id); });
+}
 
 async function parentBatchKiStart(btn) {
+  const parentBatchChildren = parentBatchCollectChildren(btn);
   if (!parentBatchChildren.length) return;
   if (typeof evalKiBusy === 'function' && evalKiBusy()) return;
 
@@ -141,7 +149,7 @@ async function parentBatchKiStart(btn) {
 
   try {
     for (const child of parentBatchChildren) {
-      status.textContent = `${done} / ${total} — ${child.name} …`;
+      status.textContent = `Verarbeite ${done + 1} / ${total} — ${child.name} …`;
       const fd = new FormData();
       fd.append('project_key', {{ project_key | tojson }});
       fd.append('bidder_id', String({{ bidder.id }}));

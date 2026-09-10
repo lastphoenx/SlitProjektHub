@@ -5,10 +5,12 @@ AppRole-Gating über m14_auth (can_evaluate, can_view_evaluator_details).
 """
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -4601,6 +4603,297 @@ def merge_price_structure_for_bidder(bidder_id: int, structure: dict[str, Any]) 
             )
             created += 1
     return {"created": created, "updated": updated}
+
+
+@dataclass
+class EvaluationExportRow:
+    criterion_name: str
+    criterion_kind: str
+    parent_name: str
+    weight_pct: float | None
+    scale_max: int
+    value: float | None
+    value_display: str
+    justification: str
+    source_chunk_ref: str
+    rag_basis: dict[str, Any] | None = None
+
+
+@dataclass
+class EvaluationExportContext:
+    project_key: str
+    project_title: str
+    bidder_id: int
+    bidder_name: str
+    source_key: str
+    source_label: str
+    exported_at: datetime
+    top_rows: list[EvaluationExportRow] = field(default_factory=list)
+    child_rows: list[EvaluationExportRow] = field(default_factory=list)
+    ranking: dict[str, Any] | None = None
+
+
+def list_evaluator_ids_for_project(project_key: str) -> list[int]:
+    """Alle Bewerter-User-IDs mit mindestens einer Score-Zeile im Projekt."""
+    seen: set[int] = set()
+    out: list[int] = []
+    for s in list_scores_for_project(project_key):
+        if s.source_key.startswith("user:") and s.evaluator_user_id is not None:
+            if s.evaluator_user_id not in seen:
+                seen.add(s.evaluator_user_id)
+                out.append(s.evaluator_user_id)
+    out.sort()
+    return out
+
+
+def export_source_label(source_key: str) -> str:
+    from .m14_auth import get_username_by_id
+
+    if source_key == "ai":
+        return "KI-Vorschlag"
+    if source_key == "system":
+        return "System (automatisch)"
+    if source_key.startswith("user:"):
+        uid = int(source_key.split(":", 1)[1])
+        return get_username_by_id(uid) or f"Bewerter {uid}"
+    return source_key
+
+
+def _parse_rag_basis_json(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _export_value_display(value: float | None, scale_max: int) -> str:
+    if value is None:
+        return ""
+    if scale_max == 1:
+        return "Ja" if value == 1 else "Nein"
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.2f}"
+
+
+def _score_for_source(cell: list[Score], source_key: str) -> Score | None:
+    return next((s for s in cell if s.source_key == source_key), None)
+
+
+def _export_row_from_score(
+    crit: Criterion,
+    sc: Score | None,
+    *,
+    parent_name: str = "",
+) -> EvaluationExportRow:
+    value = sc.value if sc else None
+    return EvaluationExportRow(
+        criterion_name=crit.name,
+        criterion_kind=crit.kind,
+        parent_name=parent_name,
+        weight_pct=crit.weight_pct if crit.kind == "zuschlag" else None,
+        scale_max=crit.scale_max,
+        value=value,
+        value_display=_export_value_display(value, crit.scale_max),
+        justification=(sc.justification or "") if sc else "",
+        source_chunk_ref=(sc.source_chunk_ref or "") if sc else "",
+        rag_basis=_parse_rag_basis_json(sc.rag_basis_json if sc else None),
+    )
+
+
+def build_evaluation_export_context(
+    project_key: str,
+    bidder_id: int,
+    source_key: str,
+    *,
+    project_title: str = "",
+    may_see_evaluators: bool = True,
+) -> EvaluationExportContext:
+    """
+    Export-Kontext für einen Bieter und eine Bewertungsquelle (ai, system, user:<id>).
+    """
+    if source_key.startswith("user:") and not may_see_evaluators:
+        raise PermissionError("Keine Berechtigung für Bewerter-Details")
+
+    bidders = list_bidders(project_key)
+    bidder = next((b for b in bidders if b.id == bidder_id), None)
+    if not bidder:
+        raise ValueError(f"Bieter {bidder_id} nicht gefunden")
+
+    all_criteria = list_criteria(project_key)
+    top_criteria = [c for c in all_criteria if c.parent_id is None]
+    child_criteria = [c for c in all_criteria if c.parent_id is not None]
+    parent_names = {c.id: c.name for c in all_criteria}
+
+    scores = list_scores_for_project(project_key)
+    scores_by_cell: dict[tuple[int, int], list[Score]] = {}
+    for s in scores:
+        scores_by_cell.setdefault((s.bidder_id, s.criterion_id), []).append(s)
+
+    top_rows: list[EvaluationExportRow] = []
+    for crit in top_criteria:
+        cell = scores_by_cell.get((bidder_id, crit.id), [])
+        top_rows.append(_export_row_from_score(crit, _score_for_source(cell, source_key)))
+
+    child_rows: list[EvaluationExportRow] = []
+    for crit in child_criteria:
+        cell = scores_by_cell.get((bidder_id, crit.id), [])
+        child_rows.append(
+            _export_row_from_score(
+                crit,
+                _score_for_source(cell, source_key),
+                parent_name=parent_names.get(crit.parent_id or 0, ""),
+            )
+        )
+
+    rankings = compute_rankings(project_key)
+    ranking = next((r for r in rankings if r.get("bidder_id") == bidder_id), None)
+
+    return EvaluationExportContext(
+        project_key=project_key,
+        project_title=project_title or project_key,
+        bidder_id=bidder_id,
+        bidder_name=bidder.name,
+        source_key=source_key,
+        source_label=export_source_label(source_key),
+        exported_at=datetime.now(timezone.utc),
+        top_rows=top_rows,
+        child_rows=child_rows,
+        ranking=ranking,
+    )
+
+
+def context_to_tabular_sheets(
+    ctx: EvaluationExportContext,
+) -> dict[str, tuple[list[str], list[list[Any]]]]:
+    """Schmale Tabellen für CSV/XLSX (pro Bieter + Quelle)."""
+    meta = [ctx.project_title, ctx.bidder_name, ctx.source_label]
+
+    main_headers = [
+        "Projekt", "Bieter", "Quelle", "Kriterium", "Art", "Gewicht %", "Skala",
+        "Wert", "Begründung", "Quellenreferenz",
+    ]
+    main_rows: list[list[Any]] = []
+    for row in ctx.top_rows:
+        main_rows.append(
+            meta
+            + [
+                row.criterion_name,
+                row.criterion_kind,
+                row.weight_pct if row.weight_pct is not None else "",
+                row.scale_max,
+                row.value if row.value is not None else "",
+                row.justification,
+                row.source_chunk_ref,
+            ]
+        )
+
+    detail_headers = [
+        "Projekt", "Bieter", "Quelle", "Übergeordnetes Kriterium", "Anforderung",
+        "Art", "Skala", "Wert", "Begründung", "Quellenreferenz",
+    ]
+    detail_rows: list[list[Any]] = []
+    for row in ctx.child_rows:
+        detail_rows.append(
+            meta
+            + [
+                row.parent_name,
+                row.criterion_name,
+                row.criterion_kind,
+                row.scale_max,
+                row.value if row.value is not None else "",
+                row.justification,
+                row.source_chunk_ref,
+            ]
+        )
+
+    return {
+        "Bewertungen": (main_headers, main_rows),
+        "Einzelanforderungen": (detail_headers, detail_rows),
+    }
+
+
+def build_evaluation_docx_bytes(ctx: EvaluationExportContext) -> bytes:
+    """Word-Export für einen Bieter und eine Bewertungsquelle."""
+    from docx import Document
+
+    doc = Document()
+    doc.add_heading(f"Offertbeurteilung — {ctx.bidder_name}", 0)
+    doc.add_paragraph(f"Projekt: {ctx.project_title}")
+    doc.add_paragraph(f"Quelle: {ctx.source_label}")
+    doc.add_paragraph(f"Exportiert: {ctx.exported_at.strftime('%Y-%m-%d %H:%M UTC')}")
+
+    if ctx.ranking:
+        rank = ctx.ranking.get("rank")
+        total = ctx.ranking.get("total_score")
+        ko = ctx.ranking.get("ko")
+        rank_txt = "K.O." if ko else (str(rank) if rank else "offen")
+        total_txt = f"{total:.2f}%" if total is not None else "—"
+        doc.add_paragraph(f"Rangfolge (offiziell): Rang {rank_txt}, Gesamt {total_txt}")
+
+    def _add_criteria_table(title: str, rows: list[EvaluationExportRow], *, child: bool = False) -> None:
+        if not rows:
+            return
+        doc.add_heading(title, level=1)
+        if child:
+            headers = ["Übergeordnet", "Anforderung", "Art", "Skala", "Wert", "Begründung"]
+            table = doc.add_table(rows=1, cols=len(headers))
+            table.style = "Table Grid"
+            for i, h in enumerate(headers):
+                table.rows[0].cells[i].text = h
+            for row in rows:
+                cells = table.add_row().cells
+                cells[0].text = row.parent_name
+                cells[1].text = row.criterion_name
+                cells[2].text = row.criterion_kind
+                cells[3].text = str(row.scale_max)
+                cells[4].text = row.value_display or "—"
+                cells[5].text = row.justification or "—"
+        else:
+            headers = ["Kriterium", "Art", "Gewicht %", "Skala", "Wert", "Begründung"]
+            table = doc.add_table(rows=1, cols=len(headers))
+            table.style = "Table Grid"
+            for i, h in enumerate(headers):
+                table.rows[0].cells[i].text = h
+            for row in rows:
+                cells = table.add_row().cells
+                cells[0].text = row.criterion_name
+                cells[1].text = row.criterion_kind
+                cells[2].text = str(row.weight_pct) if row.weight_pct is not None else ""
+                cells[3].text = str(row.scale_max)
+                cells[4].text = row.value_display or "—"
+                cells[5].text = row.justification or "—"
+                if row.source_chunk_ref:
+                    doc.add_paragraph(row.source_chunk_ref, style="Intense Quote")
+                if row.rag_basis and ctx.source_key == "ai":
+                    for section_key, section_title in (("tender", "Vorgaben"), ("offer", "Angebot")):
+                        items = row.rag_basis.get(section_key) or []
+                        if not items:
+                            continue
+                        doc.add_paragraph(section_title, style="List Bullet")
+                        for item in items[:5]:
+                            if not isinstance(item, dict):
+                                continue
+                            line = item.get("filename") or ""
+                            if item.get("page_number"):
+                                line += f" · S. {item['page_number']}"
+                            preview = (item.get("preview") or "")[:400]
+                            doc.add_paragraph(f"{line}: {preview}", style="List Bullet 2")
+
+    eignung = [r for r in ctx.top_rows if r.criterion_kind == "eignung"]
+    zuschlag = [r for r in ctx.top_rows if r.criterion_kind == "zuschlag"]
+    _add_criteria_table("Eignungskriterien", eignung)
+    _add_criteria_table("Zuschlagskriterien", zuschlag)
+    _add_criteria_table("Einzelanforderungen", ctx.child_rows, child=True)
+
+    doc.add_paragraph("")
+    doc.add_paragraph("SlitProjektHub — Offertbeurteilung (Export)")
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 def _export_score_columns(
