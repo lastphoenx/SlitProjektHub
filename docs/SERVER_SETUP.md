@@ -469,9 +469,3 @@ Direkt-URL (Beispiel):
 | Export 403 Person | Rolle `auftraggeber` | Nur Aggregate — kein Einzel-Bewerter-Export |
 
 WeasyPrint-Doku: https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#installation
-
----
-
-## 10. (archiviert) Updates — alter Kurzblock
-
-Der frühere Ein-Zeiler ist in **Abschnitt 8** aufgegangen (`update-server.sh` + manuelle Schritte).
