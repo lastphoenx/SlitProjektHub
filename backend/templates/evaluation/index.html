@@ -747,8 +747,26 @@
     <a class="btn btn-secondary" id="export-filtered-xlsx" href="#">Excel</a>
     <a class="btn btn-secondary" id="export-filtered-html" href="#" target="_blank">HTML</a>
     <a class="btn btn-secondary" id="export-filtered-docx" href="#">Word</a>
+    <a class="btn btn-secondary" id="export-filtered-pdf" href="#">PDF</a>
   </div>
-  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Gefilterter Export enthält Werte und Begründungen nur der gewählten Quelle; Excel zusätzlich Blatt «Einzelanforderungen».</p>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Gefilterter Export enthält Werte und Begründungen nur der gewählten Quelle; Excel zusätzlich Blatt «Einzelanforderungen». PDF benötigt WeasyPrint auf dem Server.</p>
+
+  <hr style="margin:1rem 0;border:none;border-top:1px solid var(--color-border)">
+  <p class="text-muted" style="font-size:.8rem;margin-bottom:.5rem"><strong>Alle Bieter × Quellen</strong> (ZIP-Archiv):</p>
+  <div style="display:flex;flex-wrap:wrap;gap:.65rem;align-items:flex-end">
+    <div>
+      <label class="form-label" for="export-zip-format">Format im ZIP</label>
+      <select class="form-select" id="export-zip-format" style="min-width:140px">
+        <option value="xlsx" selected>Excel</option>
+        <option value="docx">Word</option>
+        <option value="csv">CSV</option>
+        <option value="html">HTML</option>
+        <option value="pdf">PDF</option>
+      </select>
+    </div>
+    <a class="btn btn-secondary" id="export-zip-all" href="#">ZIP herunterladen</a>
+  </div>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Enthält je Bieter und vorhandene Quelle (KI + Bewerter) eine Datei — nur Kombinationen mit gespeicherten Bewertungen.</p>
   {% endif %}
 </div>
 
@@ -881,6 +899,20 @@ toggleCritFields();
   wireExportLink('export-filtered-xlsx', 'xlsx');
   wireExportLink('export-filtered-html', 'html');
   wireExportLink('export-filtered-docx', 'docx');
+  wireExportLink('export-filtered-pdf', 'pdf');
+
+  const zipBtn = document.getElementById('export-zip-all');
+  const zipFmt = document.getElementById('export-zip-format');
+  if (zipBtn && zipFmt) {
+    zipBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      const params = new URLSearchParams({
+        project_key: projectKey,
+        format: zipFmt.value,
+      });
+      window.location.href = '/evaluation/export.zip?' + params.toString();
+    });
+  }
 })();
 </script>
 {% endblock %}

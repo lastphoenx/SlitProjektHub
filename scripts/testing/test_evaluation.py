@@ -1164,6 +1164,88 @@ def test_build_evaluation_export_context_permission():
     db.engine = old_engine
     ev.engine = old_engine
 
+
+def test_list_export_combinations_and_zip():
+    import io
+    import zipfile
+
+    engine, evaluator_id = _setup_db()
+    project_key = "p-export-zip"
+    with Session(engine) as session:
+        b1 = Bidder(project_key=project_key, name="Alpha")
+        b2 = Bidder(project_key=project_key, name="Beta")
+        session.add(b1)
+        session.add(b2)
+        session.commit()
+        session.refresh(b1)
+        session.refresh(b2)
+        crit = Criterion(project_key=project_key, kind="zuschlag", name="Q", scale_max=10)
+        session.add(crit)
+        session.commit()
+        session.refresh(crit)
+        session.add(
+            Score(
+                bidder_id=b1.id,
+                criterion_id=crit.id,
+                source_key="ai",
+                value=5.0,
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b1.id,
+                criterion_id=crit.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=6.0,
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b2.id,
+                criterion_id=crit.id,
+                source_key="ai",
+                value=4.0,
+            )
+        )
+        session.commit()
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: Session(engine)
+
+    from src.m15_evaluation import build_evaluation_export_zip_bytes, list_export_combinations
+
+    combos = list_export_combinations(project_key, may_see_evaluators=True)
+    assert (b1.id, "ai") in combos
+    assert (b1.id, f"user:{evaluator_id}") in combos
+    assert (b2.id, "ai") in combos
+    assert len(combos) == 3
+
+    combos_hidden = list_export_combinations(project_key, may_see_evaluators=False)
+    assert all(sk == "ai" for _, sk in combos_hidden)
+    assert len(combos_hidden) == 2
+
+    blob = build_evaluation_export_zip_bytes(
+        project_key,
+        "xlsx",
+        project_title="ZipTest",
+        may_see_evaluators=True,
+    )
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        names = zf.namelist()
+    assert len(names) == 3
+    assert all(n.endswith(".xlsx") for n in names)
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_bidder_doc_subtypes_multi():
     engine, _ = _setup_db()
     import src.m15_evaluation as ev
     import src.m03_db as db
@@ -1801,6 +1883,7 @@ if __name__ == "__main__":
     test_build_evaluation_export_includes_justifications()
     test_build_evaluation_export_context_filtered()
     test_build_evaluation_export_context_permission()
+    test_list_export_combinations_and_zip()
     test_bidder_doc_subtypes_multi()
     test_criteria_manage_confirm_after_scores()
     test_evaluator_score_discrepancies()

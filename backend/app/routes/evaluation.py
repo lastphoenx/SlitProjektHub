@@ -9,6 +9,7 @@ import re
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from backend.app.evaluation_export_render import render_evaluation_export_html
 from backend.app.jinja_env import templates
 
 from src.m07_projects import list_projects_df
@@ -42,6 +43,9 @@ from src.m15_evaluation import (
     build_evaluation_export_sheets,
     build_evaluation_export_context,
     build_evaluation_docx_bytes,
+    build_evaluation_export_zip_bytes,
+    build_evaluation_pdf_bytes,
+    build_filtered_xlsx_bytes,
     context_to_tabular_sheets,
     list_evaluator_ids_for_project,
     compute_rankings,
@@ -1426,34 +1430,16 @@ def _filtered_export_filename(ctx, ext: str) -> str:
     return f"{stem}.{ext}"
 
 
-def _write_filtered_xlsx(ctx) -> io.BytesIO:
-    import openpyxl
+def _export_report_template_ctx(ctx):
+    return {
+        "ctx": ctx,
+        "eignung_rows": [r for r in ctx.top_rows if r.criterion_kind == "eignung"],
+        "zuschlag_rows": [r for r in ctx.top_rows if r.criterion_kind == "zuschlag"],
+    }
 
-    sheets = context_to_tabular_sheets(ctx)
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Bewertungen"
-    headers, rows = sheets["Bewertungen"]
-    ws.append(headers)
-    for row in rows:
-        ws.append(row)
-    detail_headers, detail_rows = sheets.get("Einzelanforderungen", ([], []))
-    if detail_rows:
-        ws_detail = wb.create_sheet("Einzelanforderungen")
-        ws_detail.append(detail_headers)
-        for row in detail_rows:
-            ws_detail.append(row)
-    if ctx.ranking:
-        ws_rank = wb.create_sheet("Rangfolge")
-        ws_rank.append(["Rang", "Bieter", "Gesamt %", "KO"])
-        ws_rank.append([
-            ctx.ranking.get("rank"),
-            ctx.bidder_name,
-            ctx.ranking.get("total_score"),
-            ctx.ranking.get("ko"),
-        ])
-    out = io.BytesIO()
-    wb.save(out)
+
+def _write_filtered_xlsx(ctx) -> io.BytesIO:
+    out = io.BytesIO(build_filtered_xlsx_bytes(ctx))
     out.seek(0)
     return out
 
@@ -1475,20 +1461,24 @@ async def evaluation_export_csv(
         if not source:
             raise HTTPException(400, "source erforderlich (ai oder user)")
         ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
-        sheets = context_to_tabular_sheets(ctx)
-        headers, rows = sheets["Bewertungen"]
+        headers, rows = context_to_tabular_sheets(ctx)["Bewertungen"]
         filename = _filtered_export_filename(ctx, "csv")
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(headers)
+        writer.writerows(rows)
+        csv_payload = buf.getvalue()
     else:
         headers, rows = _export_rows(project_key, may_see)
         filename = f"bewertung_{project_key[:24]}.csv"
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(headers)
+        writer.writerows(rows)
+        csv_payload = buf.getvalue()
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(headers)
-    writer.writerows(rows)
-    buf.seek(0)
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        iter([csv_payload]),
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
@@ -1616,9 +1606,7 @@ async def evaluation_export_html(
         "evaluation/export_report.html",
         {
             "request": request,
-            "ctx": ctx,
-            "eignung_rows": [r for r in ctx.top_rows if r.criterion_kind == "eignung"],
-            "zuschlag_rows": [r for r in ctx.top_rows if r.criterion_kind == "zuschlag"],
+            **_export_report_template_ctx(ctx),
         },
     )
     if download:
@@ -1648,4 +1636,75 @@ async def evaluation_export_docx(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/evaluation/export.pdf")
+async def evaluation_export_pdf(
+    request: Request,
+    project_key: str,
+    bidder_id: int,
+    source: str,
+    evaluator_id: int | None = None,
+):
+    who = _username(request)
+    if not who:
+        raise HTTPException(401)
+    may_see = can_view_evaluator_details(who)
+    ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
+    html = render_evaluation_export_html(ctx)
+    try:
+        data = build_evaluation_pdf_bytes(html)
+    except ImportError as exc:
+        raise HTTPException(
+            500,
+            "WeasyPrint nicht installiert — PDF-Export benötigt weasyprint (+ System-Libs).",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"PDF-Export fehlgeschlagen: {exc}") from exc
+    filename = _filtered_export_filename(ctx, "pdf")
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/evaluation/export.zip")
+async def evaluation_export_zip(
+    request: Request,
+    project_key: str,
+    format: str = "xlsx",
+):
+    who = _username(request)
+    if not who:
+        raise HTTPException(401)
+    may_see = can_view_evaluator_details(who)
+    fmt = (format or "xlsx").lower()
+    if fmt not in {"csv", "xlsx", "docx", "html", "pdf"}:
+        raise HTTPException(400, f"Unbekanntes Format: {format}")
+
+    try:
+        data = build_evaluation_export_zip_bytes(
+            project_key,
+            fmt,
+            project_title=_project_title(project_key),
+            may_see_evaluators=may_see,
+            render_html=render_evaluation_export_html if fmt in ("html", "pdf") else None,
+        )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        msg = str(exc)
+        if "Keine exportierbaren" in msg:
+            raise HTTPException(404, msg) from exc
+        raise HTTPException(400, msg) from exc
+    except ImportError as exc:
+        raise HTTPException(500, "WeasyPrint nicht installiert (PDF-ZIP).") from exc
+
+    zip_name = _safe_export_stem("bewertung", project_key, fmt) + ".zip"
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={zip_name}"},
     )

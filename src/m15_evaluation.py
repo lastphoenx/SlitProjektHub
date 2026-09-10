@@ -4816,6 +4816,144 @@ def context_to_tabular_sheets(
     }
 
 
+def safe_export_basename(ctx: EvaluationExportContext) -> str:
+    """Dateiname-Stamm: Bieter_Quelle (ohne Projekt-Präfix)."""
+    parts = [
+        re.sub(r"[^\w\-]+", "_", ctx.bidder_name)[:40].strip("_"),
+        re.sub(r"[^\w\-]+", "_", ctx.source_label)[:40].strip("_"),
+    ]
+    return "_".join(p for p in parts if p) or "bewertung"
+
+
+def build_filtered_csv_bytes(ctx: EvaluationExportContext) -> bytes:
+    import csv
+
+    headers, rows = context_to_tabular_sheets(ctx)["Bewertungen"]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(headers)
+    writer.writerows(rows)
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def build_filtered_xlsx_bytes(ctx: EvaluationExportContext) -> bytes:
+    import openpyxl
+
+    sheets = context_to_tabular_sheets(ctx)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Bewertungen"
+    headers, rows = sheets["Bewertungen"]
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    detail_headers, detail_rows = sheets.get("Einzelanforderungen", ([], []))
+    if detail_rows:
+        ws_detail = wb.create_sheet("Einzelanforderungen")
+        ws_detail.append(detail_headers)
+        for row in detail_rows:
+            ws_detail.append(row)
+    if ctx.ranking:
+        ws_rank = wb.create_sheet("Rangfolge")
+        ws_rank.append(["Rang", "Bieter", "Gesamt %", "KO"])
+        ws_rank.append([
+            ctx.ranking.get("rank"),
+            ctx.bidder_name,
+            ctx.ranking.get("total_score"),
+            ctx.ranking.get("ko"),
+        ])
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def list_export_combinations(
+    project_key: str,
+    *,
+    may_see_evaluators: bool = True,
+) -> list[tuple[int, str]]:
+    """Alle (bidder_id, source_key) mit mindestens einer Score-Zeile."""
+    scores = list_scores_for_project(project_key)
+    sources_by_bidder: dict[int, set[str]] = {}
+    for s in scores:
+        if s.source_key == "ai":
+            sources_by_bidder.setdefault(s.bidder_id, set()).add("ai")
+        elif s.source_key.startswith("user:") and may_see_evaluators:
+            sources_by_bidder.setdefault(s.bidder_id, set()).add(s.source_key)
+
+    combos: list[tuple[int, str]] = []
+    for bidder in list_bidders(project_key):
+        sources = sources_by_bidder.get(bidder.id, set())
+        if not sources:
+            continue
+        ordered: list[str] = []
+        if "ai" in sources:
+            ordered.append("ai")
+        ordered.extend(sorted(k for k in sources if k.startswith("user:")))
+        for source_key in ordered:
+            combos.append((bidder.id, source_key))
+    return combos
+
+
+def build_evaluation_pdf_bytes(html: str) -> bytes:
+    """HTML → PDF via WeasyPrint (System-Libs auf Linux nötig)."""
+    from weasyprint import HTML
+
+    return HTML(string=html).write_pdf()
+
+
+def build_evaluation_export_zip_bytes(
+    project_key: str,
+    fmt: str,
+    *,
+    project_title: str = "",
+    may_see_evaluators: bool = True,
+    render_html: Optional[Any] = None,
+) -> bytes:
+    """
+    ZIP mit je einer Datei pro Bieter × Quelle.
+    fmt: csv | xlsx | docx | html | pdf
+    render_html: Callable[[EvaluationExportContext], str] — Pflicht für html/pdf.
+    """
+    import zipfile
+
+    fmt = (fmt or "xlsx").lower()
+    allowed = {"csv", "xlsx", "docx", "html", "pdf"}
+    if fmt not in allowed:
+        raise ValueError(f"Unbekanntes Format: {fmt}")
+    if fmt in ("html", "pdf") and render_html is None:
+        raise ValueError("render_html erforderlich für html/pdf")
+
+    combos = list_export_combinations(project_key, may_see_evaluators=may_see_evaluators)
+    if not combos:
+        raise ValueError("Keine exportierbaren Bewertungen")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for bidder_id, source_key in combos:
+            ctx = build_evaluation_export_context(
+                project_key,
+                bidder_id,
+                source_key,
+                project_title=project_title,
+                may_see_evaluators=may_see_evaluators,
+            )
+            base = safe_export_basename(ctx)
+            if fmt == "csv":
+                data = build_filtered_csv_bytes(ctx)
+            elif fmt == "xlsx":
+                data = build_filtered_xlsx_bytes(ctx)
+            elif fmt == "docx":
+                data = build_evaluation_docx_bytes(ctx)
+            elif fmt == "html":
+                data = render_html(ctx).encode("utf-8")
+            else:
+                html = render_html(ctx)
+                data = build_evaluation_pdf_bytes(html)
+            zf.writestr(f"{base}.{fmt}", data)
+    return buf.getvalue()
+
+
 def build_evaluation_docx_bytes(ctx: EvaluationExportContext) -> bytes:
     """Word-Export für einen Bieter und eine Bewertungsquelle."""
     from docx import Document

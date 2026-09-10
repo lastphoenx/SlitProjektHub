@@ -50,5 +50,36 @@ Reihenfolge: Ticket 1 (Daten + Tabellen) vor Ticket 2 (HTML/DOCX) — gemeinsame
 - HTML druckfreundlich (`@media print`)
 
 **Nicht in Scope (Follow-up):**
-- PDF (WeasyPrint / Playwright)
-- ZIP-Batch aller Kombinationen
+- ~~PDF (WeasyPrint / Playwright)~~ → Ticket 3
+- ~~ZIP-Batch aller Kombinationen~~ → Ticket 4
+
+---
+
+## Ticket 3 — PDF-Export pro Bieter/Bewerter ✅
+
+**Ziel:** Druckfertiges Protokoll als PDF (gleicher Inhalt wie HTML).
+
+**Umsetzung:**
+- `build_evaluation_pdf_bytes()` — HTML → PDF via WeasyPrint
+- `backend/app/evaluation_export_render.py` — gemeinsames HTML-Rendering
+- Route `GET /evaluation/export.pdf` (gleiche Query-Parameter wie CSV)
+- UI-Button PDF
+
+**Server:** `pip install weasyprint` + Linux-Pakete (Pango/Cairo), siehe WeasyPrint-Doku.
+
+---
+
+## Ticket 4 — ZIP-Batch (alle Bieter × Quellen) ✅
+
+**Ziel:** Ein Download mit allen Kombinationen, die gespeicherte Scores haben.
+
+**Umsetzung:**
+- `list_export_combinations()` + `build_evaluation_export_zip_bytes()`
+- Route `GET /evaluation/export.zip?project_key=&format=xlsx|docx|csv|html|pdf`
+- UI: Formatwahl + «ZIP herunterladen»
+
+**Akzeptanzkriterien:**
+- ZIP enthält je `(Bieter, ai|user:N)` eine Datei, wenn Score existiert
+- Dateiname: `{Bieter}_{Quelle}.{format}`
+- Ohne Bewerter-Rechte: nur KI-Zeilen pro Bieter
+- Leeres Projekt → HTTP 404
