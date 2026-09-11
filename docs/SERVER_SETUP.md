@@ -335,14 +335,12 @@ Standard-Update (pull, apt-Libs für PDF, pip, Service-Restart):
 sudo /opt/slitprojekthub/deployment/update-server.sh
 ```
 
-Homelab mit anderen Pfaden/Service-Namen (Beispiel CT mit `projekthub-*`):
+Das Skript erkennt automatisch `projekthub-*` oder `slitproj-*` Units und bricht ab, wenn kein Restart gelingt (kein stilles «übersprungen»).
+
+Override nur bei Sonderfall:
 
 ```bash
-sudo APP_ROOT=/opt/projekthub \
-     BACKEND_SERVICE=projekthub-backend \
-     FRONTEND_SERVICE=projekthub-frontend \
-     SERVICE_USER=projekthub \
-     /opt/projekthub/deployment/update-server.sh
+sudo BACKEND_SERVICE=mein-backend FRONTEND_SERVICE=mein-frontend /opt/slitprojekthub/deployment/update-server.sh
 ```
 
 Optional Tests nach dem Update:

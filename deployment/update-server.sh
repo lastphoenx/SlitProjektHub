@@ -3,19 +3,82 @@
 # PDF-Export (Offertbeurteilung) benötigt WeasyPrint + System-Libs — siehe docs/SERVER_SETUP.md §9
 #
 # Verwendung (als root auf dem LXC/Server):
-#   sudo APP_ROOT=/opt/slitprojekthub ./deployment/update-server.sh
+#   sudo /opt/slitprojekthub/deployment/update-server.sh
 #
-# Service-Namen anpassen, falls abweichend (Homelab nutzt teils projekthub-* statt slitproj-*):
-#   sudo BACKEND_SERVICE=projekthub-backend FRONTEND_SERVICE=projekthub-frontend ./deployment/update-server.sh
+# Optional überschreiben:
+#   sudo BACKEND_SERVICE=… FRONTEND_SERVICE=… SERVICE_USER=projekthub ./deployment/update-server.sh
 
 set -euo pipefail
 
 APP_ROOT="${APP_ROOT:-/opt/slitprojekthub}"
-BACKEND_SERVICE="${BACKEND_SERVICE:-slitproj-backend}"
-FRONTEND_SERVICE="${FRONTEND_SERVICE:-slitproj-frontend}"
-SERVICE_USER="${SERVICE_USER:-root}"
+BACKEND_SERVICE="${BACKEND_SERVICE:-}"
+FRONTEND_SERVICE="${FRONTEND_SERVICE:-}"
+SERVICE_USER="${SERVICE_USER:-}"
 INSTALL_WEASYPRINT_APT="${INSTALL_WEASYPRINT_APT:-1}"
 RUN_TESTS="${RUN_TESTS:-0}"
+
+unit_exists() {
+    systemctl cat "${1}.service" &>/dev/null
+}
+
+detect_service() {
+    local role="$1"
+    shift
+    local candidate
+    for candidate in "$@"; do
+        if unit_exists "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolve_services() {
+    if [ -z "$BACKEND_SERVICE" ]; then
+        BACKEND_SERVICE="$(detect_service backend projekthub-backend slitproj-backend)" || {
+            echo "FEHLER: Keine Backend-Unit gefunden (projekthub-backend / slitproj-backend)."
+            exit 1
+        }
+    elif ! unit_exists "$BACKEND_SERVICE"; then
+        echo "FEHLER: BACKEND_SERVICE=$BACKEND_SERVICE existiert nicht."
+        exit 1
+    fi
+
+    if [ -z "$FRONTEND_SERVICE" ]; then
+        FRONTEND_SERVICE="$(detect_service frontend projekthub-frontend slitproj-frontend)" || {
+            echo "FEHLER: Keine Frontend-Unit gefunden (projekthub-frontend / slitproj-frontend)."
+            exit 1
+        }
+    elif ! unit_exists "$FRONTEND_SERVICE"; then
+        echo "FEHLER: FRONTEND_SERVICE=$FRONTEND_SERVICE existiert nicht."
+        exit 1
+    fi
+}
+
+resolve_service_user() {
+    if [ -n "$SERVICE_USER" ]; then
+        return
+    fi
+    if id projekthub &>/dev/null; then
+        SERVICE_USER=projekthub
+    else
+        SERVICE_USER=root
+    fi
+}
+
+restart_service() {
+    local unit="$1"
+    systemctl restart "$unit"
+    local state
+    state="$(systemctl is-active "$unit" 2>/dev/null || echo failed)"
+    if [ "$state" != "active" ]; then
+        echo "FEHLER: $unit nach Restart nicht active (Status: $state)."
+        echo "  journalctl -u $unit -n 30 --no-pager"
+        exit 1
+    fi
+    echo "  restarted $unit ($state)"
+}
 
 if [ "$EUID" -ne 0 ]; then
     echo "Bitte als root ausführen: sudo $0"
@@ -27,10 +90,14 @@ if [ ! -d "$APP_ROOT/.git" ]; then
     exit 1
 fi
 
+resolve_services
+resolve_service_user
+
 echo "=== SlitProjektHub Update ==="
 echo "APP_ROOT=$APP_ROOT"
 echo "BACKEND_SERVICE=$BACKEND_SERVICE"
 echo "FRONTEND_SERVICE=$FRONTEND_SERVICE"
+echo "SERVICE_USER=$SERVICE_USER"
 echo ""
 
 echo ">>> apt update"
@@ -52,7 +119,7 @@ fi
 cd "$APP_ROOT"
 
 echo ">>> git pull"
-if id "$SERVICE_USER" &>/dev/null && [ "$SERVICE_USER" != "root" ]; then
+if [ "$SERVICE_USER" != "root" ] && id "$SERVICE_USER" &>/dev/null; then
     sudo -u "$SERVICE_USER" git pull --ff-only
 else
     git pull --ff-only
@@ -64,7 +131,7 @@ if [ ! -x ".venv/bin/pip" ]; then
 fi
 
 echo ">>> pip install -r requirements.txt"
-if id "$SERVICE_USER" &>/dev/null && [ "$SERVICE_USER" != "root" ]; then
+if [ "$SERVICE_USER" != "root" ] && id "$SERVICE_USER" &>/dev/null; then
     sudo -u "$SERVICE_USER" .venv/bin/pip install -r requirements.txt
 else
     .venv/bin/pip install -r requirements.txt
@@ -90,23 +157,10 @@ fi
 
 echo ">>> systemd restart"
 systemctl daemon-reload
-if systemctl is-enabled --quiet "$BACKEND_SERVICE" 2>/dev/null; then
-    systemctl restart "$BACKEND_SERVICE"
-    echo "  restarted $BACKEND_SERVICE"
-else
-    echo "  übersprungen (nicht aktiv): $BACKEND_SERVICE"
-fi
-if systemctl is-enabled --quiet "$FRONTEND_SERVICE" 2>/dev/null; then
-    systemctl restart "$FRONTEND_SERVICE"
-    echo "  restarted $FRONTEND_SERVICE"
-else
-    echo "  übersprungen (nicht aktiv): $FRONTEND_SERVICE"
-fi
+restart_service "$BACKEND_SERVICE"
+restart_service "$FRONTEND_SERVICE"
 
 echo ""
 echo "=== Fertig ==="
-echo "Status:"
-systemctl is-active "$BACKEND_SERVICE" 2>/dev/null || true
-systemctl is-active "$FRONTEND_SERVICE" 2>/dev/null || true
-echo ""
+echo "Status: $(systemctl is-active "$BACKEND_SERVICE") / $(systemctl is-active "$FRONTEND_SERVICE")"
 echo "Logs Backend: journalctl -u $BACKEND_SERVICE -n 40 --no-pager"
