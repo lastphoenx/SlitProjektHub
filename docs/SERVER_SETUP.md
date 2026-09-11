@@ -335,7 +335,8 @@ Standard-Update (pull, apt-Libs für PDF, pip, Service-Restart):
 sudo /opt/slitprojekthub/deployment/update-server.sh
 ```
 
-Das Skript nutzt fest `/opt/slitprojekthub` und `projekthub-backend` / `projekthub-frontend` (Abbruch, wenn Restart fehlschlägt).
+Das Skript nutzt fest `/opt/slitprojekthub`, `projekthub-backend` / `projekthub-frontend`.
+**Git pull als root** (Deploy-Key `/root/.ssh/id_ed25519_github`), **pip als `projekthub`**, danach `chown`.
 
 Optional Tests nach dem Update:
 

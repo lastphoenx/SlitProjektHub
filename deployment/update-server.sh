@@ -10,9 +10,12 @@ set -euo pipefail
 APP_ROOT="${APP_ROOT:-/opt/slitprojekthub}"
 BACKEND_SERVICE="${BACKEND_SERVICE:-projekthub-backend}"
 FRONTEND_SERVICE="${FRONTEND_SERVICE:-projekthub-frontend}"
-SERVICE_USER="${SERVICE_USER:-projekthub}"
+GIT_PULL_USER="${GIT_PULL_USER:-root}"
+PIP_USER="${PIP_USER:-projekthub}"
 INSTALL_WEASYPRINT_APT="${INSTALL_WEASYPRINT_APT:-1}"
 RUN_TESTS="${RUN_TESTS:-0}"
+
+GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/id_ed25519_github}"
 
 unit_exists() {
     systemctl cat "${1}.service" &>/dev/null
@@ -45,17 +48,44 @@ if [ ! -d "$APP_ROOT/.git" ]; then
     exit 1
 fi
 
-if ! id "$SERVICE_USER" &>/dev/null; then
-    echo "WARNUNG: User $SERVICE_USER fehlt — git/pip als root."
-    SERVICE_USER=root
+if ! id "$PIP_USER" &>/dev/null; then
+    echo "WARNUNG: User $PIP_USER fehlt — pip als root."
+    PIP_USER=root
 fi
+
+ensure_github_known_hosts() {
+    local kh="/root/.ssh/known_hosts"
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    if ! grep -q '^github.com ' "$kh" 2>/dev/null; then
+        ssh-keyscan -t ed25519 github.com >> "$kh" 2>/dev/null || true
+        chmod 600 "$kh" 2>/dev/null || true
+    fi
+}
+
+git_pull() {
+    ensure_github_known_hosts
+    if [ -f "$GITHUB_DEPLOY_KEY" ]; then
+        git -C "$APP_ROOT" -c "core.sshCommand=ssh -i ${GITHUB_DEPLOY_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" pull --ff-only
+    else
+        git -C "$APP_ROOT" pull --ff-only
+    fi
+    if id projekthub &>/dev/null; then
+        chown -R projekthub:projekthub "$APP_ROOT"
+    fi
+}
 
 echo "=== SlitProjektHub Update ==="
 echo "APP_ROOT=$APP_ROOT"
 echo "BACKEND_SERVICE=$BACKEND_SERVICE"
 echo "FRONTEND_SERVICE=$FRONTEND_SERVICE"
-echo "SERVICE_USER=$SERVICE_USER"
+echo "GIT_PULL_USER=$GIT_PULL_USER"
+echo "PIP_USER=$PIP_USER"
 echo ""
+
+if [ "$GIT_PULL_USER" != "root" ]; then
+    echo "WARNUNG: GIT_PULL_USER=$GIT_PULL_USER — Deploy-Key liegt typisch unter /root/.ssh"
+fi
 
 echo ">>> apt update"
 apt-get update
@@ -76,10 +106,13 @@ fi
 cd "$APP_ROOT"
 
 echo ">>> git pull"
-if [ "$SERVICE_USER" != "root" ]; then
-    sudo -u "$SERVICE_USER" git pull --ff-only
+if [ "$GIT_PULL_USER" = "root" ]; then
+    git_pull
 else
-    git pull --ff-only
+    sudo -u "$GIT_PULL_USER" git -C "$APP_ROOT" pull --ff-only
+    if id projekthub &>/dev/null; then
+        chown -R projekthub:projekthub "$APP_ROOT"
+    fi
 fi
 
 if [ ! -x ".venv/bin/pip" ]; then
@@ -88,8 +121,8 @@ if [ ! -x ".venv/bin/pip" ]; then
 fi
 
 echo ">>> pip install -r requirements.txt"
-if [ "$SERVICE_USER" != "root" ]; then
-    sudo -u "$SERVICE_USER" .venv/bin/pip install -r requirements.txt
+if [ "$PIP_USER" != "root" ]; then
+    sudo -u "$PIP_USER" .venv/bin/pip install -r requirements.txt
 else
     .venv/bin/pip install -r requirements.txt
 fi
