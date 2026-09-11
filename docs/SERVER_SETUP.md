@@ -327,11 +327,7 @@ Zum Deaktivieren: `wal_mode: false`.
 
 ### Schnell (empfohlen): Update-Skript
 
-Auf dem Server (LXC), nach `git clone` einmal ausführbar machen:
-
-```bash
-chmod +x /opt/slitprojekthub/deployment/update-server.sh
-```
+Die Skripte unter `deployment/` sind im Repo **ausführbar** (`git pull` setzt +x mit).
 
 Standard-Update (pull, apt-Libs für PDF, pip, Service-Restart):
 
