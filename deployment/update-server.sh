@@ -1,19 +1,16 @@
 #!/bin/bash
 # SlitProjektHub — Update auf dem Server (git pull, deps, pip, Service-Restart)
-# PDF-Export (Offertbeurteilung) benötigt WeasyPrint + System-Libs — siehe docs/SERVER_SETUP.md §9
+# Produktion CT: /opt/slitprojekthub, projekthub-backend, projekthub-frontend
+# PDF-Export: WeasyPrint — siehe docs/SERVER_SETUP.md §9
 #
-# Verwendung (als root auf dem LXC/Server):
 #   sudo /opt/slitprojekthub/deployment/update-server.sh
-#
-# Optional überschreiben:
-#   sudo BACKEND_SERVICE=… FRONTEND_SERVICE=… SERVICE_USER=projekthub ./deployment/update-server.sh
 
 set -euo pipefail
 
 APP_ROOT="${APP_ROOT:-/opt/slitprojekthub}"
-BACKEND_SERVICE="${BACKEND_SERVICE:-}"
-FRONTEND_SERVICE="${FRONTEND_SERVICE:-}"
-SERVICE_USER="${SERVICE_USER:-}"
+BACKEND_SERVICE="${BACKEND_SERVICE:-projekthub-backend}"
+FRONTEND_SERVICE="${FRONTEND_SERVICE:-projekthub-frontend}"
+SERVICE_USER="${SERVICE_USER:-projekthub}"
 INSTALL_WEASYPRINT_APT="${INSTALL_WEASYPRINT_APT:-1}"
 RUN_TESTS="${RUN_TESTS:-0}"
 
@@ -21,54 +18,12 @@ unit_exists() {
     systemctl cat "${1}.service" &>/dev/null
 }
 
-detect_service() {
-    local role="$1"
-    shift
-    local candidate
-    for candidate in "$@"; do
-        if unit_exists "$candidate"; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-    return 1
-}
-
-resolve_services() {
-    if [ -z "$BACKEND_SERVICE" ]; then
-        BACKEND_SERVICE="$(detect_service backend projekthub-backend slitproj-backend)" || {
-            echo "FEHLER: Keine Backend-Unit gefunden (projekthub-backend / slitproj-backend)."
-            exit 1
-        }
-    elif ! unit_exists "$BACKEND_SERVICE"; then
-        echo "FEHLER: BACKEND_SERVICE=$BACKEND_SERVICE existiert nicht."
-        exit 1
-    fi
-
-    if [ -z "$FRONTEND_SERVICE" ]; then
-        FRONTEND_SERVICE="$(detect_service frontend projekthub-frontend slitproj-frontend)" || {
-            echo "FEHLER: Keine Frontend-Unit gefunden (projekthub-frontend / slitproj-frontend)."
-            exit 1
-        }
-    elif ! unit_exists "$FRONTEND_SERVICE"; then
-        echo "FEHLER: FRONTEND_SERVICE=$FRONTEND_SERVICE existiert nicht."
-        exit 1
-    fi
-}
-
-resolve_service_user() {
-    if [ -n "$SERVICE_USER" ]; then
-        return
-    fi
-    if id projekthub &>/dev/null; then
-        SERVICE_USER=projekthub
-    else
-        SERVICE_USER=root
-    fi
-}
-
 restart_service() {
     local unit="$1"
+    if ! unit_exists "$unit"; then
+        echo "FEHLER: systemd unit ${unit}.service nicht gefunden."
+        exit 1
+    fi
     systemctl restart "$unit"
     local state
     state="$(systemctl is-active "$unit" 2>/dev/null || echo failed)"
@@ -90,8 +45,10 @@ if [ ! -d "$APP_ROOT/.git" ]; then
     exit 1
 fi
 
-resolve_services
-resolve_service_user
+if ! id "$SERVICE_USER" &>/dev/null; then
+    echo "WARNUNG: User $SERVICE_USER fehlt — git/pip als root."
+    SERVICE_USER=root
+fi
 
 echo "=== SlitProjektHub Update ==="
 echo "APP_ROOT=$APP_ROOT"
@@ -119,7 +76,7 @@ fi
 cd "$APP_ROOT"
 
 echo ">>> git pull"
-if [ "$SERVICE_USER" != "root" ] && id "$SERVICE_USER" &>/dev/null; then
+if [ "$SERVICE_USER" != "root" ]; then
     sudo -u "$SERVICE_USER" git pull --ff-only
 else
     git pull --ff-only
@@ -131,7 +88,7 @@ if [ ! -x ".venv/bin/pip" ]; then
 fi
 
 echo ">>> pip install -r requirements.txt"
-if [ "$SERVICE_USER" != "root" ] && id "$SERVICE_USER" &>/dev/null; then
+if [ "$SERVICE_USER" != "root" ]; then
     sudo -u "$SERVICE_USER" .venv/bin/pip install -r requirements.txt
 else
     .venv/bin/pip install -r requirements.txt

@@ -335,13 +335,7 @@ Standard-Update (pull, apt-Libs für PDF, pip, Service-Restart):
 sudo /opt/slitprojekthub/deployment/update-server.sh
 ```
 
-Das Skript erkennt automatisch `projekthub-*` oder `slitproj-*` Units und bricht ab, wenn kein Restart gelingt (kein stilles «übersprungen»).
-
-Override nur bei Sonderfall:
-
-```bash
-sudo BACKEND_SERVICE=mein-backend FRONTEND_SERVICE=mein-frontend /opt/slitprojekthub/deployment/update-server.sh
-```
+Das Skript nutzt fest `/opt/slitprojekthub` und `projekthub-backend` / `projekthub-frontend` (Abbruch, wenn Restart fehlschlägt).
 
 Optional Tests nach dem Update:
 
@@ -373,8 +367,7 @@ pip install -r requirements.txt
 # Smoke-Test PDF
 python -c "from weasyprint import HTML; assert HTML(string='<p>t</p>').write_pdf()[:4]==b'%PDF'; print('OK')"
 
-systemctl restart slitproj-backend slitproj-frontend
-# bzw. projekthub-backend projekthub-frontend — je nach Installation
+systemctl restart projekthub-backend projekthub-frontend
 ```
 
 Siehe **Abschnitt 9** für PDF-Export-Funktion und Troubleshooting.
@@ -450,7 +443,7 @@ Direkt-URL (Beispiel):
 2. `sudo /opt/slitprojekthub/deployment/update-server.sh` (oder manuelle Befehle oben)
 3. Smoke-Test WeasyPrint (CLI)
 4. Im UI einen PDF-Export testen
-5. Bei Fehler: `journalctl -u slitproj-backend -n 50` (Service-Name anpassen)
+5. Bei Fehler: `journalctl -u projekthub-backend -n 50`
 
 ### Troubleshooting
 
