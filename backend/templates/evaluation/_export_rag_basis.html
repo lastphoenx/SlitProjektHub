@@ -9,8 +9,9 @@
       <strong>{{ item.filename or '—' }}</strong>
       {% if item.page_number %} · S. {{ item.page_number }}{% endif %}
       {% if item.method %} · {{ item.method }}{% endif %}
-      {% if item.score is not none %}
-        {% if item.score <= 1 %} · {{ (item.score * 100)|round(0)|int }}%{% else %} · {{ item.score }}{% endif %}
+      {% if item.get('score') is not none %}
+        {% set sc = item.get('score') %}
+        {% if sc <= 1 %} · {{ (sc * 100)|round(0)|int }}%{% else %} · {{ sc }}{% endif %}
       {% endif %}
       {% if item.preview %}<div>{{ item.preview }}</div>{% endif %}
       {% if export_image_mode|default('file') == 'url' and item.page_image_url %}
