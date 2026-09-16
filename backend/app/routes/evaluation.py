@@ -336,6 +336,24 @@ def _ai_coverage_label(rankings: list, criteria: list) -> str:
     return " ".join(parts)
 
 
+def _empty_rankings_panel_context() -> dict:
+    return {
+        "rankings": [],
+        "ai_rankings": [],
+        "has_phase2_criteria": False,
+        "price_offers_status": {},
+        "price_formula": "reciprocal",
+        "price_formula_label": "",
+        "price_scale_max": 10,
+        "cheapest_tco": None,
+        "priciest_tco": None,
+        "phase1_coverage_label": "",
+        "phase1_interim_subtitle": "",
+        "ai_coverage_label": "",
+        "price_rankings": [],
+    }
+
+
 def _rankings_panel_context(project_key: str) -> dict:
     criteria = list_criteria(project_key)
     rankings = compute_rankings(project_key)
@@ -477,10 +495,7 @@ async def evaluation_page(request: Request, project_key: str = ""):
     scores_by_cell: dict[tuple[int, int], list] = {}
     for s in scores:
         scores_by_cell.setdefault((s.bidder_id, s.criterion_id), []).append(s)
-    rankings_ctx = _rankings_panel_context(project_key) if project_key else {
-        "rankings": [],
-        "has_phase2_criteria": False,
-    }
+    rankings_ctx = _rankings_panel_context(project_key) if project_key else _empty_rankings_panel_context()
     top_criteria = [c for c in criteria if c.parent_id is None]
     matrix_rows = (
         _build_matrix_rows(project_key, bidders, criteria, scores_by_cell)
@@ -540,8 +555,8 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "bidders": bidders,
         "criteria": criteria,
         "top_criteria": top_criteria,
-        "rankings": rankings_ctx["rankings"],
         "matrix_rows": matrix_rows,
+        **rankings_ctx,
         "offer_docs": offer_docs,
         "project_source_docs": project_source_docs,
         "tender_doc_roles": tender_doc_roles,
@@ -555,7 +570,6 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "offer_doc_bidder_ids": offer_doc_bidder_ids,
         "offer_doc_assignments": offer_doc_assignments,
         "deleted_bidders": deleted_bidders,
-        "has_phase2_criteria": rankings_ctx["has_phase2_criteria"],
         "ranking_phase_labels": RANKING_PHASE_LABELS,
         "ranking_phases": RANKING_PHASES,
         "price_formula_labels": PRICE_FORMULA_LABELS,
@@ -563,7 +577,6 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "missing_justifications": list_missing_justifications(project_key) if project_key else [],
         "evaluator_discrepancies": list_evaluator_score_discrepancies(project_key) if project_key else [],
         "evaluation_started": project_evaluation_started(project_key) if project_key else False,
-        "price_offers_status": price_offers_status(project_key) if project_key else {},
         "angebot_class": ANGEBOT_CLASSIFICATION,
         "angebot_subtypes": ANGEBOT_SUBTYPES,
         "zero_chunk_offer_docs": [
