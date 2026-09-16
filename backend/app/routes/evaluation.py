@@ -60,8 +60,8 @@ from src.m15_evaluation import (
     context_to_tabular_sheets,
     list_evaluator_ids_for_project,
     compute_rankings,
-    create_bidder,
     child_ai_score_summary,
+    create_bidder,
     create_criterion,
     delete_price_item,
     extract_criteria_from_tender_docs,
@@ -144,6 +144,108 @@ def _htmx_or_redirect(request: Request, url: str, *, status: int = 303) -> Respo
     return RedirectResponse(url=url, status_code=status)
 
 
+def _trigger_eval_refresh(response: Response) -> None:
+    """Matrix + Rangfolge nach Bewertungsänderung neu laden (HTMX)."""
+    response.headers["HX-Trigger"] = json.dumps(
+        {"evalRankingsRefresh": True, "evalMatrixRefresh": True}
+    )
+
+
+def _has_phase2_criteria(criteria: list) -> bool:
+    return any(
+        int(c.ranking_phase or 1) >= 2
+        for c in criteria
+        if c.kind == "zuschlag" and c.parent_id is None
+    )
+
+
+def _build_matrix_rows(
+    project_key: str,
+    bidders: list,
+    criteria: list,
+    scores_by_cell: dict[tuple[int, int], list],
+) -> list[dict]:
+    top_criteria = [c for c in criteria if c.parent_id is None]
+    has_children = {c.parent_id for c in criteria if c.parent_id}
+    matrix_rows: list[dict] = []
+    for crit in top_criteria:
+        row = {
+            "id": crit.id,
+            "name": crit.name,
+            "kind": crit.kind,
+            "referenz": format_requirement_ref_display(crit.referenz),
+            "auto_price": crit.auto_price,
+            "has_children": crit.id in has_children,
+            "weight": crit.weight_pct if crit.kind == "zuschlag" else None,
+        }
+        crit_children = [c for c in criteria if c.parent_id == crit.id]
+        cells = []
+        for bidder in bidders:
+            cell_scores = scores_by_cell.get((bidder.id, crit.id), [])
+            ai_row = next((s for s in cell_scores if s.source_key == "ai"), None)
+            user_rows = [s for s in cell_scores if s.source_key.startswith("user:")]
+            ai_answered, ai_total, ai_avg = (
+                child_ai_score_summary(bidder.id, crit_children, scores_by_cell)
+                if crit_children
+                else (0, 0, None)
+            )
+            if crit.kind == "zuschlag":
+                official, answered, total = rolled_up_score(
+                    bidder.id, crit, criteria, scores_by_cell
+                )
+                display = f"{official:.2f}" if official is not None else "—"
+            elif crit_children:
+                child_vals = [
+                    official_score(bidder.id, ch, scores_by_cell.get((bidder.id, ch.id), []))
+                    for ch in crit_children
+                ]
+                answered = sum(1 for v in child_vals if v is not None)
+                total = len(crit_children)
+                official = None
+                if answered == total and total:
+                    official = 0.0 if any(v == 0 for v in child_vals) else 1.0
+                display = (
+                    "K.O."
+                    if official == 0.0
+                    else ("erfüllt" if official == 1.0 else f"{answered}/{total}")
+                )
+            else:
+                official = official_score(bidder.id, crit, cell_scores)
+                answered, total = (1, 1) if official is not None else (0, 1)
+                display = (
+                    ("Ja" if official == 1 else "Nein")
+                    if official is not None
+                    else "—"
+                )
+            cells.append(
+                {
+                    "bidder_id": bidder.id,
+                    "criterion_id": crit.id,
+                    "official": official,
+                    "display": display,
+                    "ai_value": ai_row.value if ai_row else None,
+                    "evaluator_count": len(user_rows),
+                    "answered": answered,
+                    "total": total,
+                    "ai_answered": ai_answered,
+                    "ai_total": ai_total,
+                    "ai_avg": ai_avg,
+                }
+            )
+        row["cells"] = cells
+        matrix_rows.append(row)
+    return matrix_rows
+
+
+def _rankings_panel_context(project_key: str) -> dict:
+    criteria = list_criteria(project_key)
+    return {
+        "project_key": project_key,
+        "rankings": compute_rankings(project_key),
+        "has_phase2_criteria": _has_phase2_criteria(criteria),
+    }
+
+
 def _projects_list() -> list[dict]:
     df = list_projects_df()
     if df is None or df.empty:
@@ -207,6 +309,35 @@ async def evaluation_ki_hint(provider: str = "", model: str = ""):
     return ki_busy_hint(provider, model)
 
 
+@router.get("/evaluation/rankings-fragment", response_class=HTMLResponse)
+async def evaluation_rankings_fragment(request: Request, project_key: str = ""):
+    if not project_key:
+        raise HTTPException(400, "project_key fehlt")
+    ctx = {"request": request, **_rankings_panel_context(project_key)}
+    return templates.TemplateResponse("evaluation/_rankings_panel.html", ctx)
+
+
+@router.get("/evaluation/matrix-fragment", response_class=HTMLResponse)
+async def evaluation_matrix_fragment(request: Request, project_key: str = ""):
+    if not project_key:
+        raise HTTPException(400, "project_key fehlt")
+    bidders = list_bidders(project_key)
+    criteria = list_criteria(project_key)
+    scores_by_cell: dict[tuple[int, int], list] = {}
+    for s in list_scores_for_project(project_key):
+        scores_by_cell.setdefault((s.bidder_id, s.criterion_id), []).append(s)
+    matrix_rows = _build_matrix_rows(project_key, bidders, criteria, scores_by_cell)
+    return templates.TemplateResponse(
+        "evaluation/_matrix_table.html",
+        {
+            "request": request,
+            "project_key": project_key,
+            "bidders": bidders,
+            "matrix_rows": matrix_rows,
+        },
+    )
+
+
 @router.get("/evaluation", response_class=HTMLResponse)
 async def evaluation_page(request: Request, project_key: str = ""):
     projects = _projects_list()
@@ -219,66 +350,16 @@ async def evaluation_page(request: Request, project_key: str = ""):
     scores_by_cell: dict[tuple[int, int], list] = {}
     for s in scores:
         scores_by_cell.setdefault((s.bidder_id, s.criterion_id), []).append(s)
-    rankings = compute_rankings(project_key) if project_key else []
-
-    # Nur Top-Level-Kriterien in der Matrix - Unterfragen (parent_id gesetzt) sind
-    # Beleg-/KI-Hilfsebene und werden über die Zell-Details der Elternzeile erreicht.
+    rankings_ctx = _rankings_panel_context(project_key) if project_key else {
+        "rankings": [],
+        "has_phase2_criteria": False,
+    }
     top_criteria = [c for c in criteria if c.parent_id is None]
-    has_children = {c.parent_id for c in criteria if c.parent_id}
-    matrix_rows = []
-    for crit in top_criteria:
-        row = {
-            "id": crit.id,
-            "name": crit.name,
-            "kind": crit.kind,
-            "referenz": format_requirement_ref_display(crit.referenz),
-            "auto_price": crit.auto_price,
-            "has_children": crit.id in has_children,
-            "weight": crit.weight_pct if crit.kind == "zuschlag" else None,
-        }
-        crit_children = [c for c in criteria if c.parent_id == crit.id]
-        cells = []
-        for bidder in bidders:
-            cell_scores = scores_by_cell.get((bidder.id, crit.id), [])
-            ai_row = next((s for s in cell_scores if s.source_key == "ai"), None)
-            user_rows = [s for s in cell_scores if s.source_key.startswith("user:")]
-            ai_answered, ai_total, ai_avg = (
-                child_ai_score_summary(bidder.id, crit_children, scores_by_cell)
-                if crit_children
-                else (0, 0, None)
-            )
-            if crit.kind == "zuschlag":
-                official, answered, total = rolled_up_score(bidder.id, crit, criteria, scores_by_cell)
-                display = f"{official:.2f}" if official is not None else "—"
-            elif crit_children:
-                child_vals = [official_score(bidder.id, ch, scores_by_cell.get((bidder.id, ch.id), [])) for ch in crit_children]
-                answered = sum(1 for v in child_vals if v is not None)
-                total = len(crit_children)
-                official = None
-                if answered == total and total:
-                    official = 0.0 if any(v == 0 for v in child_vals) else 1.0
-                display = "K.O." if official == 0.0 else ("erfüllt" if official == 1.0 else f"{answered}/{total}")
-            else:
-                official = official_score(bidder.id, crit, cell_scores)
-                answered, total = (1, 1) if official is not None else (0, 1)
-                display = ("Ja" if official == 1 else "Nein") if official is not None else "—"
-            cells.append(
-                {
-                    "bidder_id": bidder.id,
-                    "criterion_id": crit.id,
-                    "official": official,
-                    "display": display,
-                    "ai_value": ai_row.value if ai_row else None,
-                    "evaluator_count": len(user_rows),
-                    "answered": answered,
-                    "total": total,
-                    "ai_answered": ai_answered,
-                    "ai_total": ai_total,
-                    "ai_avg": ai_avg,
-                }
-            )
-        row["cells"] = cells
-        matrix_rows.append(row)
+    matrix_rows = (
+        _build_matrix_rows(project_key, bidders, criteria, scores_by_cell)
+        if project_key
+        else []
+    )
 
     offer_docs = []
     bidder_doc_subtypes: dict[int, dict[int, list[str]]] = {}
@@ -332,7 +413,7 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "bidders": bidders,
         "criteria": criteria,
         "top_criteria": top_criteria,
-        "rankings": rankings,
+        "rankings": rankings_ctx["rankings"],
         "matrix_rows": matrix_rows,
         "offer_docs": offer_docs,
         "project_source_docs": project_source_docs,
@@ -347,11 +428,7 @@ async def evaluation_page(request: Request, project_key: str = ""):
         "offer_doc_bidder_ids": offer_doc_bidder_ids,
         "offer_doc_assignments": offer_doc_assignments,
         "deleted_bidders": deleted_bidders,
-        "has_phase2_criteria": any(
-            int(c.ranking_phase or 1) >= 2
-            for c in criteria
-            if c.kind == "zuschlag" and c.parent_id is None
-        ) if project_key else False,
+        "has_phase2_criteria": rankings_ctx["has_phase2_criteria"],
         "ranking_phase_labels": RANKING_PHASE_LABELS,
         "ranking_phases": RANKING_PHASES,
         "price_formula_labels": PRICE_FORMULA_LABELS,
@@ -589,7 +666,11 @@ async def evaluation_save_score(
             )
         raise HTTPException(400, str(exc)) from exc
     if request.headers.get("hx-request"):
-        return await evaluation_cell(request, bidder_id=bidder_id, criterion_id=criterion_id, project_key=project_key)
+        resp = await evaluation_cell(
+            request, bidder_id=bidder_id, criterion_id=criterion_id, project_key=project_key
+        )
+        _trigger_eval_refresh(resp)
+        return resp
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
 
 
@@ -620,7 +701,11 @@ async def evaluation_save_ai_score(
         as_source="ai",
     )
     if request.headers.get("hx-request"):
-        return await evaluation_cell(request, bidder_id=bidder_id, criterion_id=criterion_id, project_key=project_key)
+        resp = await evaluation_cell(
+            request, bidder_id=bidder_id, criterion_id=criterion_id, project_key=project_key
+        )
+        _trigger_eval_refresh(resp)
+        return resp
     return RedirectResponse(url=f"/evaluation?project_key={project_key}", status_code=303)
 
 

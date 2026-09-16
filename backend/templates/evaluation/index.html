@@ -651,48 +651,12 @@
     <a class="btn btn-secondary btn-sm" href="/evaluation/price?project_key={{ project_key }}">Preisblatt</a>
   </div>
   {% if matrix_rows %}
-  <div style="overflow-x:auto" id="eval-matrix-wrap">
-    <div class="table-wrap">
-  <table id="eval-matrix-table">
-      <thead>
-        <tr>
-          <th>Ref</th><th>Kriterium</th><th>Art</th><th>Gewicht</th>
-          {% for b in bidders %}<th data-bidder-col="{{ b.id }}">{{ b.name }}</th>{% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in matrix_rows %}
-        <tr>
-          <td style="font-family:var(--font-mono,monospace);font-size:.78rem;white-space:nowrap;color:var(--color-text-muted)">{{ row.referenz or '—' }}</td>
-          <td>{{ row.name }}{% if row.auto_price %} <span class="text-muted" style="font-size:.72rem">(Preisblatt)</span>{% endif %}</td>
-          <td>{{ row.kind }}</td>
-          <td>{{ row.weight or '' }}</td>
-          {% for cell in row.cells %}
-          <td class="eval-matrix-cell" style="cursor:pointer" title="Details anzeigen — KI & Bewertung"
-              data-bidder-col="{{ cell.bidder_id }}"
-              data-cell-url="/evaluation/cell?bidder_id={{ cell.bidder_id }}&criterion_id={{ cell.criterion_id }}&project_key={{ project_key }}"
-              hx-get="/evaluation/cell?bidder_id={{ cell.bidder_id }}&criterion_id={{ cell.criterion_id }}&project_key={{ project_key }}"
-              hx-target="#modal-slot" hx-swap="innerHTML">
-            <strong>{{ cell.display }}</strong>
-            <div style="font-size:.7rem;color:var(--color-text-muted)">
-              Bewerten ›
-              {% if row.has_children %}
-              · {{ cell.answered }}/{{ cell.total }} offiziell
-              {% if cell.ai_answered %}
-              · 🤖 {{ cell.ai_answered }}/{{ cell.ai_total }}{% if cell.ai_avg %} Ø{{ "%.1f"|format(cell.ai_avg) }}{% endif %}
-              {% endif %}
-              {% else %}
-              {% if cell.ai_value is not none %}· 🤖{{ "%.1f"|format(cell.ai_value) }}{% endif %}
-              {% if cell.evaluator_count %} · {{ cell.evaluator_count }} Bewertung{{ "en" if cell.evaluator_count != 1 else "" }}{% endif %}
-              {% endif %}
-            </div>
-          </td>
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  <div id="eval-matrix-panel"
+       hx-get="/evaluation/matrix-fragment?project_key={{ project_key }}"
+       hx-trigger="evalMatrixRefresh from:body"
+       hx-target="#eval-matrix-panel"
+       hx-swap="innerHTML">
+    {% include "evaluation/_matrix_table.html" %}
   </div>
   {% else %}
   <p class="text-muted">Noch keine Kriterien oder Bieter — zuerst Phase ② (optional) und ③ abschliessen.</p>
@@ -700,52 +664,26 @@
 </div>
 
 <div class="card eval-phase-card eval-phase-result-card" style="margin-bottom:1rem">
-  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Rangfolge</h2>
-  {% if has_phase2_criteria %}
-  <p class="text-muted" style="font-size:.75rem;margin:0 0 .75rem">
-  Zweistufige Bewertung: Zuerst ZK-Kriterien (Phase 1) für die Einladungsentscheid — danach Präsentation (Phase 2, z. B. A-01).
-  </p>
-  <h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Vor Präsentation (Phase 1, ZK)</h3>
-  <div class="table-wrap" style="margin-bottom:1rem">
-  <table>
-    <thead><tr>
-      <th>Rang</th><th>Bieter</th><th>ZK %</th><th>Max. bei Präsentation voll</th><th>Einladung?</th><th>Eignung</th>
-    </tr></thead>
-    <tbody>
-      {% for r in rankings %}
-      <tr data-ranking-bidder="{{ r.bidder_id }}"{% if r.can_still_win == false %} style="opacity:.75"{% endif %}>
-        <td>{{ r.interim_rank if r.interim_rank else 'K.O./offen' }}</td>
-        <td>{{ r.bidder_name }}</td>
-        <td>{{ r.interim_score if r.interim_score is not none else '—' }}</td>
-        <td>{{ r.max_score if r.max_score is not none else '—' }}</td>
-        <td>
-          {% if r.ko %}K.O.
-          {% elif r.can_still_win == false %}<span title="Selbst mit voller Punktzahl in Phase 2 nicht mehr erreichbar">nein</span>
-          {% elif r.can_still_win %}ja
-          {% else %}—{% endif %}
-        </td>
-        <td>{{ 'ja' if not r.ko else 'K.O.' }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem">
+    <h2 style="font-size:.95rem;font-weight:700;margin:0">Rangfolge</h2>
+    {% if project_key %}
+    <button type="button" class="btn btn-secondary btn-sm" id="eval-rankings-refresh-btn"
+            hx-get="/evaluation/rankings-fragment?project_key={{ project_key }}"
+            hx-target="#eval-rankings-panel"
+            hx-swap="innerHTML">
+      Rangfolge aktualisieren
+    </button>
+    {% endif %}
   </div>
-  <h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Gesamt (alle Phasen bewertet)</h3>
-  {% endif %}
-  <div class="table-wrap">
-  <table>
-    <thead><tr><th>Rang</th><th>Bieter</th><th>Gesamt %</th><th>Eignung OK</th></tr></thead>
-    <tbody>
-      {% for r in rankings %}
-      <tr data-ranking-bidder="{{ r.bidder_id }}">
-        <td>{{ r.rank if r.rank else 'K.O./offen' }}</td>
-        <td>{{ r.bidder_name }}</td>
-        <td>{{ r.total_score if r.total_score is not none else '—' }}</td>
-        <td>{{ 'ja' if not r.ko else 'K.O.' }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <p class="text-muted" style="font-size:.75rem;margin:0 0 .75rem">
+    Basiert auf dem Ø der <strong>Bewerter-Werte</strong> — reine KI-Vorschläge zählen erst nach «Als meine Bewertung speichern».
+  </p>
+  <div id="eval-rankings-panel"
+       {% if project_key %}hx-get="/evaluation/rankings-fragment?project_key={{ project_key }}"
+       hx-trigger="evalRankingsRefresh from:body"
+       hx-target="#eval-rankings-panel"
+       hx-swap="innerHTML"{% endif %}>
+    {% include "evaluation/_rankings_panel.html" %}
   </div>
 </div>
 
@@ -1027,6 +965,14 @@ function openEvalPageLightbox(btn) {
 
   focusEl.addEventListener('change', function() {
     applyBidderFocus(focusEl.value, true);
+  });
+
+  document.body.addEventListener('htmx:afterSwap', function(evt) {
+    const target = evt.detail && evt.detail.target;
+    if (!target) return;
+    if (target.id === 'eval-matrix-panel' || target.id === 'eval-rankings-panel') {
+      applyBidderFocus(focusEl.value, false);
+    }
   });
 })();
 </script>

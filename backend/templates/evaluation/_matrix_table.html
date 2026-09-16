@@ -1,0 +1,43 @@
+<div style="overflow-x:auto" id="eval-matrix-wrap">
+  <div class="table-wrap">
+<table id="eval-matrix-table">
+    <thead>
+      <tr>
+        <th>Ref</th><th>Kriterium</th><th>Art</th><th>Gewicht</th>
+        {% for b in bidders %}<th data-bidder-col="{{ b.id }}">{{ b.name }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in matrix_rows %}
+      <tr>
+        <td style="font-family:var(--font-mono,monospace);font-size:.78rem;white-space:nowrap;color:var(--color-text-muted)">{{ row.referenz or '—' }}</td>
+        <td>{{ row.name }}{% if row.auto_price %} <span class="text-muted" style="font-size:.72rem">(Preisblatt)</span>{% endif %}</td>
+        <td>{{ row.kind }}</td>
+        <td>{{ row.weight or '' }}</td>
+        {% for cell in row.cells %}
+        <td class="eval-matrix-cell" style="cursor:pointer" title="Details anzeigen — KI & Bewertung"
+            data-bidder-col="{{ cell.bidder_id }}"
+            data-cell-url="/evaluation/cell?bidder_id={{ cell.bidder_id }}&criterion_id={{ cell.criterion_id }}&project_key={{ project_key }}"
+            hx-get="/evaluation/cell?bidder_id={{ cell.bidder_id }}&criterion_id={{ cell.criterion_id }}&project_key={{ project_key }}"
+            hx-target="#modal-slot" hx-swap="innerHTML">
+          <strong>{{ cell.display }}</strong>
+          <div style="font-size:.7rem;color:var(--color-text-muted)">
+            Bewerten ›
+            {% if row.has_children %}
+            · {{ cell.answered }}/{{ cell.total }} offiziell
+            {% if cell.ai_answered %}
+            · 🤖 {{ cell.ai_answered }}/{{ cell.ai_total }}{% if cell.ai_avg %} Ø{{ "%.1f"|format(cell.ai_avg) }}{% endif %}
+            {% endif %}
+            {% else %}
+            {% if cell.ai_value is not none %}· 🤖{{ "%.1f"|format(cell.ai_value) }}{% endif %}
+            {% if cell.evaluator_count %} · {{ cell.evaluator_count }} Bewertung{{ "en" if cell.evaluator_count != 1 else "" }}{% endif %}
+            {% endif %}
+          </div>
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+</table>
+  </div>
+</div>
