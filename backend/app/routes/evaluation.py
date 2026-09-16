@@ -237,12 +237,134 @@ def _build_matrix_rows(
     return matrix_rows
 
 
+def _phase1_coverage_label(rankings: list, criteria: list) -> str:
+    phase1 = [
+        c
+        for c in criteria
+        if c.kind == "zuschlag"
+        and c.parent_id is None
+        and not c.is_deleted
+        and int(c.ranking_phase or 1) == 1
+        and c.weight_pct > 0
+    ]
+    if not phase1 or not rankings:
+        return ""
+    qual = [c for c in phase1 if not c.auto_price]
+    sample = next(
+        (r for r in rankings if not r.get("ko") and r.get("interim_zuschlag")),
+        rankings[0],
+    )
+    counted_ids = {d.get("criterion_id") for d in (sample.get("interim_zuschlag") or [])}
+    qual_counted = sum(1 for c in qual if c.id in counted_ids)
+    if qual and qual_counted == 0:
+        return (
+            "Aktuell zählt in Phase 1 praktisch nur der Preis (W-01). "
+            "Qualitative ZK-Kriterien haben noch keinen Bewerter-Wert — KI-Vorschläge zählen nicht."
+        )
+    if qual_counted == len(qual):
+        return "Phase 1: Preis und alle qualitativen ZK-Kriterien mit Bewerter-Wert bewertet."
+    missing = [c.referenz or c.name for c in qual if c.id not in counted_ids]
+    tail = " …" if len(missing) > 6 else ""
+    return (
+        f"Phase 1 teilweise bewertet — ohne Bewerter-Wert: "
+        f"{', '.join(missing[:6])}{tail}"
+    )
+
+
+def _enrich_ranking_rows(rankings: list, criteria: list, price_status: dict) -> None:
+    auto_price_crit = next(
+        (c for c in criteria if c.auto_price and c.parent_id is None and not c.is_deleted),
+        None,
+    )
+    totals = price_status.get("totals") or {}
+    for row in rankings:
+        row["tco_inkl_mwst"] = totals.get(row["bidder_id"])
+        price_pts = None
+        for key in ("interim_zuschlag", "zuschlag"):
+            for detail in row.get(key) or []:
+                if auto_price_crit and detail.get("criterion_id") == auto_price_crit.id:
+                    price_pts = detail.get("value")
+                    break
+            if price_pts is not None:
+                break
+        row["price_points"] = price_pts
+
+
+def _price_ranking_rows(rankings: list) -> list[dict]:
+    rows = [
+        {
+            "bidder_id": r["bidder_id"],
+            "bidder_name": r["bidder_name"],
+            "tco_inkl_mwst": r.get("tco_inkl_mwst"),
+            "price_points": r.get("price_points"),
+            "ko": r.get("ko"),
+        }
+        for r in rankings
+    ]
+    scored = [x for x in rows if x.get("price_points") is not None]
+    unscored = [x for x in rows if x.get("price_points") is None]
+    scored.sort(
+        key=lambda x: (
+            -(x["price_points"] or 0),
+            x.get("tco_inkl_mwst") if x.get("tco_inkl_mwst") else float("inf"),
+        )
+    )
+    for idx, row in enumerate(scored, start=1):
+        row["price_rank"] = idx
+    for row in unscored:
+        row["price_rank"] = None
+    return scored + unscored
+
+
+def _ai_coverage_label(rankings: list, criteria: list) -> str:
+    zuschlag_top = [
+        c
+        for c in criteria
+        if c.kind == "zuschlag" and c.parent_id is None and not c.is_deleted and c.weight_pct > 0
+    ]
+    if not zuschlag_top or not rankings:
+        return ""
+    sample = next((r for r in rankings if r.get("zuschlag")), rankings[0])
+    counted_ids = {d.get("criterion_id") for d in (sample.get("zuschlag") or [])}
+    refs = [c.referenz or c.name for c in zuschlag_top if c.id in counted_ids]
+    missing = [c.referenz or c.name for c in zuschlag_top if c.id not in counted_ids]
+    parts = ["W-01…A-01 aus Matrix-🤖 (Preis weiter aus TCO/system)."]
+    if refs:
+        parts.append(f"Mit KI-Wert: {', '.join(refs[:8])}" + (" …" if len(refs) > 8 else ""))
+    if missing:
+        parts.append(f"Ohne KI: {', '.join(missing[:6])}" + (" …" if len(missing) > 6 else ""))
+    return " ".join(parts)
+
+
 def _rankings_panel_context(project_key: str) -> dict:
     criteria = list_criteria(project_key)
+    rankings = compute_rankings(project_key)
+    ai_rankings = compute_rankings(project_key, source_mode="ai")
+    price_status = price_offers_status(project_key)
+    eval_config = get_evaluation_config(project_key)
+    formula = eval_config.get("price_formula", "reciprocal")
+    auto_price_crit = next(
+        (c for c in criteria if c.auto_price and c.parent_id is None and not c.is_deleted),
+        None,
+    )
+    _enrich_ranking_rows(rankings, criteria, price_status)
+    coverage = _phase1_coverage_label(rankings, criteria)
+    only_price = "nur der Preis" in coverage or "praktisch nur der Preis" in coverage
     return {
         "project_key": project_key,
-        "rankings": compute_rankings(project_key),
+        "rankings": rankings,
+        "ai_rankings": ai_rankings,
         "has_phase2_criteria": _has_phase2_criteria(criteria),
+        "price_offers_status": price_status,
+        "price_formula": formula,
+        "price_formula_label": PRICE_FORMULA_LABELS.get(formula, formula),
+        "price_scale_max": auto_price_crit.scale_max if auto_price_crit else 10,
+        "cheapest_tco": price_status.get("cheapest"),
+        "priciest_tco": price_status.get("priciest"),
+        "phase1_coverage_label": coverage,
+        "phase1_interim_subtitle": "aktuell nur Preis" if only_price else "alle bewerteten ZK-Kriterien",
+        "ai_coverage_label": _ai_coverage_label(ai_rankings, criteria),
+        "price_rankings": _price_ranking_rows(rankings),
     }
 
 

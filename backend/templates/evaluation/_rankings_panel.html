@@ -1,8 +1,94 @@
-{% if has_phase2_criteria %}
-<p class="text-muted" style="font-size:.75rem;margin:0 0 .75rem">
-Zweistufige Bewertung: Zuerst ZK-Kriterien (Phase 1) für die Einladungsentscheid — danach Präsentation (Phase 2, z. B. A-01).
+{% if price_offers_status.ready %}
+<h3 style="font-size:.85rem;font-weight:600;margin:.25rem 0 .35rem">Preis-Rangfolge (4-Jahres-TCO → Punkte)</h3>
+<p class="text-muted" style="font-size:.72rem;margin:0 0 .5rem;line-height:1.45">
+  <strong>Formel:</strong> {{ price_formula_label }}.
+  Basis: TCO inkl. MwSt (Einmalig + wiederkehrende Jahre + 8,1&nbsp;% MwSt).
+  {% if cheapest_tco is not none %}
+  Günstigstes Angebot CHF {{ "%.2f"|format(cheapest_tco) }} → {{ price_scale_max }} Punkte.
+  {% endif %}
+  {% if priciest_tco and cheapest_tco and priciest_tco > cheapest_tco %}
+  Teuerstes CHF {{ "%.2f"|format(priciest_tco) }} → weniger Punkte (reziprok: nie unter 0).
+  {% endif %}
 </p>
-<h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Vor Präsentation (Phase 1, ZK)</h3>
+<div class="table-wrap" style="margin-bottom:1rem">
+<table>
+  <thead><tr>
+    <th>Rang</th><th>Bieter</th><th>TCO inkl. MwSt</th><th>Preis-Punkte</th>
+  </tr></thead>
+  <tbody>
+    {% for r in price_rankings %}
+    <tr data-ranking-bidder="{{ r.bidder_id }}">
+      <td>{{ r.price_rank if r.price_rank else '—' }}</td>
+      <td>{{ r.bidder_name }}</td>
+      <td>{% if r.tco_inkl_mwst is not none %}CHF {{ "%.2f"|format(r.tco_inkl_mwst) }}{% else %}—{% endif %}</td>
+      <td>{{ "%.2f"|format(r.price_points) if r.price_points is not none else '—' }} / {{ price_scale_max }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% elif price_offers_status.bidder_count %}
+<p class="text-muted" style="font-size:.72rem;margin:0 0 .75rem">
+  Preis-Rangfolge noch nicht berechenbar — fehlende Preisblätter:
+  {{ price_offers_status.missing_bidders | join(', ') }}.
+  <a href="/evaluation/price?project_key={{ project_key }}">Preisblatt</a>
+</p>
+{% endif %}
+
+<h3 style="font-size:.85rem;font-weight:600;margin:.75rem 0 .35rem">KI-Vorschlag-Rangfolge (Zuschlag W-01…A-01, ohne Eignung)</h3>
+<p class="text-muted" style="font-size:.72rem;margin:0 0 .5rem;line-height:1.45">
+  Hypothetische Rangfolge, wenn alle 🤖-Werte aus der Matrix zählen würden.
+  <strong>Preis (W-01)</strong> bleibt aus TCO/system — nicht der KI-Zeile in der Matrix.
+  {% if ai_coverage_label %}{{ ai_coverage_label }}{% endif %}
+</p>
+{% if has_phase2_criteria %}
+<div class="table-wrap" style="margin-bottom:.75rem">
+<table>
+  <thead><tr>
+    <th>Rang</th><th>Bieter</th><th>KI ZK %</th><th>KI Gesamt %</th>
+  </tr></thead>
+  <tbody>
+    {% for r in ai_rankings %}
+    <tr data-ranking-bidder="{{ r.bidder_id }}">
+      <td>{{ r.interim_rank if r.interim_rank else '—' }}</td>
+      <td>{{ r.bidder_name }}</td>
+      <td>{{ r.interim_score if r.interim_score is not none else '—' }}</td>
+      <td>{{ r.total_score if r.total_score is not none else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="table-wrap" style="margin-bottom:.75rem">
+<table>
+  <thead><tr><th>Rang</th><th>Bieter</th><th>KI Gesamt %</th></tr></thead>
+  <tbody>
+    {% for r in ai_rankings %}
+    <tr data-ranking-bidder="{{ r.bidder_id }}">
+      <td>{{ r.rank if r.rank else '—' }}</td>
+      <td>{{ r.bidder_name }}</td>
+      <td>{{ r.total_score if r.total_score is not none else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if has_phase2_criteria %}
+<p class="text-muted" style="font-size:.75rem;margin:0 0 .5rem">
+  Zweistufig: Phase&nbsp;1 (ZK, ohne A-01) für die Einladung — Phase&nbsp;2 (A-01 Präsentation) danach.
+</p>
+{% if phase1_coverage_label %}
+<p class="text-muted" style="font-size:.72rem;margin:0 0 .75rem;padding:.45rem .6rem;border-radius:6px;background:var(--color-surface-2, rgba(255,255,255,.04))">
+  {{ phase1_coverage_label }}
+</p>
+{% endif %}
+<h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Phase 1 ZK-Rangfolge (Bewerter{% if phase1_interim_subtitle == 'aktuell nur Preis' %} — {{ phase1_interim_subtitle }}{% endif %})</h3>
+<p class="text-muted" style="font-size:.72rem;margin:0 0 .5rem">
+  ZK&nbsp;% = gewichteter Mittelwert der <strong>offiziellen</strong> Bewerter-Werte (Nenner: Summe Phase-1-Gewichte, fehlende Kriterien = 0).
+</p>
 <div class="table-wrap" style="margin-bottom:1rem">
 <table>
   <thead><tr>
@@ -14,7 +100,7 @@ Zweistufige Bewertung: Zuerst ZK-Kriterien (Phase 1) für die Einladungsentschei
       <td>{{ r.interim_rank if r.interim_rank else 'K.O./offen' }}</td>
       <td>{{ r.bidder_name }}</td>
       <td>{{ r.interim_score if r.interim_score is not none else '—' }}</td>
-      <td>{{ r.max_score if r.max_score is not none else '—' }}</td>
+      <td title="Phase 1 ist + volle Punktzahl A-01 (hypothetisch)">{{ r.max_score if r.max_score is not none else '—' }}</td>
       <td>
         {% if r.ko %}K.O.
         {% elif r.can_still_win == false %}<span title="Selbst mit voller Punktzahl in Phase 2 nicht mehr erreichbar">nein</span>
@@ -27,7 +113,14 @@ Zweistufige Bewertung: Zuerst ZK-Kriterien (Phase 1) für die Einladungsentschei
   </tbody>
 </table>
 </div>
-<h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Gesamt (alle Phasen bewertet)</h3>
+<h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Gesamt-Rangfolge (Phase 1 + Phase 2)</h3>
+<p class="text-muted" style="font-size:.72rem;margin:0 0 .5rem">
+  A-01 Präsentation noch nicht bewertet → zählt als 0&nbsp;%% — Gesamt&nbsp;% liegt unter ZK&nbsp;%% bis nach der Präsentation.
+</p>
+{% elif phase1_coverage_label %}
+<p class="text-muted" style="font-size:.72rem;margin:0 0 .75rem;padding:.45rem .6rem;border-radius:6px;background:var(--color-surface-2, rgba(255,255,255,.04))">
+  {{ phase1_coverage_label }}
+</p>
 {% endif %}
 <div class="table-wrap">
 <table>

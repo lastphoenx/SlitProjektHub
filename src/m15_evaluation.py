@@ -769,16 +769,22 @@ def official_score(
     bidder_id: int,
     criterion: Criterion,
     scores: Optional[list[Score]] = None,
+    *,
+    source_mode: str = "official",
 ) -> Optional[float]:
     """
-    Offizieller Wert für Rangfolge/Matrix-Hauptzelle:
-    - auto_price-Kriterium: der "system"-Wert (Preisblatt-Berechnung), falls vorhanden.
-    - sonst: Mittelwert aller "user:*"-Zeilen (KI/System zählen nicht mit).
+    Zellwert für Rangfolge/Matrix-Hauptzelle:
+    - auto_price-Kriterium: immer "system" (Preisblatt), auch bei source_mode=ai.
+    - official: Mittelwert aller "user:*"-Zeilen.
+    - ai: KI-Vorschlag (source=ai), falls vorhanden.
     """
     rows = scores if scores is not None else list_scores_for_cell(bidder_id, criterion.id)
     if criterion.auto_price:
         sys_row = next((s for s in rows if s.source_key == "system"), None)
         return sys_row.value if sys_row else None
+    if source_mode == "ai":
+        ai_row = next((s for s in rows if s.source_key == "ai"), None)
+        return round(float(ai_row.value), 3) if ai_row is not None else None
     user_values = [s.value for s in rows if s.source_key.startswith("user:")]
     if not user_values:
         return None
@@ -790,6 +796,8 @@ def rolled_up_score(
     criterion: Criterion,
     all_criteria: list[Criterion],
     scores_by_cell: dict[tuple[int, int], list[Score]],
+    *,
+    source_mode: str = "official",
 ) -> tuple[Optional[float], int, int]:
     """
     Offizieller Wert eines TOP-LEVEL-Zuschlagskriteriums, inkl. Unterfragen-Rollup:
@@ -804,10 +812,20 @@ def rolled_up_score(
     """
     children = [c for c in all_criteria if c.parent_id == criterion.id and not c.is_deleted]
     if not children:
-        val = official_score(bidder_id, criterion, scores_by_cell.get((bidder_id, criterion.id), []))
+        val = official_score(
+            bidder_id,
+            criterion,
+            scores_by_cell.get((bidder_id, criterion.id), []),
+            source_mode=source_mode,
+        )
         return val, (1 if val is not None else 0), 1
     child_vals = [
-        official_score(bidder_id, ch, scores_by_cell.get((bidder_id, ch.id), []))
+        official_score(
+            bidder_id,
+            ch,
+            scores_by_cell.get((bidder_id, ch.id), []),
+            source_mode=source_mode,
+        )
         for ch in children
     ]
     answered = [v for v in child_vals if v is not None]
@@ -2464,6 +2482,7 @@ def _zuschlag_weighted_score(
     scores_by_cell: dict[tuple[int, int], list[Score]],
     *,
     fill_missing_phase2_at_max: bool = False,
+    source_mode: str = "official",
 ) -> tuple[Optional[float], list[dict[str, Any]]]:
     """
     Gewichteter Zuschlags-Score über die übergebene Kriterienliste (renormalisiert).
@@ -2478,7 +2497,9 @@ def _zuschlag_weighted_score(
     details: list[dict[str, Any]] = []
     any_scored = False
     for crit in active:
-        val, _answered, _total = rolled_up_score(bidder_id, crit, all_criteria, scores_by_cell)
+        val, _answered, _total = rolled_up_score(
+            bidder_id, crit, all_criteria, scores_by_cell, source_mode=source_mode
+        )
         assumed = False
         if val is None:
             if fill_missing_phase2_at_max and int(crit.ranking_phase or 1) >= 2:
@@ -2507,9 +2528,11 @@ def _zuschlag_weighted_score(
     return round((weighted_sum / total_weight) * 100.0, 2), details
 
 
-def compute_rankings(project_key: str) -> list[dict[str, Any]]:
+def compute_rankings(project_key: str, *, source_mode: str = "official") -> list[dict[str, Any]]:
     """
     Rangfolge: erst Eignung (K.O.), dann gewichtete Zuschlagskriterien.
+    source_mode=ai: Zuschlag aus KI-Vorschlägen (🤖), Preis weiter aus system/TCO;
+    Eignung wird ignoriert (kein K.O.) — Vorschau «Was wäre, wenn KI-Werte zählen?».
     Nur TOP-LEVEL-Kriterien (parent_id is None) fliessen in die Gewichtung ein.
     Bei Phase-2-Kriterien (z. B. A-01 Präsentation) zusätzlich:
     - interim_score / interim_rank: nur Phase 1, renormalisiert (Einladungsentscheid)
@@ -2535,31 +2558,39 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
     has_phase2 = bool(phase2_zuschlag)
     total_weight = sum(c.weight_pct for c in zuschlag_top if c.weight_pct > 0)
 
-    def _official(bidder_id: int, crit) -> Optional[float]:
-        return official_score(bidder_id, crit, scores_by_cell.get((bidder_id, crit.id), []))
+    use_ai = source_mode == "ai"
+
+    def _cell_score(bidder_id: int, crit) -> Optional[float]:
+        return official_score(
+            bidder_id,
+            crit,
+            scores_by_cell.get((bidder_id, crit.id), []),
+            source_mode="ai" if use_ai else "official",
+        )
 
     rows: list[dict[str, Any]] = []
     for bidder in bidders:
         ko = False
         eignung_details: list[dict[str, Any]] = []
-        for crit in eignung_top:
-            children = eignung_children.get(crit.id, [])
-            if children:
-                child_vals = [(_official(bidder.id, ch), ch) for ch in children]
-                answered = [(v, ch) for v, ch in child_vals if v is not None]
-                failed = [ch.name for v, ch in answered if not _eignung_pass(v, ch.scale_max)]
-                passed = bool(answered) and not failed
-                if failed:
-                    ko = True
-                val = None if not answered else (0.0 if failed else 1.0)
-            else:
-                val = _official(bidder.id, crit)
-                passed = _eignung_pass(val, crit.scale_max) if val is not None else False
-                if val is not None and not passed:
-                    ko = True
-            eignung_details.append(
-                {"criterion_id": crit.id, "name": crit.name, "value": val, "passed": passed}
-            )
+        if not use_ai:
+            for crit in eignung_top:
+                children = eignung_children.get(crit.id, [])
+                if children:
+                    child_vals = [(_cell_score(bidder.id, ch), ch) for ch in children]
+                    answered = [(v, ch) for v, ch in child_vals if v is not None]
+                    failed = [ch.name for v, ch in answered if not _eignung_pass(v, ch.scale_max)]
+                    passed = bool(answered) and not failed
+                    if failed:
+                        ko = True
+                    val = None if not answered else (0.0 if failed else 1.0)
+                else:
+                    val = _cell_score(bidder.id, crit)
+                    passed = _eignung_pass(val, crit.scale_max) if val is not None else False
+                    if val is not None and not passed:
+                        ko = True
+                eignung_details.append(
+                    {"criterion_id": crit.id, "name": crit.name, "value": val, "passed": passed}
+                )
 
         total_score: Optional[float] = None
         interim_score: Optional[float] = None
@@ -2568,12 +2599,13 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
         interim_details: list[dict[str, Any]] = []
 
         if not ko and total_weight > 0:
+            sm = "ai" if use_ai else "official"
             total_score, zuschlag_details = _zuschlag_weighted_score(
-                bidder.id, zuschlag_top, criteria, scores_by_cell
+                bidder.id, zuschlag_top, criteria, scores_by_cell, source_mode=sm
             )
             if has_phase2:
                 interim_score, interim_details = _zuschlag_weighted_score(
-                    bidder.id, phase1_zuschlag, criteria, scores_by_cell
+                    bidder.id, phase1_zuschlag, criteria, scores_by_cell, source_mode=sm
                 )
                 max_score, _ = _zuschlag_weighted_score(
                     bidder.id,
@@ -2581,6 +2613,7 @@ def compute_rankings(project_key: str) -> list[dict[str, Any]]:
                     criteria,
                     scores_by_cell,
                     fill_missing_phase2_at_max=True,
+                    source_mode=sm,
                 )
             else:
                 interim_score = total_score
