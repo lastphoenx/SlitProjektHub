@@ -5,35 +5,153 @@
   <title>Offertbeurteilung — {{ ctx.bidder_name }}</title>
   <style>
     :root { color-scheme: light; }
+    * { box-sizing: border-box; }
     body {
       font-family: "Segoe UI", system-ui, sans-serif;
       line-height: 1.45;
       color: #1a1a1a;
-      max-width: 960px;
-      margin: 2rem auto;
-      padding: 0 1.5rem;
+      margin: 0;
+      padding: 1.5rem clamp(1rem, 3vw, 2.5rem) 2.5rem;
+    }
+    body.export-url {
+      max-width: min(1480px, 98vw);
+      margin: 0 auto;
+    }
+    body.export-file {
+      padding: 0;
     }
     h1 { font-size: 1.5rem; margin-bottom: .25rem; }
     .meta { color: #555; font-size: .9rem; margin-bottom: 1.5rem; }
     .meta p { margin: .2rem 0; }
-    h2 { font-size: 1.1rem; margin: 1.75rem 0 .75rem; border-bottom: 1px solid #ccc; padding-bottom: .35rem; }
-    table { width: 100%; border-collapse: collapse; font-size: .88rem; margin-bottom: 1rem; }
-    th, td { border: 1px solid #ccc; padding: .45rem .55rem; vertical-align: top; text-align: left; }
-    th { background: #f3f3f3; font-weight: 600; }
+    h2 {
+      font-size: 1.1rem;
+      margin: 1.75rem 0 .75rem;
+      border-bottom: 1px solid #ccc;
+      padding-bottom: .35rem;
+    }
     .justification { white-space: pre-wrap; }
     .chunk-ref { font-size: .8rem; color: #444; margin-top: .35rem; font-style: italic; }
-    .rag { font-size: .78rem; color: #555; margin-top: .5rem; padding: .5rem; background: #f8f8f8; border-left: 3px solid #bbb; }
-    .rag-item { margin-bottom: .65rem; }
-    .rag-thumb { display: block; max-width: 220px; margin-top: .35rem; border: 1px solid #ccc; border-radius: 2px; }
+    .rag {
+      font-size: .82rem;
+      color: #444;
+      margin-top: .5rem;
+      padding: .65rem .75rem;
+      background: #f8f8f8;
+      border-left: 3px solid #bbb;
+    }
+    .rag-item { margin-bottom: .85rem; }
+    .rag-item:last-child { margin-bottom: 0; }
+    .rag-thumb-link {
+      display: inline-block;
+      margin-top: .45rem;
+      text-decoration: none;
+      color: inherit;
+      max-width: 100%;
+    }
+    .rag-thumb-link:hover .rag-thumb { box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+    .rag-thumb-hint {
+      display: block;
+      font-size: .72rem;
+      color: #666;
+      margin-top: .2rem;
+    }
+    .rag-thumb {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+    }
+    body.export-url .rag-thumb { max-width: min(480px, 100%); cursor: zoom-in; }
+    body.export-file .rag-thumb { max-width: 280px; }
     .footer { margin-top: 2rem; font-size: .75rem; color: #777; }
+
+    /* HTML: breite Tabelle */
+    .export-table-wrap { overflow-x: auto; margin-bottom: 1rem; }
+    table.export-table {
+      width: 100%;
+      min-width: 920px;
+      border-collapse: collapse;
+      font-size: .88rem;
+    }
+    table.export-table th,
+    table.export-table td {
+      border: 1px solid #ccc;
+      padding: .5rem .6rem;
+      vertical-align: top;
+      text-align: left;
+    }
+    table.export-table th { background: #f3f3f3; font-weight: 600; }
+    table.export-table .col-evidence { min-width: 420px; width: 46%; }
+
+    /* PDF: Karten statt Tabelle (WeasyPrint) */
+    .criterion-block {
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: .75rem .9rem;
+      margin-bottom: .85rem;
+      page-break-inside: avoid;
+    }
+    .criterion-block h3 {
+      margin: 0 0 .45rem;
+      font-size: .95rem;
+      line-height: 1.3;
+    }
+    .criterion-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .35rem .85rem;
+      font-size: .78rem;
+      color: #555;
+      margin-bottom: .55rem;
+    }
+    .criterion-meta span { white-space: nowrap; }
+    .criterion-evidence { font-size: .84rem; }
+
+    @page {
+      size: A4 landscape;
+      margin: 12mm 14mm;
+    }
     @media print {
-      body { margin: 0; max-width: none; }
+      body.export-file { padding: 0; }
       h2 { page-break-after: avoid; }
-      tr { page-break-inside: avoid; }
+      .criterion-block { page-break-inside: avoid; }
+    }
+
+    /* HTML Lightbox */
+    .export-lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0,0,0,.82);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .export-lightbox[hidden] { display: none !important; }
+    .export-lightbox img {
+      max-width: min(96vw, 1400px);
+      max-height: 92vh;
+      object-fit: contain;
+      background: #fff;
+      border-radius: 4px;
+    }
+    .export-lightbox-close {
+      position: absolute;
+      top: 1rem;
+      right: 1.25rem;
+      border: none;
+      background: rgba(255,255,255,.9);
+      font-size: 1.75rem;
+      line-height: 1;
+      padding: .2rem .55rem;
+      border-radius: 4px;
+      cursor: pointer;
     }
   </style>
 </head>
-<body>
+<body class="export-{{ export_image_mode|default('file') }}">
   <h1>Offertbeurteilung — {{ ctx.bidder_name }}</h1>
   <div class="meta">
     <p><strong>Projekt:</strong> {{ ctx.project_title }}</p>
@@ -56,7 +174,8 @@
 
   {% macro criteria_table(rows, show_weight=false) %}
   {% if rows %}
-  <table>
+  <div class="export-table-wrap">
+  <table class="export-table">
     <thead>
       <tr>
         <th>Kriterium</th>
@@ -64,7 +183,7 @@
         {% if show_weight %}<th>Gewicht %</th>{% endif %}
         <th>Skala</th>
         <th>Wert</th>
-        <th>Begründung &amp; Nachweise</th>
+        <th class="col-evidence">Begründung &amp; Nachweise</th>
       </tr>
     </thead>
     <tbody>
@@ -75,23 +194,53 @@
         {% if show_weight %}<td>{{ row.weight_pct if row.weight_pct is not none else '—' }}</td>{% endif %}
         <td>0–{{ row.scale_max }}</td>
         <td>{{ row.value_display or '—' }}</td>
-        <td>{{ justification_cell(row) }}</td>
+        <td class="col-evidence">{{ justification_cell(row) }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% endif %}
   {% endmacro %}
 
+  {% macro criteria_blocks(rows, show_weight=false, child=false) %}
+  {% for row in rows %}
+  <article class="criterion-block">
+    <h3>{% if child %}{{ row.parent_name }} → {% endif %}{{ row.criterion_name }}</h3>
+    <div class="criterion-meta">
+      <span><strong>Art:</strong> {{ row.criterion_kind }}</span>
+      {% if show_weight and row.weight_pct is not none %}
+      <span><strong>Gewicht:</strong> {{ row.weight_pct }}%</span>
+      {% endif %}
+      <span><strong>Skala:</strong> 0–{{ row.scale_max }}</span>
+      <span><strong>Wert:</strong> {{ row.value_display or '—' }}</span>
+    </div>
+    <div class="criterion-evidence">{{ justification_cell(row) }}</div>
+  </article>
+  {% endfor %}
+  {% endmacro %}
+
   <h2>Eignungskriterien</h2>
-  {{ criteria_table(eignung_rows) }}
+  {% if export_image_mode == 'file' %}
+    {{ criteria_blocks(eignung_rows) }}
+  {% else %}
+    {{ criteria_table(eignung_rows) }}
+  {% endif %}
 
   <h2>Zuschlagskriterien</h2>
-  {{ criteria_table(zuschlag_rows, show_weight=true) }}
+  {% if export_image_mode == 'file' %}
+    {{ criteria_blocks(zuschlag_rows, show_weight=true) }}
+  {% else %}
+    {{ criteria_table(zuschlag_rows, show_weight=true) }}
+  {% endif %}
 
   {% if ctx.child_rows %}
   <h2>Einzelanforderungen</h2>
-  <table>
+  {% if export_image_mode == 'file' %}
+    {{ criteria_blocks(ctx.child_rows, child=true) }}
+  {% else %}
+  <div class="export-table-wrap">
+  <table class="export-table">
     <thead>
       <tr>
         <th>Übergeordnet</th>
@@ -99,7 +248,7 @@
         <th>Art</th>
         <th>Skala</th>
         <th>Wert</th>
-        <th>Begründung &amp; Nachweise</th>
+        <th class="col-evidence">Begründung &amp; Nachweise</th>
       </tr>
     </thead>
     <tbody>
@@ -110,13 +259,53 @@
         <td>{{ row.criterion_kind }}</td>
         <td>0–{{ row.scale_max }}</td>
         <td>{{ row.value_display or '—' }}</td>
-        <td>{{ justification_cell(row) }}</td>
+        <td class="col-evidence">{{ justification_cell(row) }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  {% endif %}
   {% endif %}
 
   <p class="footer">SlitProjektHub — Offertbeurteilung (Export)</p>
+
+  {% if export_image_mode == 'url' %}
+  <div class="export-lightbox" id="export-lightbox" hidden aria-hidden="true">
+    <button type="button" class="export-lightbox-close" aria-label="Schliessen">&times;</button>
+    <img id="export-lightbox-img" alt="" />
+  </div>
+  <script>
+  (function() {
+    const lb = document.getElementById('export-lightbox');
+    const lbImg = document.getElementById('export-lightbox-img');
+    if (!lb || !lbImg) return;
+    function openLb(src, alt) {
+      lbImg.src = src;
+      lbImg.alt = alt || '';
+      lb.hidden = false;
+      lb.setAttribute('aria-hidden', 'false');
+      document.body.style.overflow = 'hidden';
+    }
+    function closeLb() {
+      lb.hidden = true;
+      lb.setAttribute('aria-hidden', 'true');
+      lbImg.src = '';
+      document.body.style.overflow = '';
+    }
+    document.querySelectorAll('.rag-thumb-link').forEach(function(link) {
+      link.addEventListener('click', function(e) {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+        e.preventDefault();
+        const img = link.querySelector('img');
+        openLb(link.href, img ? img.alt : '');
+      });
+    });
+    lb.querySelector('.export-lightbox-close').addEventListener('click', closeLb);
+    lb.addEventListener('click', function(e) { if (e.target === lb) closeLb(); });
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !lb.hidden) closeLb(); });
+  })();
+  </script>
+  {% endif %}
 </body>
 </html>
