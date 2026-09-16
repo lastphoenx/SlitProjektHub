@@ -350,7 +350,8 @@ def _empty_rankings_panel_context() -> dict:
         "phase1_coverage_label": "",
         "phase1_interim_subtitle": "",
         "ai_coverage_label": "",
-        "price_rankings": [],
+        "phase1_max_points": 0,
+        "total_max_points": 0,
     }
 
 
@@ -368,6 +369,17 @@ def _rankings_panel_context(project_key: str) -> dict:
     _enrich_ranking_rows(rankings, criteria, price_status)
     coverage = _phase1_coverage_label(rankings, criteria)
     only_price = "nur der Preis" in coverage or "praktisch nur der Preis" in coverage
+    zuschlag_top = [
+        c
+        for c in criteria
+        if c.kind == "zuschlag" and c.parent_id is None and not c.is_deleted
+    ]
+    phase1_max_points = sum(
+        c.weight_pct
+        for c in zuschlag_top
+        if int(c.ranking_phase or 1) == 1 and c.weight_pct > 0
+    )
+    total_max_points = sum(c.weight_pct for c in zuschlag_top if c.weight_pct > 0)
     return {
         "project_key": project_key,
         "rankings": rankings,
@@ -383,6 +395,8 @@ def _rankings_panel_context(project_key: str) -> dict:
         "phase1_interim_subtitle": "aktuell nur Preis" if only_price else "alle bewerteten ZK-Kriterien",
         "ai_coverage_label": _ai_coverage_label(ai_rankings, criteria),
         "price_rankings": _price_ranking_rows(rankings),
+        "phase1_max_points": phase1_max_points,
+        "total_max_points": total_max_points,
     }
 
 
@@ -1903,7 +1917,7 @@ async def evaluation_export_xlsx(
             ws_detail.append(row)
 
     ws2 = wb.create_sheet("Rangfolge")
-    ws2.append(["Rang", "Bieter", "Gesamt %", "KO"])
+    ws2.append(["Rang", "Bieter", "Gesamt", "KO"])
     rankings = compute_rankings(project_key)
     for r in rankings:
         ws2.append([r.get("rank"), r.get("bidder_name"), r.get("total_score"), r.get("ko")])
@@ -1911,7 +1925,7 @@ async def evaluation_export_xlsx(
     if any(r.get("has_phase2") for r in rankings):
         ws3 = wb.create_sheet("Rangfolge Phase 1")
         ws3.append([
-            "Rang Phase 1", "Bieter", "ZK %", "Max. bei Präsentation voll", "Einladung?", "KO",
+            "Rang Phase 1", "Bieter", "Phase 1", "Max. bei Präsentation voll", "Einladung?", "KO",
         ])
         for r in rankings:
             invite = ""

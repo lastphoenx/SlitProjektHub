@@ -2485,14 +2485,15 @@ def _zuschlag_weighted_score(
     source_mode: str = "official",
 ) -> tuple[Optional[float], list[dict[str, Any]]]:
     """
-    Gewichteter Zuschlags-Score über die übergebene Kriterienliste (renormalisiert).
+    Gewichteter Zuschlags-Score: Summe (Punkte/scale_max × Gewicht %) über die Kriterienliste.
+    Fehlende Kriterien = 0 Beitrag (Gewicht wird nicht künstlich weggerechnet).
+    Maximalwert = Summe der Gewichte der Liste (z. B. 90 für Phase 1, 100 gesamt).
     fill_missing_phase2_at_max: Phase-2-Kriterien ohne Bewertung als volle Punktzahl annehmen
     (für «kann noch aufholen?»-Heuristik).
     """
     active = [c for c in zuschlag_criteria if c.weight_pct > 0]
     if not active:
         return None, []
-    total_weight = sum(c.weight_pct for c in active)
     weighted_sum = 0.0
     details: list[dict[str, Any]] = []
     any_scored = False
@@ -2525,7 +2526,7 @@ def _zuschlag_weighted_score(
         )
     if not any_scored:
         return None, details
-    return round((weighted_sum / total_weight) * 100.0, 2), details
+    return round(weighted_sum, 2), details
 
 
 def compute_rankings(project_key: str, *, source_mode: str = "official") -> list[dict[str, Any]]:
@@ -2535,9 +2536,9 @@ def compute_rankings(project_key: str, *, source_mode: str = "official") -> list
     Eignung wird ignoriert (kein K.O.) — Vorschau «Was wäre, wenn KI-Werte zählen?».
     Nur TOP-LEVEL-Kriterien (parent_id is None) fliessen in die Gewichtung ein.
     Bei Phase-2-Kriterien (z. B. A-01 Präsentation) zusätzlich:
-    - interim_score / interim_rank: nur Phase 1, renormalisiert (Einladungsentscheid)
-    - max_score: Phase 1 bewertet + Phase 2 hypothetisch voll
-    - can_still_win: max_score >= führender interim_score
+    - interim_score / interim_rank: nur Phase 1 (Summe Punkte×Gewicht, max = Summe Phase-1-Gewichte)
+    - max_score: Phase 1 + Phase 2 hypothetisch voll
+    - can_still_win: max_score >= bester erreichbarer max_score
     """
     bidders = list_bidders(project_key)
     criteria = list_criteria(project_key)
@@ -2636,6 +2637,7 @@ def compute_rankings(project_key: str, *, source_mode: str = "official") -> list
         )
 
     leader_interim: Optional[float] = None
+    leader_max: Optional[float] = None
     if has_phase2:
         interim_vals = [
             r["interim_score"]
@@ -2643,11 +2645,18 @@ def compute_rankings(project_key: str, *, source_mode: str = "official") -> list
             if not r["ko"] and r["interim_score"] is not None
         ]
         leader_interim = max(interim_vals) if interim_vals else None
+        max_vals = [
+            r["max_score"]
+            for r in rows
+            if not r["ko"] and r["max_score"] is not None
+        ]
+        leader_max = max(max_vals) if max_vals else None
         for r in rows:
-            if r["ko"] or leader_interim is None or r["max_score"] is None:
+            if r["ko"] or leader_max is None or r["max_score"] is None:
                 r["can_still_win"] = None
             else:
-                r["can_still_win"] = r["max_score"] >= leader_interim - 0.01
+                # Einladung möglich, wenn volle Phase 2 den besten erreichbaren Gesamtstand erreicht
+                r["can_still_win"] = r["max_score"] >= leader_max - 0.01
 
     eligible = [r for r in rows if not r["ko"] and r["total_score"] is not None]
     ineligible = [r for r in rows if r["ko"] or r["total_score"] is None]

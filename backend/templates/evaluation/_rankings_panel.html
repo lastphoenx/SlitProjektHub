@@ -36,24 +36,27 @@
 {% endif %}
 
 <h3 style="font-size:.85rem;font-weight:600;margin:.75rem 0 .35rem">KI-Vorschlag-Rangfolge (Zuschlag W-01…A-01, ohne Eignung)</h3>
-<p class="text-muted" style="font-size:.72rem;margin:0 0 .5rem;line-height:1.45">
-  Hypothetische Rangfolge, wenn alle 🤖-Werte aus der Matrix zählen würden.
-  <strong>Preis (W-01)</strong> bleibt aus TCO/system — nicht der KI-Zeile in der Matrix.
+<p class="text-muted" style="font-size:.72rem;margin:0 0 .35rem">
+  🤖 aus Matrix; Preis (W-01) aus TCO/system. Ohne Eignung (EK).
   {% if ai_coverage_label %}{{ ai_coverage_label }}{% endif %}
+</p>
+<p class="text-muted" style="font-size:.72rem;margin:0 0 .5rem;line-height:1.45">
+  Summe (Punkte÷10 × Gewicht&nbsp;%) pro Kriterium — fehlende Kriterien = 0.
+  {% if has_phase2_criteria %}Phase&nbsp;1 max. {{ phase1_max_points|int }} · Gesamt max. {{ total_max_points|int }}.{% endif %}
 </p>
 {% if has_phase2_criteria %}
 <div class="table-wrap" style="margin-bottom:.75rem">
 <table>
   <thead><tr>
-    <th>Rang</th><th>Bieter</th><th>KI ZK %</th><th>KI Gesamt %</th>
+    <th>Rang</th><th>Bieter</th><th>KI Phase 1</th><th>KI Gesamt</th>
   </tr></thead>
   <tbody>
     {% for r in ai_rankings %}
     <tr data-ranking-bidder="{{ r.bidder_id }}">
       <td>{{ r.interim_rank if r.interim_rank else '—' }}</td>
       <td>{{ r.bidder_name }}</td>
-      <td>{{ r.interim_score if r.interim_score is not none else '—' }}</td>
-      <td>{{ r.total_score if r.total_score is not none else '—' }}</td>
+      <td>{{ r.interim_score if r.interim_score is not none else '—' }}{% if r.interim_score is not none %} / {{ phase1_max_points|int }}{% endif %}</td>
+      <td>{{ r.total_score if r.total_score is not none else '—' }}{% if r.total_score is not none %} / {{ total_max_points|int }}{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -62,13 +65,13 @@
 {% else %}
 <div class="table-wrap" style="margin-bottom:.75rem">
 <table>
-  <thead><tr><th>Rang</th><th>Bieter</th><th>KI Gesamt %</th></tr></thead>
+  <thead><tr><th>Rang</th><th>Bieter</th><th>KI Gesamt</th></tr></thead>
   <tbody>
     {% for r in ai_rankings %}
     <tr data-ranking-bidder="{{ r.bidder_id }}">
       <td>{{ r.rank if r.rank else '—' }}</td>
       <td>{{ r.bidder_name }}</td>
-      <td>{{ r.total_score if r.total_score is not none else '—' }}</td>
+      <td>{{ r.total_score if r.total_score is not none else '—' }}{% if r.total_score is not none %} / {{ total_max_points|int }}{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -87,20 +90,20 @@
 {% endif %}
 <h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Phase 1 ZK-Rangfolge (Bewerter{% if phase1_interim_subtitle == 'aktuell nur Preis' %} — {{ phase1_interim_subtitle }}{% endif %})</h3>
 <p class="text-muted" style="font-size:.72rem;margin:0 0 .5rem">
-  ZK&nbsp;% = gewichteter Mittelwert der <strong>offiziellen</strong> Bewerter-Werte (Nenner: Summe Phase-1-Gewichte, fehlende Kriterien = 0).
+  Summe (Punkte÷10 × Gewicht&nbsp;%) über Phase-1-Kriterien — max. {{ phase1_max_points|int }} Punkte. Fehlende Bewertung = 0.
 </p>
 <div class="table-wrap" style="margin-bottom:1rem">
 <table>
   <thead><tr>
-    <th>Rang</th><th>Bieter</th><th>ZK %</th><th>Max. bei Präsentation voll</th><th>Einladung?</th><th>Eignung</th>
+    <th>Rang</th><th>Bieter</th><th>Phase 1</th><th>Max. bei Präsentation voll</th><th>Einladung?</th><th>Eignung</th>
   </tr></thead>
   <tbody>
     {% for r in rankings %}
     <tr data-ranking-bidder="{{ r.bidder_id }}"{% if r.can_still_win == false %} style="opacity:.75"{% endif %}>
       <td>{{ r.interim_rank if r.interim_rank else 'K.O./offen' }}</td>
       <td>{{ r.bidder_name }}</td>
-      <td>{{ r.interim_score if r.interim_score is not none else '—' }}</td>
-      <td title="Phase 1 ist + volle Punktzahl A-01 (hypothetisch)">{{ r.max_score if r.max_score is not none else '—' }}</td>
+      <td>{{ r.interim_score if r.interim_score is not none else '—' }}{% if r.interim_score is not none %} / {{ phase1_max_points|int }}{% endif %}</td>
+      <td title="Phase 1 + volle Punktzahl A-01 (hypothetisch)">{{ r.max_score if r.max_score is not none else '—' }}{% if r.max_score is not none %} / {{ total_max_points|int }}{% endif %}</td>
       <td>
         {% if r.ko %}K.O.
         {% elif r.can_still_win == false %}<span title="Selbst mit voller Punktzahl in Phase 2 nicht mehr erreichbar">nein</span>
@@ -115,7 +118,7 @@
 </div>
 <h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Gesamt-Rangfolge (Phase 1 + Phase 2)</h3>
 <p class="text-muted" style="font-size:.72rem;margin:0 0 .5rem">
-  A-01 Präsentation noch nicht bewertet → zählt als 0 Prozent — Gesamt-Prozent liegt unter ZK-Prozent bis nach der Präsentation.
+  Summe aller Zuschlagskriterien — max. {{ total_max_points|int }} Punkte. A-01 noch offen → 0 Beitrag aus 10&nbsp;Gewicht.
 </p>
 {% elif phase1_coverage_label %}
 <p class="text-muted" style="font-size:.72rem;margin:0 0 .75rem;padding:.45rem .6rem;border-radius:6px;background:var(--color-surface-2, rgba(255,255,255,.04))">
@@ -124,13 +127,13 @@
 {% endif %}
 <div class="table-wrap">
 <table>
-  <thead><tr><th>Rang</th><th>Bieter</th><th>Gesamt %</th><th>Eignung OK</th></tr></thead>
+  <thead><tr><th>Rang</th><th>Bieter</th><th>Gesamt</th><th>Eignung OK</th></tr></thead>
   <tbody>
     {% for r in rankings %}
     <tr data-ranking-bidder="{{ r.bidder_id }}">
       <td>{{ r.rank if r.rank else 'K.O./offen' }}</td>
       <td>{{ r.bidder_name }}</td>
-      <td>{{ r.total_score if r.total_score is not none else '—' }}</td>
+      <td>{{ r.total_score if r.total_score is not none else '—' }}{% if r.total_score is not none %} / {{ total_max_points|int }}{% endif %}</td>
       <td>{{ 'ja' if not r.ko else 'K.O.' }}</td>
     </tr>
     {% endfor %}

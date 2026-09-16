@@ -201,7 +201,7 @@ def _print_rankings(project_key: str, *, show_scores: bool) -> int:
     rankings = compute_rankings(project_key)
     print("=== compute_rankings() (wie UI) ===")
     if has_phase2:
-        print(f"{'Rang':>4}  {'Bieter':20}  {'ZK %':>7}  {'Gesamt %':>9}  {'K.O.':>4}")
+        print(f"{'Rang':>4}  {'Bieter':20}  {'Phase1':>8}  {'Gesamt':>9}  {'K.O.':>4}")
         print("-" * 52)
         for r in rankings:
             ir = r.get("interim_rank") if r.get("interim_rank") else "—"

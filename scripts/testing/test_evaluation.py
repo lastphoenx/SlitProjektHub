@@ -204,8 +204,8 @@ def test_compute_rankings_phase2_interim():
 
     rankings = {r["bidder_name"]: r for r in compute_rankings(project_key)}
 
-    assert rankings["Leader"]["interim_score"] == 90.0
-    assert rankings["Chaser"]["interim_score"] == 90.0
+    assert rankings["Leader"]["interim_score"] == 63.0
+    assert rankings["Chaser"]["interim_score"] == 63.0
     assert rankings["Leader"]["interim_rank"] in (1, 2)
     assert rankings["Chaser"]["interim_rank"] in (1, 2)
     assert rankings["Chaser"]["can_still_win"] is True
