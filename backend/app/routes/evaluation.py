@@ -1747,6 +1747,7 @@ async def evaluation_export_html(
         "evaluation/export_report.html",
         {
             "request": request,
+            "export_image_mode": "url",
             **_export_report_template_ctx(ctx),
         },
     )
@@ -1793,7 +1794,7 @@ async def evaluation_export_pdf(
         raise HTTPException(401)
     may_see = can_view_evaluator_details(who)
     ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
-    html = render_evaluation_export_html(ctx)
+    html = render_evaluation_export_html(ctx, image_mode="file")
     try:
         data = build_evaluation_pdf_bytes(html)
     except ImportError as exc:
@@ -1831,7 +1832,11 @@ async def evaluation_export_zip(
             fmt,
             project_title=_project_title(project_key),
             may_see_evaluators=may_see,
-            render_html=render_evaluation_export_html if fmt in ("html", "pdf") else None,
+            render_html=(
+                (lambda ctx, image_mode=("file" if fmt == "pdf" else "url"): render_evaluation_export_html(ctx, image_mode=image_mode))
+                if fmt in ("html", "pdf")
+                else None
+            ),
         )
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from exc

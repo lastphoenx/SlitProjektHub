@@ -796,6 +796,7 @@
     <a class="btn btn-secondary" id="export-filtered-pdf" href="#">PDF</a>
   </div>
   <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Gefilterter Export enthält Werte und Begründungen nur der gewählten Quelle; Excel zusätzlich Blatt «Einzelanforderungen». PDF benötigt WeasyPrint auf dem Server.</p>
+  <p id="export-status" class="text-muted" style="font-size:.8rem;margin-top:.5rem;min-height:1.2em" hidden aria-live="polite"></p>
 
   <hr style="margin:1rem 0;border:none;border-top:1px solid var(--color-border)">
   <p class="text-muted" style="font-size:.8rem;margin-bottom:.5rem"><strong>Alle Bieter × Quellen</strong> (ZIP-Archiv):</p>
@@ -1076,41 +1077,150 @@ function startEvalDocUpload(form) {
     return '/evaluation/export.' + format + '?' + params.toString();
   }
 
-  function wireExportLink(id, format) {
+  const exportStatusEl = document.getElementById('export-status');
+  const exportBusyLinks = new Set();
+
+  function setExportStatus(msg, isError) {
+    if (!exportStatusEl) return;
+    if (!msg) {
+      exportStatusEl.hidden = true;
+      exportStatusEl.textContent = '';
+      exportStatusEl.style.color = '';
+      return;
+    }
+    exportStatusEl.hidden = false;
+    exportStatusEl.textContent = msg;
+    exportStatusEl.style.color = isError ? 'var(--color-danger, #c0392b)' : '';
+  }
+
+  function resetExportLink(el, label) {
+    if (!el) return;
+    el.classList.remove('is-busy');
+    el.dataset.exporting = '0';
+    if (label) el.textContent = label;
+    exportBusyLinks.delete(el);
+  }
+
+  async function readExportError(response) {
+    try {
+      const text = await response.text();
+      if (!text) return 'HTTP ' + response.status;
+      try {
+        const data = JSON.parse(text);
+        return data.detail || text.slice(0, 240);
+      } catch (e) {
+        return text.slice(0, 240);
+      }
+    } catch (e) {
+      return 'HTTP ' + response.status;
+    }
+  }
+
+  function filenameFromDisposition(header, fallback) {
+    if (!header) return fallback;
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(header);
+    return m ? decodeURIComponent(m[1].replace(/"/g, '')) : fallback;
+  }
+
+  function triggerDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
+  }
+
+  async function runFilteredExport(el, format, label) {
+    if (!el || el.dataset.exporting === '1') return;
+    if (sourceEl.value === 'user' && evaluatorEl && !evaluatorEl.value) {
+      alert('Bitte einen Bewerter wählen.');
+      return;
+    }
+    const url = buildFilteredExportUrl(format, { download: format !== 'html' });
+    el.dataset.exporting = '1';
+    el.classList.add('is-busy');
+    el.textContent = 'Wird erstellt …';
+    exportBusyLinks.add(el);
+    setExportStatus('Export (' + label + ') läuft — bei vielen Nachweisen kann das dauern …', false);
+    try {
+      const response = await fetch(url, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(await readExportError(response));
+      }
+      if (format === 'html') {
+        const html = await response.text();
+        const tab = window.open('', '_blank');
+        if (tab) {
+          tab.document.open();
+          tab.document.write(html);
+          tab.document.close();
+        } else {
+          throw new Error('Pop-up blockiert — bitte Pop-ups für diese Seite erlauben.');
+        }
+        setExportStatus('HTML-Export geöffnet (neuer Tab).', false);
+      } else {
+        const blob = await response.blob();
+        const fallback = 'bewertung.' + format;
+        const filename = filenameFromDisposition(response.headers.get('Content-Disposition'), fallback);
+        triggerDownload(blob, filename);
+        const mb = (blob.size / (1024 * 1024)).toFixed(1);
+        setExportStatus(label + ' fertig (' + mb + ' MB).', false);
+      }
+    } catch (err) {
+      setExportStatus(label + ' fehlgeschlagen: ' + (err && err.message ? err.message : String(err)), true);
+    } finally {
+      resetExportLink(el, label);
+    }
+  }
+
+  function wireExportLink(id, format, label) {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('click', function(e) {
       e.preventDefault();
-      if (sourceEl.value === 'user' && evaluatorEl && !evaluatorEl.value) {
-        alert('Bitte einen Bewerter wählen.');
-        return;
-      }
-      if (format === 'html') {
-        window.open(buildFilteredExportUrl(format), '_blank');
-        return;
-      }
-      window.location.href = buildFilteredExportUrl(format, { download: true });
+      runFilteredExport(el, format, label);
     });
   }
 
   sourceEl.addEventListener('change', syncEvaluatorVisibility);
   syncEvaluatorVisibility();
-  wireExportLink('export-filtered-csv', 'csv');
-  wireExportLink('export-filtered-xlsx', 'xlsx');
-  wireExportLink('export-filtered-html', 'html');
-  wireExportLink('export-filtered-docx', 'docx');
-  wireExportLink('export-filtered-pdf', 'pdf');
+  wireExportLink('export-filtered-csv', 'csv', 'CSV');
+  wireExportLink('export-filtered-xlsx', 'xlsx', 'Excel');
+  wireExportLink('export-filtered-html', 'html', 'HTML');
+  wireExportLink('export-filtered-docx', 'docx', 'Word');
+  wireExportLink('export-filtered-pdf', 'pdf', 'PDF');
 
   const zipBtn = document.getElementById('export-zip-all');
   const zipFmt = document.getElementById('export-zip-format');
   if (zipBtn && zipFmt) {
-    zipBtn.addEventListener('click', function(e) {
+    zipBtn.addEventListener('click', async function(e) {
       e.preventDefault();
+      if (zipBtn.dataset.exporting === '1') return;
       const params = new URLSearchParams({
         project_key: projectKey,
         format: zipFmt.value,
       });
-      window.location.href = '/evaluation/export.zip?' + params.toString();
+      const url = '/evaluation/export.zip?' + params.toString();
+      const label = zipBtn.textContent;
+      zipBtn.dataset.exporting = '1';
+      zipBtn.classList.add('is-busy');
+      zipBtn.textContent = 'ZIP wird erstellt …';
+      setExportStatus('ZIP-Export läuft …', false);
+      try {
+        const response = await fetch(url, { credentials: 'same-origin' });
+        if (!response.ok) throw new Error(await readExportError(response));
+        const blob = await response.blob();
+        const filename = filenameFromDisposition(response.headers.get('Content-Disposition'), 'bewertung.zip');
+        triggerDownload(blob, filename);
+        setExportStatus('ZIP fertig (' + (blob.size / (1024 * 1024)).toFixed(1) + ' MB).', false);
+      } catch (err) {
+        setExportStatus('ZIP fehlgeschlagen: ' + (err && err.message ? err.message : String(err)), true);
+      } finally {
+        resetExportLink(zipBtn, label);
+      }
     });
   }
 })();

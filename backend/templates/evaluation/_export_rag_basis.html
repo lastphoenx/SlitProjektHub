@@ -13,7 +13,11 @@
         {% if item.score <= 1 %} · {{ (item.score * 100)|round(0)|int }}%{% else %} · {{ item.score }}{% endif %}
       {% endif %}
       {% if item.preview %}<div>{{ item.preview }}</div>{% endif %}
-      {% if item.page_image_data_uri %}
+      {% if export_image_mode|default('file') == 'url' and item.page_image_url %}
+      <img class="rag-thumb" src="{{ item.page_image_url }}" alt="S. {{ item.page_number or '?' }}" loading="lazy" />
+      {% elif export_image_mode|default('file') == 'file' and item.page_image_file_uri %}
+      <img class="rag-thumb" src="{{ item.page_image_file_uri }}" alt="S. {{ item.page_number or '?' }}" />
+      {% elif item.page_image_data_uri %}
       <img class="rag-thumb" src="{{ item.page_image_data_uri }}" alt="S. {{ item.page_number or '?' }}" />
       {% endif %}
     </div>

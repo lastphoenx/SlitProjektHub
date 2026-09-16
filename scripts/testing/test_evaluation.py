@@ -716,7 +716,9 @@ def test_prepare_rag_basis_for_export_attaches_page_image(tmp_path, monkeypatch)
     out = prepare_rag_basis_for_export(basis)
     assert out["tender"][0]["page_number"] == 3
     assert out["tender"][0]["page_image_path"]
-    assert out["tender"][0]["page_image_data_uri"].startswith("data:image/webp;base64,")
+    assert out["tender"][0]["page_image_url"] == f"/documents/{doc.id}/pages/3"
+    assert out["tender"][0]["page_image_file_uri"].startswith("file:")
+    assert "page_image_data_uri" not in out["tender"][0]
 
     text = format_rag_basis_export_text(out)
     assert "pflichtenheft.pdf" in text

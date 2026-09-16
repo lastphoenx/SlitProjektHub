@@ -3437,7 +3437,10 @@ def enrich_rag_basis_for_display(
 def _attach_page_images_to_rag_basis(
     basis: dict[str, Any],
     page_image_paths: dict[tuple[int, int], str],
+    *,
+    embed_data_uris: bool = False,
 ) -> dict[str, Any]:
+    """Seitenvorschau-Pfade/URLs an rag_basis; Base64 nur optional (speicherintensiv)."""
     import base64
 
     result = dict(basis)
@@ -3457,11 +3460,17 @@ def _attach_page_images_to_rag_basis(
                 img_path = page_image_paths.get(cache_key) if cache_key else None
                 if img_path:
                     row["page_image_path"] = img_path
+                    row["page_image_url"] = f"/documents/{int(doc_id)}/pages/{int(pn)}"
                     try:
-                        encoded = base64.b64encode(Path(img_path).read_bytes()).decode("ascii")
-                        row["page_image_data_uri"] = f"data:image/webp;base64,{encoded}"
+                        row["page_image_file_uri"] = Path(img_path).resolve().as_uri()
                     except OSError:
                         pass
+                    if embed_data_uris:
+                        try:
+                            encoded = base64.b64encode(Path(img_path).read_bytes()).decode("ascii")
+                            row["page_image_data_uri"] = f"data:image/webp;base64,{encoded}"
+                        except OSError:
+                            pass
             out_items.append(row)
         result[key] = out_items
     return result
@@ -3544,6 +3553,25 @@ def format_rag_basis_export_text(rag_basis: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+def _load_export_embed_image(path: str, *, max_width: int = 130) -> io.BytesIO | None:
+    """WebP/PNG → kleines JPEG für Excel/Word (python-docx unterstützt kein WebP)."""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            width, height = im.size
+            if width > max_width:
+                new_h = max(1, int(height * max_width / width))
+                im = im.resize((max_width, new_h), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=72, optimize=True)
+            buf.seek(0)
+            return buf
+    except Exception:
+        return None
+
+
 def collect_rag_basis_page_image_paths(rag_basis: dict[str, Any] | None) -> list[str]:
     """Eindeutige Seitenvorschau-Dateien in Anzeige-Reihenfolge (Vorgaben, dann Angebot)."""
     if not rag_basis:
@@ -3582,7 +3610,8 @@ def _xlsx_embed_stacked_thumbnails(ws, row_idx: int, col_idx: int, image_paths: 
     y_offset = 6
     for path in image_paths:
         try:
-            img = XLImage(path)
+            thumb_buf = _load_export_embed_image(path, max_width=thumb_width)
+            img = XLImage(thumb_buf if thumb_buf else path)
         except Exception:
             continue
         scale = thumb_width / max(img.width, 1)
@@ -5618,7 +5647,12 @@ def list_export_combinations(
 
 def build_evaluation_pdf_bytes(html: str) -> bytes:
     """HTML → PDF via WeasyPrint (System-Libs auf Linux nötig)."""
-    from weasyprint import HTML
+    try:
+        from weasyprint import HTML
+    except ImportError as exc:
+        raise ImportError(
+            "weasyprint nicht installiert — PDF-Export benötigt weasyprint (+ apt libs)."
+        ) from exc
 
     return HTML(string=html).write_pdf()
 
@@ -5719,8 +5753,12 @@ def _docx_append_score_evidence(doc, row: EvaluationExportRow, ctx: EvaluationEx
             if page_key in embedded_pages:
                 continue
             embedded_pages.add(page_key)
+            thumb_buf = _load_export_embed_image(str(img_path), max_width=420)
             try:
-                doc.add_picture(str(img_path), width=Inches(2.2))
+                if thumb_buf:
+                    doc.add_picture(thumb_buf, width=Inches(2.2))
+                else:
+                    doc.add_picture(str(img_path), width=Inches(2.2))
             except Exception:
                 pass
 
