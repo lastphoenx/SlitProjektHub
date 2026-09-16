@@ -1,0 +1,19 @@
+{% if item.document_id and item.page_number %}
+<button type="button" class="eval-page-thumb-btn"
+        data-page-src="/documents/{{ item.document_id }}/pages/{{ item.page_number }}"
+        title="Seite {{ item.page_number }} vergrössern">
+  <img class="eval-page-thumb"
+       src="/documents/{{ item.document_id }}/pages/{{ item.page_number }}"
+       alt="S. {{ item.page_number }}"
+       loading="lazy"
+       onerror="this.closest('.eval-page-thumb-btn').style.display='none'" />
+  <span class="eval-page-thumb-label">S. {{ item.page_number }}</span>
+</button>
+{% elif item.document_preview_url %}
+<a href="{{ item.document_preview_url }}" class="eval-page-thumb-btn eval-doc-link-btn"
+   target="_blank" rel="noopener"
+   title="{% if item.doc_kind == 'docx' %}Word-Dokument{% else %}Dokument{% endif %} öffnen (keine Seitenvorschau)">
+  <span class="eval-doc-link-icon">{% if item.doc_kind == 'docx' %}📝{% else %}📎{% endif %}</span>
+  <span class="eval-page-thumb-label">{% if item.doc_kind == 'docx' %}Word{% else %}Datei{% endif %}</span>
+</a>
+{% endif %}

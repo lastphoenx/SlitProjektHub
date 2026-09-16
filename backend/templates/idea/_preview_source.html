@@ -1,0 +1,34 @@
+<div class="modal-backdrop">
+  <div class="modal" style="max-width:min(96vw,1100px);width:min(96vw,1100px);max-height:92vh;display:flex;flex-direction:column" role="dialog" aria-modal="true">
+    <div class="modal-header" style="flex-shrink:0">
+      <div style="min-width:0">
+        <h2 class="modal-title" style="font-size:.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ att.original_name }}</h2>
+        <p class="text-muted" style="font-size:.72rem">{{ att.kind_label }}{% if att.bytes %} · {{ (att.bytes / 1024) | round(0) | int }} KB{% endif %}</p>
+      </div>
+      <div style="display:flex;gap:.35rem;flex-shrink:0">
+        <a class="btn btn-secondary btn-sm" href="/idea/{{ idea.id }}/source-file/{{ att.path }}?disposition=inline" target="_blank" rel="noopener">Vollansicht</a>
+        <a class="btn btn-secondary btn-sm" href="/idea/{{ idea.id }}/source-file/{{ att.path }}" download>Download</a>
+        <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''" title="Schließen">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+    <div style="flex:1;min-height:0;overflow:auto;padding:.5rem">
+      {% if not att.exists %}
+      <p class="text-muted" style="color:#fca5a5">Datei nicht auf dem Server.</p>
+      {% elif att.preview_kind == 'pdf' %}
+      <iframe src="/idea/{{ idea.id }}/source-file/{{ att.path }}?disposition=inline" title="{{ att.original_name }}"
+              style="width:100%;height:min(70vh,720px);border:1px solid var(--color-border);border-radius:.375rem;background:#fff"></iframe>
+      {% elif att.preview_kind == 'image' %}
+      <div style="text-align:center">
+        <img src="/idea/{{ idea.id }}/source-file/{{ att.path }}?disposition=inline" alt="{{ att.original_name }}"
+             style="max-width:100%;max-height:70vh;border-radius:.375rem;border:1px solid var(--color-border)">
+      </div>
+      {% elif att.preview_kind in ['text', 'docx'] %}
+      <pre style="font-size:.78rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--color-surface-2);padding:.75rem;border-radius:.375rem;border:1px solid var(--color-border);max-height:70vh;overflow:auto">{{ preview_text or 'Kein Text extrahiert.' }}</pre>
+      {% else %}
+      <p class="text-muted">Keine Browser-Vorschau — Datei herunterladen.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>

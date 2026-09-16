@@ -1,0 +1,15 @@
+{% if rag_basis %}
+{% include "evaluation/_rag_basis_summary.html" %}
+{% endif %}
+
+{% if justification %}
+<p class="eval-ki-suggestion-label">Begründung{% if justification_label_suffix %} {{ justification_label_suffix }}{% endif %}</p>
+<p class="eval-ki-suggestion-text">{{ justification|eval_collapse_ws }}</p>
+{% endif %}
+
+{% if source_chunk_ref %}
+<p class="eval-ki-suggestion-label">Angebotszitat (RAG-Quelle)</p>
+{% include "evaluation/_eval_chunk_ref.html" %}
+{% endif %}
+
+{% include "evaluation/_rag_basis.html" %}

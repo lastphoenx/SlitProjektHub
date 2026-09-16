@@ -1,0 +1,16 @@
+{# Checkbox-Liste für KI-/Verarbeitungsaufgaben #}
+{% set task_prefix = prefix or 'tasks' %}
+<div class="ki-tasks-group" style="padding:.45rem .55rem;border:1px dashed var(--color-border);border-radius:.375rem;background:var(--color-surface-2)">
+  <label class="form-label" style="font-size:.72rem;margin-bottom:.35rem">{{ title or 'KI-Aufgaben' }}</label>
+  {% if hint %}
+  <p class="text-muted" style="font-size:.66rem;margin:0 0 .4rem">{{ hint }}</p>
+  {% endif %}
+  <div style="display:grid;gap:.3rem">
+    {% for key, label in tasks.items() %}
+    <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
+      <input type="checkbox" name="{{ task_prefix }}" value="{{ key }}" checked style="margin-top:.15rem" />
+      <span>{{ label }}</span>
+    </label>
+    {% endfor %}
+  </div>
+</div>

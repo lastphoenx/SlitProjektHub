@@ -1,0 +1,152 @@
+﻿{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Dokumente</h1>
+    <p class="page-subtitle">RAG-Wissensbasis – Hochladen, Verwalten und Verknüpfen von Dokumenten</p>
+  </div>
+</div>
+
+<!-- Flash message slot -->
+{% if flash %}
+<div class="alert alert-{{ flash.type }}" style="margin-bottom:1rem">{{ flash.message }}</div>
+{% endif %}
+
+<!-- ══ Upload Card ════════════════════════════════════════════════════════ -->
+<div class="card" style="margin-bottom:1.5rem">
+  <div class="card-header" style="display:flex;align-items:center;gap:.6rem">
+    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+      <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+    <span style="font-weight:600;font-size:.9rem">Neues Dokument hochladen</span>
+  </div>
+  <div class="card-body">
+    <form
+      id="upload-form"
+      hx-post="/documents/upload"
+      hx-target="#doc-table"
+      hx-swap="innerHTML"
+      hx-encoding="multipart/form-data"
+      hx-indicator="#upload-spinner"
+      hx-on::after-request="if(event.detail.successful){ this.reset(); document.getElementById('file-label').textContent='Datei auswählen …'; document.getElementById('csv-options').style.display='none'; }"
+    >
+      <!-- Row 1: File | Classification | Chunk-size -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 140px;gap:1rem;align-items:start">
+
+        <!-- File picker -->
+        <div class="form-group" style="margin:0">
+          <label class="form-label">Datei <span style="color:var(--color-danger)">*</span></label>
+          <div style="position:relative">
+            <input
+              type="file"
+              name="file"
+              id="file-input"
+              accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx"
+              required
+              style="position:absolute;inset:0;opacity:0;cursor:pointer;z-index:2"
+              onchange="document.getElementById('file-label').textContent = this.files[0]?.name || 'Datei auswählen …'"
+            />
+            <div class="form-input" id="file-label"
+                 style="cursor:pointer;display:flex;align-items:center;gap:.5rem;color:var(--color-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              <svg width="14" height="14" flex-shrink="0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+              Datei auswählen …
+            </div>
+          </div>
+          <div style="font-size:.72rem;color:var(--color-text-muted);margin-top:.3rem">
+            PDF, MD, TXT, JSON, YAML, CSV, DOCX
+          </div>
+        </div>
+
+        <!-- Classification -->
+        <div class="form-group" style="margin:0">
+          <label class="form-label" for="classification">Klassifizierung <span style="color:var(--color-danger)">*</span></label>
+          <select name="classification" id="classification" class="form-select" required>
+            {% for cls in classifications %}
+            <option value="{{ cls }}">{{ cls }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Chunk-size -->
+        <div class="form-group" style="margin:0">
+          <label class="form-label" for="chunk_size">Chunk-Grösse</label>
+          <input type="number" name="chunk_size" id="chunk_size" class="form-input"
+                 value="1000" min="200" max="4000" step="100" />
+        </div>
+
+      </div>
+
+      <!-- CSV delimiter (only shown for CSV) -->
+      <div id="csv-options" style="display:none;margin-top:.75rem;padding:.75rem;background:var(--color-surface-2);border-radius:.375rem;border:1px solid var(--color-border)">
+        <label class="form-label" for="csv_delimiter">CSV-Trennzeichen</label>
+        <select name="csv_delimiter" id="csv_delimiter" class="form-select" style="width:140px">
+          <option value=";">Semikolon (;)</option>
+          <option value=",">Komma (,)</option>
+          <option value="&#9;">Tab</option>
+        </select>
+      </div>
+
+      <!-- Row 2: Submit -->
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+        <button type="submit" class="btn btn-primary">
+          <svg id="upload-spinner" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
+               viewBox="0 0 24 24" class="htmx-indicator" style="animation:spin 1s linear infinite;display:none">
+            <path d="M21 12a9 9 0 11-6.219-8.56"/>
+          </svg>
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          Hochladen &amp; Verarbeiten
+        </button>
+      </div>
+
+    </form>
+  </div>
+</div>
+
+<!-- ══ Documents Table ═══════════════════════════════════════════════════ -->
+<div class="toolbar" style="margin-bottom:1rem" x-data="{q:''}" x-init="$watch('q', v => $store.ui.q = v)">
+  <div style="position:relative;flex:1;max-width:360px">
+    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+         style="position:absolute;left:.75rem;top:50%;transform:translateY(-50%);color:var(--color-text-muted)">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input type="search" class="form-input" style="padding-left:2.2rem"
+           placeholder="Dokumente suchen …" x-model="q" />
+  </div>
+</div>
+
+<div id="doc-table">
+  {% include "documents/_table.html" %}
+</div>
+
+<!-- Modal slot for confirm dialogs -->
+<div id="modal-slot"></div>
+
+<script>
+  // Show CSV options when a .csv file is selected
+  document.getElementById('file-input').addEventListener('change', function() {
+    const name = (this.files[0]?.name || '').toLowerCase();
+    document.getElementById('csv-options').style.display = name.endsWith('.csv') ? 'block' : 'none';
+  });
+
+  document.getElementById('modal-slot').addEventListener('click', e => {
+    if (e.target.classList.contains('modal-backdrop')) document.getElementById('modal-slot').innerHTML = '';
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') document.getElementById('modal-slot').innerHTML = '';
+  });
+</script>
+
+<style>
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .htmx-request #upload-spinner { display:inline !important; }
+  .htmx-request [type="submit"] svg:not(#upload-spinner) { display:none; }
+</style>
+{% endblock %}

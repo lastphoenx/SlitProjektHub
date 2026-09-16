@@ -1,0 +1,149 @@
+{% if offer_docs %}
+<div class="table-wrap eval-offer-docs-wrap">
+  <table class="eval-offer-docs-table">
+    <thead>
+      <tr>
+        <th style="width:4.5rem">Vorschau</th>
+        <th>Datei</th>
+        <th>Bieter-Zuordnung</th>
+        <th style="width:4.5rem">Chunks</th>
+        <th style="width:5.5rem"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for doc in offer_docs %}
+      {% set assignments = offer_doc_assignments.get(doc.id, []) %}
+      {% set active_ids = offer_doc_bidder_ids.get(doc.id, []) %}
+      {% set all_ids = assignments | map(attribute='bidder_id') | list %}
+      {% set is_pdf = doc.filename.lower().endswith('.pdf') %}
+      <tr class="eval-offer-doc-row"
+          data-offer-doc
+          data-bidder-links="{{ active_ids | join(',') }}"
+          data-all-bidder-links="{{ all_ids | join(',') }}">
+        <td class="eval-offer-doc-thumb-cell">
+          {% if is_pdf %}
+          <button type="button" class="eval-offer-doc-thumb-btn"
+                  title="Seite 1 vergrössern"
+                  data-page-src="/documents/{{ doc.id }}/pages/1"
+                  onclick="openEvalPageLightbox(this)">
+            <img class="eval-offer-doc-thumb"
+                 src="/documents/{{ doc.id }}/pages/1"
+                 alt=""
+                 loading="lazy"
+                 onerror="this.closest('.eval-offer-doc-thumb-btn').classList.add('eval-offer-doc-thumb-missing')" />
+            <span class="eval-offer-doc-thumb-fallback">PDF</span>
+          </button>
+          {% else %}
+          <span class="eval-offer-doc-thumb-fallback" title="Keine Seitenvorschau">📄</span>
+          {% endif %}
+        </td>
+        <td style="font-size:.8rem;max-width:18rem;word-break:break-word">
+          <strong>{{ doc.filename }}</strong>
+          {% if doc.doc_subtype %}
+          <span class="text-muted" style="font-size:.72rem">({{ doc.doc_subtype }})</span>
+          {% endif %}
+        </td>
+        <td class="eval-offer-doc-bidders-cell">
+          <div class="eval-offer-doc-bidder-badges">
+            {% for a in assignments %}
+            <span class="badge eval-offer-bidder-badge{% if a.is_deleted %} eval-offer-bidder-badge-deleted badge-neutral{% endif %}"
+                  data-bidder-badge="{{ a.bidder_id }}"
+                  title="{% if a.is_deleted %}Bieter entfernt — Wiederherstellen unten{% else %}Aktiver Bieter{% endif %}">
+              {{ a.name }}{% if a.is_deleted %} (entfernt){% endif %}
+            </span>
+            {% endfor %}
+            {% if not assignments %}
+            <span class="text-muted eval-offer-unlinked-label" style="font-size:.72rem">(noch keinem Bieter)</span>
+            {% endif %}
+          </div>
+          <div class="eval-offer-doc-link-grid">
+            {% for b in bidders %}
+            {% set linked = b.id in active_ids %}
+            <form id="doc-link-{{ b.id }}-{{ doc.id }}" method="post" action="/evaluation/bidder-doc" class="bidder-doc-link-form eval-offer-link-form">
+              <input type="hidden" name="project_key" value="{{ project_key }}" />
+              <input type="hidden" name="bidder_id" value="{{ b.id }}" />
+              <input type="hidden" name="document_id" value="{{ doc.id }}" />
+              <input type="hidden" name="linked" class="bidder-doc-linked-val" value="{% if linked %}true{% else %}false{% endif %}" />
+              <label class="eval-offer-link-check" title="{{ b.name }} zuordnen" data-bidder-link="{{ b.id }}">
+                <input type="checkbox" class="bidder-doc-link-cb" {% if linked %}checked{% endif %}
+                  onchange="this.form.querySelector('.bidder-doc-linked-val').value=this.checked?'true':'false'; this.form.requestSubmit();" />
+                <span>{{ b.name }}</span>
+              </label>
+            </form>
+            {% endfor %}
+          </div>
+        </td>
+        <td style="font-size:.75rem;text-align:center">
+          {% if (doc.chunk_count or 0) == 0 %}
+          <span title="Gescannt oder leer — KI findet nichts" style="color:var(--color-warning, #fbbf24);font-weight:600">0</span>
+          {% else %}
+          {{ doc.chunk_count }}
+          {% endif %}
+        </td>
+        <td>
+          <div class="flex items-center gap-1" style="justify-content:flex-end">
+            <button type="button" class="btn btn-ghost btn-sm btn-icon" title="Vorschau"
+                    hx-get="/documents/{{ doc.id }}/preview"
+                    hx-target="#modal-slot" hx-swap="innerHTML">
+              <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+            <a class="btn btn-ghost btn-sm btn-icon" title="Vollansicht"
+               href="/documents/{{ doc.id }}/file?disposition=inline" target="_blank" rel="noopener">
+              <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+            </a>
+          </div>
+        </td>
+      </tr>
+      <tr class="eval-offer-doc-detail"
+          data-offer-doc-detail
+          data-bidder-links="{{ active_ids | join(',') }}"
+          data-all-bidder-links="{{ all_ids | join(',') }}">
+        <td colspan="5">
+          {% for a in assignments %}
+          {% if not a.is_deleted %}
+          {% set b_id = a.bidder_id %}
+          {% set doc_st = bidder_doc_subtypes.get(b_id, {}).get(doc.id, []) %}
+          <div class="eval-offer-doc-subtypes-block" data-bidder-subtypes="{{ b_id }}">
+            <span class="eval-offer-subtypes-label"><strong>{{ a.name }}</strong> — Inhaltsarten</span>
+            <form method="post" action="/evaluation/bidder-doc-subtypes"
+                  class="eval-bidder-doc-subtypes"
+                  hx-post="/evaluation/bidder-doc-subtypes"
+                  hx-trigger="change delay:150ms from:input[type=checkbox]"
+                  hx-swap="none">
+              <input type="hidden" name="project_key" value="{{ project_key }}" />
+              <input type="hidden" name="bidder_id" value="{{ b_id }}" />
+              <input type="hidden" name="document_id" value="{{ doc.id }}" />
+              <div class="tender-role-checkboxes bidder-subtype-checkboxes">
+                {% for st in angebot_subtypes %}
+                <label class="tender-role-check" title="{{ st }}">
+                  <input type="checkbox" name="doc_subtypes" value="{{ st }}"
+                    {% if st in doc_st %}checked{% endif %} />
+                  <span>{{ st }}</span>
+                </label>
+                {% endfor %}
+              </div>
+            </form>
+          </div>
+          {% else %}
+          {% set doc_st = bidder_doc_subtypes.get(a.bidder_id, {}).get(doc.id, []) %}
+          <div class="eval-offer-doc-subtypes-block eval-offer-doc-subtypes-readonly" data-bidder-subtypes="{{ a.bidder_id }}">
+            <span class="eval-offer-subtypes-label">
+              <strong>{{ a.name }}</strong> (entfernt) — Inhaltsarten gespeichert
+              {% if doc_st %}: {{ doc_st | join(', ') }}{% else %}: —{% endif %}
+            </span>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted" style="font-size:.8rem;margin:.5rem 0 0">Noch keine «{{ angebot_class }}»-Dokumente — unten hochladen.</p>
+{% endif %}

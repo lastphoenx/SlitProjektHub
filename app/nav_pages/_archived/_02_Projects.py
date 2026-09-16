@@ -1,0 +1,392 @@
+﻿# app/pages/02_Projects.py
+from __future__ import annotations
+import sys, math, re, time, json
+from pathlib import Path
+import streamlit as st
+
+st.set_page_config(page_title="Projekte", page_icon="📁", layout="wide")
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.m06_ui import md_editor_with_preview
+from src.m03_db import get_session, Project, Task, Context
+from src.m09_docs import search_docs, save_upload, list_docs, delete_doc
+from src.m08_llm import providers_available, generate_summary
+from sqlmodel import select
+import pandas as pd
+
+# ============ CRUD FUNKTIONEN ============
+
+def list_tasks_keys_titles() -> list[tuple[str, str]]:
+    with get_session() as ses:
+        tasks = ses.exec(select(Task)).all()
+    return [(t.key, getattr(t, 'short_title', None) or t.title) for t in tasks]
+
+def list_contexts_keys_titles() -> list[tuple[str, str]]:
+    with get_session() as ses:
+        contexts = ses.exec(select(Context)).all()
+    return [(c.key, c.title) for c in contexts]
+
+def list_projects_df(include_body: bool = False):
+    with get_session() as ses:
+        projects = ses.exec(select(Project)).all()
+    if not projects:
+        return pd.DataFrame()
+    data = []
+    for p in projects:
+        row = {"Key": p.key, "Titel": p.title, "Type": p.type or ""}
+        if include_body:
+            row["Inhalt"] = p.description or ""
+        data.append(row)
+    return pd.DataFrame(data)
+
+def load_project(key: str) -> tuple[Project | None, str]:
+    with get_session() as ses:
+        proj = ses.exec(select(Project).where(Project.key == key)).first()
+    return (proj, proj.description if proj else "")
+
+def upsert_project(title: str, description: str, key: str | None = None, 
+                   type_: str | None = None, task_keys: list[str] | None = None,
+                   context_key: str | None = None) -> tuple[Project, bool]:
+    def _slug(s: str) -> str:
+        s = s.strip().lower()
+        s = re.sub(r"[^a-z0-9_-]+", "-", s)
+        return re.sub(r"-+", "-", s).strip("-") or "project"
+    
+    with get_session() as ses:
+        if key:
+            proj = ses.exec(select(Project).where(Project.key == key)).first()
+            if proj:
+                proj.title = title
+                proj.description = description
+                proj.type = type_
+                proj.task_keys = json.dumps(task_keys or []) if task_keys else None
+                proj.context_key = context_key
+                ses.add(proj)
+                ses.commit()
+                ses.refresh(proj)
+                return (proj, False)
+        new_key = key or _slug(title)
+        proj = Project(key=new_key, title=title, description=description, type=type_,
+                      task_keys=json.dumps(task_keys or []) if task_keys else None,
+                      context_key=context_key)
+        ses.add(proj)
+        ses.commit()
+        ses.refresh(proj)
+        return (proj, True)
+
+def delete_project(key: str) -> bool:
+    with get_session() as ses:
+        proj = ses.exec(select(Project).where(Project.key == key)).first()
+        if proj:
+            ses.delete(proj)
+            ses.commit()
+            return True
+    return False
+
+# ============ UI INIT ============
+st.title("Projekte")
+
+# Session State
+for k, v in [("pj_selected_key", ""), ("pj_edit_key", ""), ("pj_last_loaded", None),
+             ("pj_title", ""), ("pj_title_short", ""), ("pj_short", ""),
+             ("pj_description", ""), ("pj_type", ""),
+             ("pj_deliverables", ""), ("pj_milestones", ""),
+             ("pj_task_keys", []), ("pj_context_key", ""), ("pj_form_clear", False),
+             ("pj_last_click_key", ""), ("pj_last_click_ts", 0.0),
+             ("pj_doc_query", ""), ("pj_docs_selected", [])]:
+    st.session_state.setdefault(k, v)
+if "llm_provider" not in st.session_state:
+    st.session_state["llm_provider"] = "openai"
+
+df = list_projects_df(include_body=True)
+
+# ============ LAYOUT ============
+col_list, col_preview, col_form = st.columns([1, 1, 1.2])
+
+# LEFT: PROJECT LIST
+with col_list:
+    with st.container(border=True, height=1060):
+        st.markdown("### Projekte")
+        if df is not None and not df.empty:
+            for i, row in df.iterrows():
+                key, title = str(row["Key"]), str(row["Titel"])
+                type_disp = str(row.get("Type", "") or "")
+                label = f"{type_disp[:15] if type_disp else '—':15s} | {title}"
+                if st.button(label, key=f"pj_row_{i}_{key}", use_container_width=True):
+                    now = time.time()
+                    if st.session_state.get("pj_last_click_key") == key and (now - st.session_state.get("pj_last_click_ts", 0)) < 0.5:
+                        st.session_state["pj_edit_key"] = key
+                        st.session_state["pj_last_loaded"] = None
+                    else:
+                        st.session_state["pj_selected_key"] = key
+                        st.session_state["pj_last_click_key"] = key
+                        st.session_state["pj_last_click_ts"] = now
+                    st.rerun()
+        else:
+            st.info("Keine Projekte")
+
+# MIDDLE: PREVIEW
+with col_preview:
+    with st.container(border=True, height=1060):
+        st.markdown("### Vorschau")
+        sel_key = st.session_state.get("pj_selected_key", "")
+        edit_mode = bool(st.session_state.get("pj_edit_key"))
+        
+        if edit_mode or (sel_key and not edit_mode):
+            # Live mode (editing) oder Selected mode (viewing)
+            if edit_mode:
+                # Live preview from form
+                type_str = st.session_state.get('pj_type', '') or '—'
+                title_str = st.session_state.get('pj_title', '')
+                st.caption(f"{type_str} | {title_str}")
+                st.markdown(st.session_state.get('pj_description', '') or "_(leer)_")
+                task_keys = st.session_state.get('pj_task_keys', [])
+                context_key = st.session_state.get('pj_context_key', '')
+                if task_keys:
+                    st.markdown(f"**Aufgaben:** {', '.join(task_keys)}")
+                if context_key:
+                    st.markdown(f"**Kontext:** {context_key}")
+            else:
+                # Selected project preview
+                obj, desc = load_project(sel_key)
+                type_str = (obj.type or '—') if obj else '—'
+                title_str = obj.title if obj else ''
+                st.caption(f"{type_str} | {title_str}")
+                st.markdown(desc or "_(leer)_")
+                if obj:
+                    if obj.task_keys:
+                        try:
+                            tasks = json.loads(obj.task_keys)
+                            if tasks:
+                                st.markdown(f"**Aufgaben:** {', '.join(tasks)}")
+                        except Exception:
+                            pass
+                    if obj.context_key:
+                        st.markdown(f"**Kontext:** {obj.context_key}")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    if st.button("Bearbeiten", key="pj_prev_edit", type="primary"):
+                        st.session_state["pj_edit_key"] = sel_key
+                        st.session_state["pj_last_loaded"] = None
+                        st.rerun()
+                with c2:
+                    try:
+                        _, desc_dl = load_project(sel_key)
+                        st.download_button("Markdown", data=desc_dl or "", file_name=f"{sel_key}.md")
+                    except Exception:
+                        st.button("Markdown", disabled=True)
+                with c3:
+                    if st.button("Löschen", key="pj_prev_delete", type="primary"):
+                        if delete_project(sel_key):
+                            st.toast("Gelöscht")
+                            st.session_state["pj_selected_key"] = ""
+                            st.session_state["pj_edit_key"] = ""
+                            st.session_state["pj_form_clear"] = True
+                            st.rerun()
+        else:
+            st.info("Bitte links einen Eintrag anklicken")
+
+# RIGHT: FORM
+with col_form:
+    with st.container(border=True, height=1060):
+        st.markdown("### Neues Projekt / Bearbeiten")
+        
+        ekey = st.session_state.get("pj_edit_key", "")
+        obj_e, desc_e = load_project(ekey) if ekey else (None, "")
+        
+        if st.session_state.get("pj_form_clear"):
+            for k in ["pj_edit_key", "pj_last_loaded", "pj_title", "pj_title_short", "pj_short",
+                     "pj_description", "pj_type", "pj_deliverables", "pj_milestones",
+                     "pj_task_keys", "pj_context_key", "pj_doc_query", "pj_docs_selected"]:
+                st.session_state[k] = [] if k in ("pj_task_keys", "pj_docs_selected") else ("" if k != "pj_last_loaded" else None)
+            st.session_state["pj_form_clear"] = False
+        
+        if ekey and st.session_state.get("pj_last_loaded") != ekey and obj_e:
+            st.session_state["pj_title"] = obj_e.title
+            st.session_state["pj_title_short"] = getattr(obj_e, "short_title", "") or ""
+            st.session_state["pj_short"] = getattr(obj_e, "short_code", "") or ""
+            st.session_state["pj_description"] = desc_e or ""
+            st.session_state["pj_type"] = obj_e.type or ""
+            st.session_state["pj_deliverables"] = getattr(obj_e, "deliverables", "") or ""
+            st.session_state["pj_milestones"] = getattr(obj_e, "milestones", "") or ""
+            try:
+                st.session_state["pj_task_keys"] = json.loads(obj_e.task_keys) if obj_e.task_keys else []
+            except Exception:
+                st.session_state["pj_task_keys"] = []
+            st.session_state["pj_context_key"] = obj_e.context_key or ""
+            st.session_state["pj_last_loaded"] = ekey
+        
+        st.markdown("**Projekttitel**")
+        st.text_input(" ", key="pj_title", label_visibility="collapsed", placeholder="z. B. Datenmigration SAP → Cloud")
+        
+        # Kurz-Titel und Kürzel (kompakt in einer Zeile)
+        cst1, cst2 = st.columns([1.3, 0.7])
+        with cst1:
+            st.text_input("Projektbezeichnung (max 50)", key="pj_title_short", max_chars=50, placeholder="Kurze, prägnante Bezeichnung…")
+        with cst2:
+            st.text_input("Kürzel Projektbezeichnung (max 14)", key="pj_short", max_chars=14, placeholder="z. B. PROJ-123")
+        
+        st.text_input("Projekt-Type (max 15)", key="pj_type", max_chars=15, placeholder="Migration, Analyse, …")
+        
+        try:
+            PROVS = providers_available()
+        except Exception:
+            PROVS = ["openai"]
+        if PROVS and "llm_provider" not in st.session_state:
+            st.session_state["llm_provider"] = PROVS[0]
+        
+        with st.container(border=True):
+            kc1, kc2, kc3 = st.columns([1, 1, 1])
+            with kc1:
+                sel_idx = 0
+                try:
+                    sel_idx = PROVS.index(st.session_state.get("llm_provider", PROVS[0]))
+                except Exception:
+                    pass
+                st.selectbox("KI-Provider", options=PROVS, index=sel_idx, key="llm_provider", label_visibility="collapsed")
+            with kc2:
+                if st.button("KI-Vorschlag", key="pj_ai_suggest", type="primary", use_container_width=True):
+                    st.info("KI-Vorschlag: Funktion wird noch implementiert")
+            with kc3:
+                if st.button("KI-Zusammenfassung", key="pj_ai_summary", type="primary", use_container_width=True):
+                    try:
+                        prov = st.session_state.get("llm_provider", "openai")
+                        title_text = st.session_state.get("pj_title", "")
+                        desc_text = st.session_state.get("pj_description", "")
+                        deliverables_text = st.session_state.get("pj_deliverables", "")
+                        milestones_text = st.session_state.get("pj_milestones", "")
+                        facts_txt = f"{title_text}\n\n{desc_text}\n\n{deliverables_text}\n\n{milestones_text}"
+                        summary = generate_summary(prov, title_text, facts_txt)
+                        st.session_state["pj_title_short"] = summary[:50] if summary else ""
+                        st.toast("Zusammenfassung generiert!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Fehler: {e}")
+        try:
+            md_editor_with_preview("Beschreibung (Markdown)", st.session_state.get("pj_description", ""), key="pj_description", height=160)
+        except TypeError:
+            md_editor_with_preview("Beschreibung (Markdown)", st.session_state.get("pj_description", ""), key="pj_description")
+        
+        st.markdown('<hr style="margin:6px 0 8px;border:0;border-top:1px solid #e5e7eb;" />', unsafe_allow_html=True)
+        
+        st.text_area("Lieferergebnisse (was muss konkret erledigt/erstellt/geliefert werden)", 
+                     key="pj_deliverables", height=100, 
+                     placeholder="z. B.\n- Migrationsskript für Kundendaten\n- Testprotokoll\n- Dokumentation")
+        
+        st.text_area("Projektmeilensteine (die wichtigsten Termine für Lieferergebnisse)", 
+                     key="pj_milestones", height=100,
+                     placeholder="z. B.\n- Q1 2025: Konzept fertig\n- Q2 2025: Pilotphase\n- Q3 2025: Go-Live")
+        
+        st.markdown('<hr style="margin:6px 0 8px;border:0;border-top:1px solid #e5e7eb;" />', unsafe_allow_html=True)
+        
+        with st.container(border=True):
+            st.markdown("#### Zuordnung: Aufgaben & Kontext")
+            tasks_available = list_tasks_keys_titles()
+            if tasks_available:
+                task_labels = [f"{k} | {t}" for k, t in tasks_available]
+                task_keys_map = {f"{k} | {t}": k for k, t in tasks_available}
+                current_task_keys = st.session_state.get("pj_task_keys", [])
+                current_labels = [f"{k} | {dict(tasks_available).get(k, '')}" for k in current_task_keys if k in dict(tasks_available)]
+                selected_task_labels = st.multiselect("Aufgaben (mehrere)", options=task_labels, default=current_labels, key="pj_tasks_multiselect")
+                st.session_state["pj_task_keys"] = [task_keys_map[label] for label in selected_task_labels]
+            else:
+                st.info("Keine Aufgaben vorhanden")
+            
+            st.markdown('<hr style="margin:6px 0 8px;border:0;border-top:1px solid #e5e7eb;" />', unsafe_allow_html=True)
+            
+            contexts_available = list_contexts_keys_titles()
+            if contexts_available:
+                context_labels = ["(kein Kontext)"] + [f"{k} | {t}" for k, t in contexts_available]
+                context_keys_map = {f"{k} | {t}": k for k, t in contexts_available}
+                context_keys_map["(kein Kontext)"] = ""
+                current_context_key = st.session_state.get("pj_context_key", "")
+                if current_context_key and current_context_key in dict(contexts_available):
+                    current_context_label = f"{current_context_key} | {dict(contexts_available)[current_context_key]}"
+                else:
+                    current_context_label = "(kein Kontext)"
+                try:
+                    cur_idx = context_labels.index(current_context_label)
+                except ValueError:
+                    cur_idx = 0
+                selected_context_label = st.selectbox("Kontext", options=context_labels, index=cur_idx, key="pj_context_selectbox")
+                st.session_state["pj_context_key"] = context_keys_map[selected_context_label]
+            else:
+                st.info("Keine Kontexte vorhanden")
+        
+        st.markdown('<hr style="margin:6px 0 8px;border:0;border-top:1px solid #e5e7eb;" />', unsafe_allow_html=True)
+        
+        with st.container(border=True):
+            st.markdown("#### Dokumente suchen")
+            qd = st.text_input("Dateiname oder Inhalt…", key="pj_doc_query", placeholder="z. B. Konzept")
+            docs = search_docs(qd) if qd else list_docs()
+            if docs:
+                selected_docs = st.session_state.get("pj_docs_selected", [])
+                for doc in docs[:20]:
+                    nm = doc.name
+                    sz = doc.size
+                    ts = doc.modified
+                    is_selected = nm in selected_docs
+                    col_cb, col_lbl, col_del = st.columns([0.1, 0.7, 0.2])
+                    with col_cb:
+                        if st.checkbox("Select", value=is_selected, key=f"pj_doc_cb_{nm}", label_visibility="collapsed"):
+                            if nm not in selected_docs:
+                                selected_docs.append(nm)
+                        else:
+                            if nm in selected_docs:
+                                selected_docs.remove(nm)
+                    with col_lbl:
+                        st.caption(f"{nm} ({sz} bytes, {ts})")
+                    with col_del:
+                        if st.button("🗑️", key=f"pj_doc_del_{nm}", help="Löschen"):
+                            if delete_doc(nm):
+                                st.toast(f"Gelöscht: {nm}")
+                                st.rerun()
+                st.session_state["pj_docs_selected"] = selected_docs
+            else:
+                st.info("Keine Dokumente gefunden")
+            
+            st.markdown("**Drag and drop files here**")
+            uploaded_files = st.file_uploader("Limit 200MB per file", accept_multiple_files=True, 
+                                             key="pj_file_uploader", label_visibility="collapsed")
+            if uploaded_files:
+                for f in uploaded_files:
+                    if f.size > 200 * 1024 * 1024:
+                        st.warning(f"Datei {f.name} ist zu groß (max 200MB)")
+                    else:
+                        p = save_upload(f.name, f.getvalue())
+                        st.success(f"Hochgeladen: {f.name}")
+                st.rerun()
+        
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("Speichern", key="pj_save", type="primary", use_container_width=True):
+                title_val = (st.session_state.get("pj_title", "") or "").strip()
+                if not title_val:
+                    st.error("Bitte Titel angeben")
+                    st.stop()
+                desc_val = st.session_state.get("pj_description", "") or ""
+                type_val = st.session_state.get("pj_type", "") or None
+                task_keys_val = st.session_state.get("pj_task_keys", [])
+                context_key_val = st.session_state.get("pj_context_key", "") or None
+                def _slug(s: str) -> str:
+                    s = s.strip().lower()
+                    s = re.sub(r"[^a-z0-9_-]+", "-", s)
+                    return re.sub(r"-+", "-", s).strip("-") or "project"
+                key_to_use = ekey if (ekey and _slug(title_val) == _slug(ekey)) else None
+                r, created = upsert_project(title=title_val, description=desc_val, key=key_to_use,
+                                           type_=type_val, task_keys=task_keys_val, context_key=context_key_val)
+                st.toast(("Angelegt" if created else "Aktualisiert") + f": {r.key}")
+                st.session_state["pj_selected_key"] = r.key
+                st.session_state["pj_form_clear"] = True
+                st.rerun()
+        with b2:
+            if st.button("Löschen", key="pj_form_delete", type="primary", use_container_width=True, disabled=not bool(ekey)):
+                if delete_project(ekey):
+                    st.toast("Gelöscht")
+                    st.session_state["pj_selected_key"] = ""
+                    st.session_state["pj_edit_key"] = ""
+                    st.session_state["pj_form_clear"] = True
+                    st.rerun()

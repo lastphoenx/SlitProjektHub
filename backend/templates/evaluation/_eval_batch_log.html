@@ -1,0 +1,54 @@
+{% if batch_logs %}
+<details class="eval-batch-log" style="margin-top:.75rem">
+  <summary style="font-size:.78rem;cursor:pointer">
+    KI-Stapel-Protokoll ({{ batch_logs|length }} Einträge)
+  </summary>
+  <div class="table-wrap" style="margin-top:.45rem;max-height:10rem;overflow:auto">
+    <table style="font-size:.68rem">
+      <thead>
+        <tr>
+          <th>Zeit</th>
+          <th>Bieter</th>
+          <th>Parent</th>
+          <th>Anforderung</th>
+          <th>#</th>
+          <th>Status</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in batch_logs %}
+        <tr>
+          <td class="text-muted" style="white-space:nowrap">{{ row.created_at.strftime('%d.%m. %H:%M') if row.created_at else '—' }}</td>
+          <td>
+            {{ row.bidder_name }}
+            {% if row.bidder_deleted %}<span class="text-muted">(entfernt)</span>{% endif %}
+          </td>
+          <td>{{ row.parent_referenz or row.parent_name }}</td>
+          <td>{{ row.criterion_referenz or row.criterion_name }}</td>
+          <td>{{ row.step_index or '—' }}</td>
+          <td>
+            {% if row.ok %}
+            <span style="color:var(--color-success)">ok</span>
+            {% else %}
+            <span style="color:#fca5a5">Fehler</span>
+            {% endif %}
+          </td>
+          <td class="text-muted">
+            {% if row.ok %}
+            🤖 {{ row.value }}
+            {% else %}
+            {{ row.error_message or '—' }}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="text-muted" style="font-size:.65rem;margin:.35rem 0 0">
+    Run-ID letzter Eintrag: <code>{{ batch_logs[0].run_id[:8] }}…</code>
+    {% if batch_logs[0].triggered_by %} · {{ batch_logs[0].triggered_by }}{% endif %}
+  </p>
+</details>
+{% endif %}

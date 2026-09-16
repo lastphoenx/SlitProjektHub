@@ -1,0 +1,88 @@
+{% if rag_basis %}
+<details class="eval-rag-basis" style="margin-top:.5rem;font-size:.78rem">
+  <summary style="cursor:pointer;color:var(--color-text-muted);user-select:none">
+    Alle Quellen anzeigen (Details)
+  </summary>
+  <div class="eval-rag-basis-list">
+    {% if rag_basis.tender %}
+    <div>
+      <div class="eval-rag-basis-section-title">Vorgaben</div>
+      {% for item in rag_basis.tender %}
+      <div class="eval-rag-basis-item">
+        <div class="eval-rag-basis-item-head">
+          <span class="badge badge-neutral" style="font-size:.65rem">{{ item.method }}</span>
+          <strong>{{ item.filename }}</strong>
+          {% if item.page_number %} · S. {{ item.page_number }}{% endif %}
+          {% if item.section_path %} · {{ item.section_path }}{% endif %}
+          {% if item.chunk_id %} · chunk:{{ item.chunk_id }}{% endif %}
+          {% if item.score is defined and item.score %} · {{ (item.score * 100)|round|int }}%{% endif %}
+        </div>
+        <div class="eval-rag-basis-item-body">
+          {% include "evaluation/_rag_basis_item_media.html" %}
+          <div class="text-muted eval-rag-basis-preview">{{ item.preview }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if rag_basis.offer %}
+    <div>
+      <div class="eval-rag-basis-section-title">Angebot</div>
+      {% for item in rag_basis.offer %}
+      <div class="eval-rag-basis-item">
+        <div class="eval-rag-basis-item-head">
+          <span class="badge badge-neutral" style="font-size:.65rem">{{ item.method }}</span>
+          <strong>{{ item.filename }}</strong>
+          {% if item.page_number %} · S. {{ item.page_number }}{% endif %}
+          {% if item.section_path %} · {{ item.section_path }}{% endif %}
+          {% if item.chunk_id %} · chunk:{{ item.chunk_id }}{% endif %}
+          {% if item.score is defined and item.score %} · {{ (item.score * 100)|round|int }}%{% endif %}
+        </div>
+        <div class="eval-rag-basis-item-body">
+          {% include "evaluation/_rag_basis_item_media.html" %}
+          <div class="text-muted eval-rag-basis-preview">{{ item.preview }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if rag_basis.parent_ref and rag_basis.line_ref %}
+    <p class="text-muted" style="font-size:.68rem;margin:0">
+      Parent-Ref {{ rag_basis.parent_ref }} nur in Vorgaben (literal_parent). Angebot: nur {{ rag_basis.line_ref }}.
+    </p>
+    {% endif %}
+  </div>
+</details>
+<div class="eval-page-lightbox" id="eval-page-lightbox" hidden aria-hidden="true">
+  <button type="button" class="eval-page-lightbox-close" aria-label="Schliessen">&times;</button>
+  <img class="eval-page-lightbox-img" id="eval-page-lightbox-img" alt="" />
+</div>
+<script>
+(function() {
+  const lb = document.getElementById('eval-page-lightbox');
+  const lbImg = document.getElementById('eval-page-lightbox-img');
+  if (!lb || !lbImg) return;
+  function openLb(src, alt) {
+    lbImg.src = src;
+    lbImg.alt = alt || '';
+    lb.hidden = false;
+    lb.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+  }
+  function closeLb() {
+    lb.hidden = true;
+    lb.setAttribute('aria-hidden', 'true');
+    lbImg.src = '';
+    document.body.style.overflow = '';
+  }
+  document.querySelectorAll('.eval-page-thumb-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      openLb(btn.dataset.pageSrc, btn.querySelector('img')?.alt || '');
+    });
+  });
+  lb.querySelector('.eval-page-lightbox-close')?.addEventListener('click', closeLb);
+  lb.addEventListener('click', function(e) { if (e.target === lb) closeLb(); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !lb.hidden) closeLb(); });
+})();
+</script>
+{% endif %}

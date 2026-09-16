@@ -1,0 +1,77 @@
+﻿{% if tasks %}
+
+<!-- Both views share same columns: Kürzel | Titel | Beschreibung | Quell-Rolle | Aktionen -->
+
+<!-- Flat view -->
+<div x-data x-show="!$store.tasks.grouped">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:100px">Kürzel</th>
+        <th>Titel</th>
+        <th>Beschreibung</th>
+        <th>
+          <span style="display:flex;align-items:center;gap:.35rem">
+            <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+            Quell-Rolle
+          </span>
+        </th>
+        <th style="width:90px">Aktionen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tasks %}
+        {% include "tasks/_row.html" %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Grouped view: same columns, section headers between role groups -->
+<div x-data x-show="$store.tasks.grouped" x-cloak>
+  {% set ns = namespace(current_role="__unset__") %}
+  <table>
+    <thead>
+      <tr>
+        <th style="width:100px">Kürzel</th>
+        <th>Titel</th>
+        <th>Beschreibung</th>
+        <th>Quell-Rolle</th>
+        <th style="width:90px">Aktionen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tasks | sort(attribute='source_role_key') %}
+        {% if t.source_role_key != ns.current_role %}
+          {% set ns.current_role = t.source_role_key %}
+          <tr>
+            <td colspan="5" style="background:var(--color-surface-2);padding:.5rem 1rem;border-bottom:1px solid var(--color-border)">
+              <span style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--color-text-muted)">
+                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:inline;vertical-align:middle;margin-right:.3rem"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+                {% if t.source_role_key %}{{ t.source_role_key }}{% else %}Ohne Rollenzuordnung{% endif %}
+              </span>
+              <button
+                class="btn btn-ghost btn-sm"
+                style="margin-left:.75rem;font-size:.75rem;padding:.15rem .5rem"
+                hx-get="/tasks/new?role_key={{ t.source_role_key }}"
+                hx-target="#modal-slot"
+                hx-swap="innerHTML"
+                title="Neue Aufgabe für diese Rolle"
+              >+ Aufgabe</button>
+            </td>
+          </tr>
+        {% endif %}
+        {% include "tasks/_row.html" %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% else %}
+<div class="empty-state">
+  <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+  <p style="font-size:1rem;font-weight:600;margin-bottom:.25rem">Noch keine Aufgaben</p>
+  <p>Klicke auf „Neue Aufgabe", um loszulegen.</p>
+</div>
+{% endif %}
+

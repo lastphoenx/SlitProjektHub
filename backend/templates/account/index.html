@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Account – SlitProjektHub{% endblock %}
+{% block topbar_title %}Account{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Mein Account</h1>
+    <p class="page-subtitle">Angemeldet als <strong>{{ username }}</strong>
+      {% if totp_enabled %} · 2FA aktiv{% else %} · 2FA nicht aktiv{% endif %}
+    </p>
+  </div>
+</div>
+
+<div style="max-width:480px">
+  {% if success %}
+  <div class="card" style="margin-bottom:1rem;border-color:var(--color-success);background:rgba(72,187,120,.08)">
+    <p style="color:var(--color-success);font-size:.9rem;margin:0">✓ {{ success }}</p>
+  </div>
+  {% endif %}
+
+  {% if error %}
+  <div class="card" style="margin-bottom:1rem;border-color:var(--color-danger);background:rgba(245,101,101,.08)">
+    <p style="color:var(--color-danger);font-size:.9rem;margin:0">{{ error }}</p>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2 style="font-size:.95rem;font-weight:700;margin-bottom:1rem">Passwort ändern</h2>
+    <form method="post" action="/account/password">
+      <div class="form-group">
+        <label class="form-label" for="current_password">Aktuelles Passwort</label>
+        <input class="form-input" type="password" id="current_password" name="current_password"
+               autocomplete="current-password" required />
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="new_password">Neues Passwort</label>
+        <input class="form-input" type="password" id="new_password" name="new_password"
+               autocomplete="new-password" required minlength="10" />
+        <p class="text-muted" style="font-size:.78rem;margin-top:.35rem">Mindestens 10 Zeichen</p>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="new_password2">Neues Passwort bestätigen</label>
+        <input class="form-input" type="password" id="new_password2" name="new_password2"
+               autocomplete="new-password" required minlength="10" />
+      </div>
+      <button type="submit" class="btn btn-primary">Passwort speichern</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

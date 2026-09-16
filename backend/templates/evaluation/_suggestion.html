@@ -1,0 +1,80 @@
+<div class="card eval-ki-suggestion" style="margin-top:.5rem;background:var(--color-surface-2)">
+  {% if gate_error == 'cloud_confirm' %}
+  <strong>Cloud-Bestätigung erforderlich</strong>
+  <p style="font-size:.85rem;margin:.4rem 0 0">
+    Bitte die Checkbox aktivieren, bevor Angebotsauszüge an
+    <strong>{{ cloud_provider }}</strong> gesendet werden.
+    Die Texte werden vor der Übertragung gefiltert (Stufe 1+2).
+  </p>
+  {% else %}
+  <strong>🤖 KI-Vorschlag</strong>
+  {% if suggestion.value is not none %}
+  <p style="margin:.35rem 0 0">Wert: <strong>{{ suggestion.value }}</strong></p>
+
+  {% if suggestion.justification_warning %}
+  <div class="card" style="margin:.5rem 0;padding:.45rem .55rem;border-color:#fbbf24;background:rgba(245,158,11,.08)">
+    <p style="font-size:.78rem;margin:0;color:#fcd34d">⚠ {{ suggestion.justification_warning }}</p>
+  </div>
+  {% endif %}
+
+  {% set justification = suggestion.justification %}
+  {% set source_chunk_ref = suggestion.source_chunk_ref %}
+  {% set justification_label_suffix = '(warum diese Punktzahl)' %}
+  {% include "evaluation/_eval_ki_body.html" %}
+  {% if not suggestion.justification %}
+  <p class="eval-ki-suggestion-label">Begründung (warum diese Punktzahl)</p>
+  <p class="text-muted" style="font-size:.82rem;margin:0">Keine Begründung vom Modell geliefert.</p>
+  {% endif %}
+
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.65rem">
+    <form method="post" action="/evaluation/score/ai" hx-post="/evaluation/score/ai" hx-target="#modal-slot" hx-swap="innerHTML">
+      <input type="hidden" name="project_key" value="{{ project_key }}" />
+      <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+      <input type="hidden" name="criterion_id" value="{{ criterion_id }}" />
+      <input type="hidden" name="value" value="{{ suggestion.value }}" />
+      <input type="hidden" name="justification" value="{{ suggestion.justification or '' }}" />
+      <input type="hidden" name="source_chunk_ref" value="{{ suggestion.source_chunk_ref or '' }}" />
+      {% if suggestion.rag_basis_json %}
+      <input type="hidden" name="rag_basis_json" value="{{ suggestion.rag_basis_json | e }}" />
+      {% endif %}
+      <button type="submit" class="btn btn-secondary btn-sm">Nur als KI-Vorschlag speichern</button>
+    </form>
+  </div>
+
+  <form method="post" action="/evaluation/score" hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML"
+        style="margin-top:.75rem;padding-top:.65rem;border-top:1px solid var(--color-border);display:grid;gap:.45rem">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+    <input type="hidden" name="criterion_id" value="{{ criterion_id }}" />
+    <input type="hidden" name="value" value="{{ suggestion.value }}" />
+    <input type="hidden" name="ai_reference_justification" value="{{ suggestion.justification or '' }}" />
+
+    <p class="eval-ki-suggestion-label" style="margin:0">Als meine Bewertung übernehmen</p>
+    <p class="text-muted" style="font-size:.72rem;margin:0">
+      Begründung lesen und anpassen — wird unter Ihrem Namen gespeichert
+      {% if adopt_requires_justification %}(Pflicht bei Punktabzug){% endif %}.
+    </p>
+    <label class="form-label" for="adopt-justification-{{ criterion_id }}">Ihre Begründung</label>
+    <textarea class="form-input" id="adopt-justification-{{ criterion_id }}" name="justification" rows="5"
+              {% if adopt_requires_justification %}required{% endif %}>{{ suggestion.justification or '' }}</textarea>
+    <label class="form-label" for="adopt-source-{{ criterion_id }}">Zitat/Quelle aus dem Angebot</label>
+    <textarea class="form-input" id="adopt-source-{{ criterion_id }}" name="source_chunk_ref" rows="2"
+              placeholder="Optional — aus KI-Vorschlag übernommen, editierbar">{{ suggestion.source_chunk_ref or '' }}</textarea>
+    <div>
+      <button type="submit" class="btn btn-primary btn-sm">Als meine Bewertung speichern</button>
+    </div>
+  </form>
+
+  <p class="text-muted" style="font-size:.75rem;margin-top:.4rem">«Nur als KI-Vorschlag» bleibt als eigene Spalte sichtbar, ohne dir zugeschrieben zu sein. «Als meine Bewertung» zählt in deinen Ø-Wert.</p>
+  {% else %}
+  <p class="text-muted">Kein Vorschlag — bitte manuell bewerten.</p>
+  {% if suggestion.suggest_error %}
+  <p class="text-muted" style="font-size:.78rem;margin-top:.35rem;color:#fcd34d">{{ suggestion.suggest_error }}</p>
+  {% endif %}
+  <p class="text-muted" style="font-size:.72rem;margin-top:.35rem">
+    Matrix-Vorschlag nutzt <strong>Text-RAG</strong> (eingespielte PDF-Chunks), nicht PDF-Vision —
+    auch bei «qwen3.8:27b · Vision» werden hier keine Seitenbilder geschickt.
+  </p>
+  {% endif %}
+  {% endif %}
+</div>

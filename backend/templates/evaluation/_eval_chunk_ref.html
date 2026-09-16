@@ -1,0 +1,21 @@
+{% if source_chunk_ref %}
+<div class="eval-ki-suggestion-quote eval-ki-suggestion-quote--fluid">
+  {% if source_chunk_ref.startswith('chunk:') %}
+    {% set chunk_parts = source_chunk_ref.split(' | ', 1) %}
+    {% set head_parts = chunk_parts[0].split(' · ', 1) %}
+    <div class="eval-chunk-ref-head">
+      <span class="badge badge-neutral eval-ki-suggestion-chunk-id">{{ head_parts[0] }}</span>
+      {% if head_parts|length > 1 %}
+      <span class="text-muted eval-chunk-ref-meta">📄 {{ head_parts[1] }}</span>
+      {% else %}
+      <span class="text-muted eval-chunk-ref-meta">— Dokument/Seite unbekannt (kein Metadaten-Tag beim Ingest)</span>
+      {% endif %}
+    </div>
+    {% if chunk_parts|length > 1 and chunk_parts[1]|trim %}
+    <div class="eval-chunk-ref-body">{{ chunk_parts[1]|eval_collapse_ws }}</div>
+    {% endif %}
+  {% else %}
+    <div class="eval-chunk-ref-body">{{ source_chunk_ref|eval_collapse_ws }}</div>
+  {% endif %}
+</div>
+{% endif %}

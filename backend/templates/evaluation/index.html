@@ -1,0 +1,1118 @@
+{% extends "base.html" %}
+{% block title %}Offertbeurteilung — SlitProjektHub{% endblock %}
+{% block topbar_title %}Offertbeurteilung{% endblock %}
+
+{% block content %}
+<div style="max-width:1400px">
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Offertbeurteilung (Phase C)</h1>
+    <p class="page-subtitle">Bieter, Kriterien, Matrix, gewichtete Rangfolge</p>
+  </div>
+  <form method="get" action="/evaluation" style="display:flex;gap:.5rem;align-items:flex-end">
+    <div>
+      <label class="form-label">Projekt</label>
+      <select class="form-select" name="project_key" onchange="this.form.submit()" style="min-width:280px">
+        {% for p in projects %}
+        <option value="{{ p.key }}" {% if p.key == project_key %}selected{% endif %}>{{ p.title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+</div>
+
+{% set hint_context = 'evaluation' %}
+{% include 'partials/_ki_model_hint.html' %}
+{% include 'partials/_pii_cloud_hint.html' %}
+{% include 'partials/_eval_ki_busy.html' %}
+
+{% if price_offers_status and not price_offers_status.get('ready') and price_offers_status.get('bidder_count', 0) > 0 %}
+<div class="card eval-price-warn" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.8rem;margin:0">
+    <strong>Preis-Punkte noch nicht berechnet</strong> — erst wenn alle {{ price_offers_status.bidder_count }} Bieter ein vollständiges Preisblatt haben
+    ({{ price_formula_labels.get(eval_config.price_formula, eval_config.price_formula) }}). Fehlend:
+    {{ price_offers_status.missing_bidders | join(', ') }}.
+    <a href="/evaluation/price?project_key={{ project_key }}" class="badge badge-warn">Preisblatt</a>
+  </p>
+</div>
+{% endif %}
+
+{% if evaluator_discrepancies %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.8rem;margin:0 0 .35rem"><strong>Bewerter-Abweichungen ({{ evaluator_discrepancies|length }})</strong></p>
+  <ul style="font-size:.75rem;margin:0;padding-left:1.1rem;max-height:8rem;overflow:auto">
+    {% for d in evaluator_discrepancies[:12] %}
+    <li>
+      {{ d.bidder_name }} — {{ d.criterion_name }}:
+      {{ d.min_value }}–{{ d.max_value }} (Mittel {{ d.official_mean }}, {{ d.evaluator_count }} Bewerter)
+    </li>
+    {% endfor %}
+    {% if evaluator_discrepancies|length > 12 %}<li class="text-muted">… und {{ evaluator_discrepancies|length - 12 }} weitere</li>{% endif %}
+  </ul>
+  <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0">Starke Streuung bei mehreren Bewertern — vor Verlass auf den Mittelwert klären (Vier-Augen).</p>
+</div>
+{% endif %}
+
+{% if missing_justifications %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.8rem;margin:0 0 .35rem"><strong>Offene Begründungspflichten ({{ missing_justifications|length }})</strong></p>
+  <ul style="font-size:.75rem;margin:0;padding-left:1.1rem;max-height:8rem;overflow:auto">
+    {% for m in missing_justifications[:12] %}
+    <li>{{ m.bidder_name }} — {{ m.criterion_name }} ({{ m.value }}/{{ m.scale_max }})</li>
+    {% endfor %}
+    {% if missing_justifications|length > 12 %}<li class="text-muted">… und {{ missing_justifications|length - 12 }} weitere</li>{% endif %}
+  </ul>
+  <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0">Eignung «Nein» und Zuschlags-Abzüge müssen pro Kriterium begründet werden (auch Unterfragen).</p>
+</div>
+{% endif %}
+
+{% if not may_evaluate %}
+<div class="card" style="margin-bottom:1rem">
+  <p class="text-muted">Du siehst Rangfolge und Matrix. Bewertungen erfassen nur Super-User, PL intern und Product Owner.</p>
+</div>
+{% endif %}
+
+<div class="card eval-workflow-hint" style="margin-bottom:1rem;padding:.65rem .85rem">
+  <p style="font-size:.78rem;margin:0;line-height:1.5">
+    <strong>Ablauf:</strong>
+    <span class="eval-phase-tag eval-phase-once">① einmalig</span> Vorgaben &amp; Frameworks verknüpfen →
+    <span class="eval-phase-tag eval-phase-once">② optional</span> Kriterien (manuell oder später aus Vorgaben) →
+    <span class="eval-phase-tag eval-phase-bidder">③ pro Bieter</span> Angebote hochladen →
+    <span class="eval-phase-tag eval-phase-result">④ Auswertung</span> Matrix (KI vergleicht Vorgabe ↔ Angebot).
+  </p>
+</div>
+
+{% if may_evaluate %}
+{% if doc_upload == 'ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Dokument hochgeladen und mit dem Bieter verknüpft.</p>
+</div>
+{% elif doc_upload == 'linked' %}
+<div class="card" style="margin-bottom:1rem">
+  <p style="font-size:.85rem;margin:0">Dokument war bereits vorhanden — mit dem Bieter verknüpft.</p>
+</div>
+{% elif doc_upload == 'error' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">Upload fehlgeschlagen — Datei prüfen und erneut versuchen.</p>
+</div>
+{% elif doc_upload == 'ocr_failed' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">
+    <strong>Gescannt — OCR fehlgeschlagen.</strong> PDF gespeichert, aber 0 Chunks indexiert.
+    Die KI findet in diesem Dokument nichts (z.&nbsp;B. eingescannte Vorbehaltsliste).
+    Extern als durchsuchbares PDF aufbereiten oder erneut hochladen.
+  </p>
+</div>
+{% elif doc_upload == 'ocr_ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Dokument hochgeladen (Texterkennung per OCR) und mit dem Bieter verknüpft.</p>
+</div>
+{% elif doc_upload == 'vision_ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Dokument hochgeladen (Texterkennung per Vision-KI) und mit dem Bieter verknüpft.</p>
+</div>
+{% elif doc_upload == 'no_text' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">Dokument gespeichert, aber kein extrahierbarer Text — 0 Chunks für die KI.</p>
+</div>
+{% endif %}
+{% if request.query_params.get('bidder_restored') == '1' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Bieter wiederhergestellt — Dokument-Zuordnungen sind wieder aktiv.</p>
+</div>
+{% elif request.query_params.get('bidder_removed') == '1' %}
+<div class="card" style="margin-bottom:1rem">
+  <p style="font-size:.85rem;margin:0">
+    Bieter entfernt
+    {% if request.query_params.get('bidder_mode') == 'unlink' %} — Zuordnungen gelöst{% endif %}
+    {% if request.query_params.get('bidder_mode') == 'delete_exclusive_docs' %}
+      {% if request.query_params.get('bidder_docs_deleted') %}
+      — {{ request.query_params.get('bidder_docs_deleted') }} exklusive Dokument(e) gelöscht
+      {% else %}
+      — keine exklusiven Dokumente zum Löschen
+      {% endif %}
+    {% endif %}
+    .
+  </p>
+</div>
+{% endif %}
+{% if zero_chunk_offer_docs %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.8rem;margin:0 0 .35rem"><strong>Angebots-Dokumente ohne Index ({{ zero_chunk_offer_docs|length }})</strong></p>
+  <ul style="font-size:.75rem;margin:0;padding-left:1.1rem">
+    {% for d in zero_chunk_offer_docs[:8] %}
+    <li>{{ d.filename }} — vermutlich gescannt oder leer; KI/RAG nutzt es nicht</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% if request.query_params.get('tender_upload') == 'ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Vorgabe-Dokument hochgeladen und für die Beurteilung markiert.</p>
+</div>
+{% elif request.query_params.get('tender_upload') == 'error' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">Vorgabe-Upload fehlgeschlagen — Rolle und Datei prüfen.</p>
+</div>
+{% elif request.query_params.get('tender_upload') == 'ocr_failed' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">Vorgabe gespeichert — Gescannt: OCR fehlgeschlagen, 0 Chunks. KI nutzt dieses PDF nicht.</p>
+</div>
+{% elif request.query_params.get('tender_upload') in ('ocr_ok', 'vision_ok') %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Vorgabe hochgeladen (Texterkennung {% if request.query_params.get('tender_upload') == 'vision_ok' %}Vision-KI{% else %}OCR{% endif %}) und markiert.</p>
+</div>
+{% elif request.query_params.get('tender_upload') == 'no_text' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-warning, #fbbf24)">
+  <p style="font-size:.85rem;margin:0">Vorgabe gespeichert, aber kein extrahierbarer Text — 0 Chunks für die KI.</p>
+</div>
+{% endif %}
+{% if request.query_params.get('config_saved') %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Projekt-Einstellungen gespeichert.</p>
+</div>
+{% endif %}
+{% if request.query_params.get('rechunk') == 'ok' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-success, #86efac)">
+  <p style="font-size:.85rem;margin:0">Dokument neu indexiert (Chunks aktualisiert).</p>
+</div>
+{% elif request.query_params.get('rechunk') == 'error' %}
+<div class="card" style="margin-bottom:1rem;border-color:var(--color-danger)">
+  <p style="font-size:.85rem;margin:0">Re-Index fehlgeschlagen.</p>
+</div>
+{% endif %}
+
+<!-- Phase 1: Vorgaben & Frameworks (einmalig pro Ausschreibung) -->
+<div class="card eval-phase-card eval-phase-once-card" style="margin-bottom:1rem">
+  <div class="eval-phase-header">
+    <span class="eval-phase-tag eval-phase-once">Einmalig pro Ausschreibung</span>
+    <h2 style="font-size:.95rem;font-weight:700;margin:0">Vorgaben &amp; Frameworks</h2>
+  </div>
+  <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 .75rem">
+    Ausschreibungsunterlagen (Eignungs-/Zuschlagskriterien, Bewertungsvorgaben, Preisblatt-Vorlage) —
+    ohne erneuten Upload, wenn sie bereits unter <strong>Dokumente</strong> am Projekt hängen.
+    Pro Dokument können <strong>mehrere Rollen</strong> gesetzt werden (z.&nbsp;B. Eignung und Zuschlag auf derselben Datei).
+    Die KI nutzt diese Rollen beim Vergleich mit den Bieter-Angeboten.
+  </p>
+
+  <details style="margin-bottom:.75rem;font-size:.75rem">
+    <summary style="cursor:pointer;font-weight:600">Projekt-Einstellungen (Vergabe, Preisjahre, RAG-Tiefe)</summary>
+    <form method="post" action="/evaluation/config" style="display:grid;gap:.5rem;margin-top:.5rem;max-width:720px">
+      <input type="hidden" name="project_key" value="{{ project_key }}" />
+      <div>
+        <label class="form-label" style="font-size:.72rem">Preisblatt-Jahre (kommagetrennt)</label>
+        <input class="form-input" name="price_years" value="{{ eval_config.price_years|join(', ') }}" />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Vergabe-Hinweise (optional, für KI-Prompts)</label>
+        <textarea class="form-input" name="vergabe_notes" rows="2">{{ eval_config.vergabe_notes }}</textarea>
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Preis-Punkte-Formel</label>
+        <select class="form-select" name="price_formula">
+          {% for pf in price_formulas %}
+          <option value="{{ pf }}" {% if eval_config.price_formula == pf %}selected{% endif %}>
+            {{ price_formula_labels[pf] }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">RAG-Chunks pro Rollen-Pass (4–24)</label>
+        <input class="form-input" type="number" name="rag_chunks_per_role" min="4" max="24"
+               value="{{ eval_config.rag_chunks_per_role }}" style="width:6rem" />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">RAG-Chunks Kriterien-Extraktion (16–48)</label>
+        <input class="form-input" type="number" name="rag_chunks_extraction" min="16" max="48"
+               value="{{ eval_config.rag_chunks_extraction }}" style="width:6rem"
+               title="Schritt 1: wie viele Vorgaben-Chunks ans LLM (Standard 36)" />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Referenz-Präfixe (kommagetrennt)</label>
+        <input class="form-input" name="ref_prefixes"
+               value="{{ eval_config.ref_prefixes|join(', ') }}"
+               placeholder="EK, F, R, S, T"
+               title="Für KI-Extraktion und Referenz-Parsing — Default-Präfixe EK/F/R/S/T/W" />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Erfüllungsgrad-Bänder (JSON)</label>
+        <textarea class="form-input" name="scale_bands_json" rows="5"
+                  style="font-family:monospace;font-size:.72rem"
+                  title="Liste {min, max, label} — für KI-Bewertungsvorschläge">{{ eval_config.scale_bands | tojson }}</textarea>
+      </div>
+      {% set form_id = 'vorgaben-config' %}
+      {% set picker_title = 'KI-Default für Kriterien- & Preisblatt-KI (②③)' %}
+      {% set picker_hint = 'Startwert für Kriterien-Extraktion und Preisblatt-KI. Leer = globale KI-Einstellungen. Pro Lauf im Picker änderbar.' %}
+      {% set form_visual_provider = eval_config.vorgaben_ki_provider or '' %}
+      {% set form_visual_model = eval_config.vorgaben_ki_model or '' %}
+      {% include 'partials/_llm_picker.html' %}
+      {% set form_id = 'bewertung-config' %}
+      {% set llm_field_prefix = 'bewertung_ki' %}
+      {% set picker_title = 'KI-Default für Matrix-Bewertung (④)' %}
+      {% set picker_hint = 'Startwert für KI-Vorschlag pro Matrix-Zelle (Dual-RAG Vorgabe + Angebot). Leer = globale KI-Einstellungen. Pro Zelle im Picker änderbar.' %}
+      {% set form_visual_provider = eval_config.bewertung_ki_provider or '' %}
+      {% set form_visual_model = eval_config.bewertung_ki_model or '' %}
+      {% include 'partials/_llm_picker.html' %}
+      <button type="submit" class="btn btn-secondary btn-sm" style="justify-self:start">Speichern</button>
+    </form>
+  </details>
+
+  <form id="tender-doc-upload-form" class="eval-upload-form" method="post" action="/evaluation/tender-doc-upload" enctype="multipart/form-data"
+        style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:end;margin-bottom:.75rem"
+        onsubmit="return startEvalDocUpload(this)">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <div>
+      <label class="form-label" style="font-size:.72rem">Neu hochladen</label>
+      <input class="form-input" type="file" name="file" required id="tender-file-input"
+             accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx,.xls" />
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Rollen <span class="text-muted">(mind. 1)</span></label>
+      <div class="tender-role-checkboxes" id="tender-upload-roles">
+        {% for role in tender_roles %}
+        <label class="tender-role-check">
+          <input type="checkbox" name="tender_roles" value="{{ role }}" />
+          <span>{{ tender_role_labels[role] }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Klassifikation</label>
+      <select class="form-select" name="classification" id="tender-class-select">
+        <option value="Pflichtenheft (Projekt)">Pflichtenheft (Projekt)</option>
+        <option value="Anforderung/Feature">Anforderung/Feature</option>
+        <option value="Standard/Richtlinie">Standard/Richtlinie</option>
+        <option value="FAQ/Fragen-Katalog">FAQ/Fragen-Katalog</option>
+        <option value="Sonstiges" selected>Sonstiges</option>
+      </select>
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Chunk-Grösse</label>
+      <input class="form-input" type="number" name="chunk_size" id="tender-chunk-size"
+             value="1000" min="0" max="4000" step="100" style="width:5.5rem"
+             title="Empfehlung: Pflichtenheft 1800, Anhänge 1200, Preisblatt 500, CSV/XLSX zeilenweise" />
+      <p class="text-muted" style="font-size:.65rem;margin:.15rem 0 0;max-width:9rem">0=zeilenweise (CSV/XLSX)</p>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm" id="tender-doc-upload-btn">
+      <svg class="eval-upload-spinner" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M21 12a9 9 0 11-6.219-8.56"/>
+      </svg>
+      <span class="eval-upload-btn-label">Hochladen</span>
+    </button>
+    <p class="eval-upload-status" aria-live="polite">
+      Upload und Indexierung laufen — bei grossen PDFs kann das 1–3 Minuten dauern. Bitte warten …
+    </p>
+  </form>
+  {% if project_source_docs %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Datei</th><th>Klassifikation</th><th>Chunks</th><th>Chunk-Gr.</th><th>Vorschlag Rolle</th><th>Rollen in Beurteilung</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% for doc in project_source_docs %}
+        <tr>
+          <td style="font-size:.8rem">{{ doc.filename }}</td>
+          <td style="font-size:.75rem">{{ doc.classification }}</td>
+          <td style="font-size:.75rem">
+            {% if (doc.chunk_count or 0) == 0 %}
+            <span title="Kein Text indexiert — gescannt oder leer" style="color:var(--color-warning, #fbbf24);font-weight:600">0 ⚠</span>
+            {% else %}
+            {{ doc.chunk_count }}
+            {% endif %}
+          </td>
+          <td style="font-size:.75rem">
+            {% if doc.chunk_size_used == 0 %}zeilenweise{% else %}{{ doc.chunk_size_used or '—' }}{% endif %}
+            {% if chunk_recommendations.get(doc.id) is not none and (doc.chunk_size_used is none or chunk_recommendations.get(doc.id) != doc.chunk_size_used) %}
+            <span class="text-muted" title="Empfohlen">→ {{ chunk_recommendations.get(doc.id) }}</span>
+            {% endif %}
+          </td>
+          <td style="font-size:.72rem">
+            {% set sug = tender_role_suggestions.get(doc.id) %}
+            {% if sug %}{{ tender_role_labels.get(sug, sug) }}{% else %}—{% endif %}
+          </td>
+          <td>
+            {% set doc_roles = tender_doc_roles.get(doc.id, []) %}
+            <form method="post" action="/evaluation/tender-doc" class="tender-role-form">
+              <input type="hidden" name="project_key" value="{{ project_key }}" />
+              <input type="hidden" name="document_id" value="{{ doc.id }}" />
+              <div class="tender-role-checkboxes">
+                {% for role in tender_roles %}
+                <label class="tender-role-check" title="{{ tender_role_labels[role] }}">
+                  <input type="checkbox" name="tender_roles" value="{{ role }}"
+                    {% if role in doc_roles %}checked{% endif %}
+                    onchange="this.form.submit()" />
+                  <span>{{ tender_role_labels[role] }}</span>
+                </label>
+                {% endfor %}
+              </div>
+            </form>
+          </td>
+          <td>
+            {% if may_evaluate %}
+            <form method="post" action="/evaluation/rechunk-doc" style="display:flex;gap:.25rem;align-items:center">
+              <input type="hidden" name="project_key" value="{{ project_key }}" />
+              <input type="hidden" name="document_id" value="{{ doc.id }}" />
+              <input class="form-input" type="number" name="chunk_size" min="0" max="4000" step="100"
+                     value="{{ chunk_recommendations.get(doc.id) or doc.chunk_size_used or 1000 }}"
+                     style="width:4.5rem;font-size:.72rem" title="Neu indexieren" />
+              <button type="submit" class="btn btn-secondary btn-sm" title="Neu indexieren">↻</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted" style="font-size:.8rem;margin:0">Noch keine Projekt-Dokumente (ausser Bieter-Angebote) — oben hochladen oder unter Dokumente verknüpfen.</p>
+  {% endif %}
+</div>
+
+<!-- Phase 2: Kriterien (optional) -->
+<div class="card eval-phase-card eval-phase-once-card" style="margin-bottom:1rem">
+  <div class="eval-phase-header">
+    <span class="eval-phase-tag eval-phase-once">Einmalig pro Ausschreibung</span>
+    <h2 style="font-size:.95rem;font-weight:700;margin:0">Kriterien <span class="text-muted" style="font-weight:400">(optional)</span></h2>
+  </div>
+  <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 .75rem">
+    Manuell anlegen oder aus verknüpften Vorgaben (Phase ①) per KI extrahieren.
+    <a href="/evaluation/criteria-manage?project_key={{ project_key }}" class="badge badge-warn">Kriterien verwalten</a>
+    — Unterfragen (F01-001 …) nachträglich bearbeiten.
+    Ohne Kriterien keine Matrix — die KI nutzt trotzdem die Vorgaben in Phase ④.
+  </p>
+  {% if evaluation_started %}
+  <div class="card" style="margin-bottom:.75rem;border-color:var(--color-warning, #fbbf24);padding:.5rem .65rem">
+    <p style="font-size:.75rem;margin:0">
+      <strong>Bewertung läuft.</strong> Strukturelle Kriterienänderungen (Gewicht, Löschen, neue Top-Level-Kriterien)
+      sind ein Rekursrisiko (BöB/IVöB) — nur mit Bestätigung in
+      <a href="/evaluation/criteria-manage?project_key={{ project_key }}" class="badge badge-warn">Kriterien verwalten</a>
+      oder unten beim Anlegen.
+    </p>
+  </div>
+  {% endif %}
+  {% if request.query_params.get('criteria_apply') == 'ok' %}
+  <p style="font-size:.78rem;color:var(--color-success, #86efac);margin:0 0 .5rem">
+    {{ request.query_params.get('created', '0') }} Kriterien angelegt,
+    {{ request.query_params.get('skipped', '0') }} übersprungen (existierten bereits).
+  </p>
+  {% if request.query_params.get('warn') %}
+  <p style="font-size:.72rem;color:var(--color-warning, #fbbf24);margin:0 0 .5rem">
+    Hinweise: {{ request.query_params.get('warn') }}
+  </p>
+  {% endif %}
+  {% elif request.query_params.get('criteria_apply') == 'invalid' %}
+  <p style="font-size:.78rem;color:var(--color-danger);margin:0 0 .5rem">Ungültiges JSON — nicht übernommen.</p>
+  {% elif request.query_params.get('criteria_preview') == 'expired' %}
+  <p style="font-size:.78rem;color:var(--color-warning, #fbbf24);margin:0 0 .5rem">Kriterien-Vorschau abgelaufen — bitte erneut extrahieren.</p>
+  {% endif %}
+  {% if has_tender_docs %}
+  <form method="post" action="/evaluation/extract-criteria" data-eval-ki-form="1"
+        style="display:grid;gap:.5rem;margin-bottom:.75rem;padding:.5rem;border:1px dashed var(--color-border);border-radius:6px;max-width:720px">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <div class="eval-ki-busy-banner idea-busy-banner" hidden>
+      <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+      <span class="eval-ki-busy-text">KI-Extraktion läuft …</span>
+    </div>
+    <div>
+      <p style="font-size:.78rem;font-weight:600;margin:0 0 .25rem">Aus Vorgaben extrahieren (KI)</p>
+      <p class="text-muted" style="font-size:.7rem;margin:0">Nutzt Dokumente mit Rolle Eignungs-/Zuschlagskriterien etc.</p>
+    </div>
+    {% set form_id = 'extract-criteria' %}
+    {% set picker_title = 'KI für diese Extraktion' %}
+    {% set picker_hint = 'Leer = Projekt-Default (Vorgaben-Einstellungen oben) oder globale KI-Einstellungen.' %}
+    {% set form_visual_provider = eval_config.vorgaben_ki_provider or '' %}
+    {% set form_visual_model = eval_config.vorgaben_ki_model or '' %}
+    {% include 'partials/_llm_picker.html' %}
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+      <label style="font-size:.72rem;display:flex;gap:.3rem;align-items:center">
+        <input type="checkbox" name="cloud_confirm" value="true" />
+        Cloud-PII bestätigen
+      </label>
+      <button type="submit" class="btn btn-secondary btn-sm eval-ki-submit">
+        <span class="ki-btn-idle">KI-Extraktion starten</span>
+        <span class="ki-btn-busy" hidden>
+          <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+          KI läuft …
+        </span>
+      </button>
+    </div>
+  </form>
+  {% else %}
+  <p class="text-muted" style="font-size:.72rem;margin:0 0 .75rem">KI-Extraktion: zuerst Phase ① Vorgaben verknüpfen.</p>
+  {% endif %}
+  <form method="post" action="/evaluation/criterion" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.5rem;max-width:900px;align-items:end">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <div>
+      <label class="form-label" style="font-size:.72rem">Name</label>
+      <input class="form-input" name="name" placeholder="Name" required />
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Art</label>
+      <select class="form-select" name="kind" id="crit-kind" onchange="toggleCritFields()">
+        {% for k in criterion_kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
+      </select>
+    </div>
+    <div id="crit-weight-field">
+      <label class="form-label" style="font-size:.72rem">Gewicht %</label>
+      <input class="form-input" name="weight_pct" type="number" step="1" value="10" />
+    </div>
+    <div id="crit-scale-field">
+      <label class="form-label" style="font-size:.72rem">Skala max.</label>
+      <input class="form-input" name="scale_max" type="number" value="10" min="1" />
+    </div>
+    <p id="crit-eignung-hint" class="text-muted" style="display:none;font-size:.75rem;grid-column:span 2;align-self:center">
+      Eignung ist immer binär Ja/Nein (BöB/IVöB) — kein Gewicht, keine Teilpunkte.
+    </p>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Übergeordnet (optional)</label>
+      <select class="form-select" name="parent_id">
+        <option value="">— Top-Level —</option>
+        {% for c in top_criteria %}<option value="{{ c.id }}">{{ c.kind }}: {{ c.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div id="crit-phase-field">
+      <label class="form-label" style="font-size:.72rem">Ranking-Phase</label>
+      <select class="form-select" name="ranking_phase">
+        {% for p in ranking_phases %}
+        <option value="{{ p }}">{{ ranking_phase_labels[p] }}</option>
+        {% endfor %}
+      </select>
+      <p class="text-muted" style="font-size:.65rem;margin:.15rem 0 0">Phase 2 = Präsentation (z. B. A-01), erst nach Einladung</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:.35rem">
+      <input type="checkbox" id="auto_price" name="auto_price" value="true" />
+      <label for="auto_price" style="font-size:.78rem;margin:0">Preis-Kriterium (automatisch aus Preisblatt)</label>
+    </div>
+    <textarea class="form-input" name="description" rows="2" placeholder="Voller Anforderungstext (optional, für KI-Vorschlag)" style="grid-column:1/-1"></textarea>
+    {% if evaluation_started %}
+    <label style="grid-column:1/-1;font-size:.75rem;display:flex;gap:.35rem;align-items:flex-start">
+      <input type="checkbox" name="confirm_active_evaluation" value="true" />
+      <span>Strukturelle Änderung trotz laufender Bewertung bestätigen (Rekursrisiko)</span>
+    </label>
+    {% endif %}
+    <button type="submit" class="btn btn-primary">Kriterium anlegen</button>
+  </form>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">
+    Unterfragen (z.&nbsp;B. F01-001 unter F-01) sind Beleg-/KI-Hilfsebene —
+    <a href="/evaluation/criteria-manage?project_key={{ project_key }}" class="badge badge-warn">in «Kriterien verwalten»</a>
+    anlegen und bearbeiten. Nur das übergeordnete Kriterium zählt in der Rangfolge.
+  </p>
+  {% if criteria %}
+  <p style="font-size:.78rem;margin:.5rem 0">
+    <a class="btn btn-secondary btn-sm" href="/evaluation/criteria-manage?project_key={{ project_key }}">Kriterien verwalten ({{ criteria|length }} Zeilen)</a>
+  </p>
+  <ul style="margin-top:.35rem;font-size:.8rem;max-height:12rem;overflow:auto">
+    {% for c in criteria %}
+    {% if not c.parent_id %}
+    <li style="margin:.2rem 0">
+      {{ c.kind }}: <strong>{{ c.name }}</strong>
+      {% if c.kind == 'zuschlag' %}({{ c.weight_pct }}%){% endif %}
+      {% set nchild = criteria|selectattr('parent_id', 'equalto', c.id)|list|length %}
+      {% if nchild %}<span class="text-muted">· {{ nchild }} Unterfrage(n)</span>{% endif %}
+    </li>
+    {% endif %}
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+
+<!-- Phase 3: pro Bieter -->
+<div class="card eval-phase-card eval-phase-bidder-card" style="margin-bottom:1rem" id="eval-bidder-section">
+  <div class="eval-phase-header">
+    <span class="eval-phase-tag eval-phase-bidder">Pro Bieter</span>
+    <h2 style="font-size:.95rem;font-weight:700;margin:0">Bieter &amp; Angebotsdokumente</h2>
+  </div>
+  <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 .75rem">
+    Angebots-Dokumente sind pro Bieter verknüpft — der <strong>Dateiname</strong> muss nicht den Firmennamen enthalten.
+    In der Tabelle siehst du die Zuordnung in der Spalte «Bieter». Pro Dokument können <strong>mehrere Inhaltsarten</strong>
+    gesetzt werden (Merge-PDFs).
+  </p>
+  <form method="post" action="/evaluation/bidder" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input class="form-input" name="name" placeholder="Bietername" required style="max-width:240px" />
+    <button type="submit" class="btn btn-primary">Bieter anlegen</button>
+  </form>
+  {% if bidders or deleted_bidders %}
+  {% if bidders %}
+  <div class="eval-bidder-chips" style="margin-bottom:.75rem">
+    {% for b in bidders %}
+    <span class="eval-bidder-chip" id="bidder-{{ b.id }}">
+      <strong>{{ b.name }}</strong>
+      <a class="btn btn-secondary btn-sm" href="/evaluation/price?project_key={{ project_key }}&bidder_id={{ b.id }}">Preisblatt</a>
+      <button type="button" class="btn btn-danger btn-sm"
+              hx-get="/evaluation/confirm-delete-bidder?project_key={{ project_key }}&bidder_id={{ b.id }}"
+              hx-target="#modal-slot" hx-swap="innerHTML">Entfernen</button>
+    </span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if deleted_bidders %}
+  <div class="eval-bidder-deleted-panel">
+    <p class="text-muted" style="font-size:.72rem;margin:0 0 .4rem">Entfernte Bieter — Zuordnungen bleiben sichtbar, bis du sie löst oder den Bieter wiederherstellst:</p>
+    <div class="eval-bidder-chips">
+      {% for b in deleted_bidders %}
+      <span class="eval-bidder-chip eval-bidder-chip-deleted">
+        <strong>{{ b.name }}</strong>
+        <span class="badge badge-neutral" style="font-size:.65rem">entfernt</span>
+        <form method="post" action="/evaluation/restore-bidder" style="display:inline">
+          <input type="hidden" name="project_key" value="{{ project_key }}" />
+          <input type="hidden" name="bidder_id" value="{{ b.id }}" />
+          <button type="submit" class="btn btn-secondary btn-sm">Wiederherstellen</button>
+        </form>
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if bidders %}
+  <div class="eval-bidder-focus-bar">
+    <label class="form-label" for="eval-bidder-focus" style="margin:0">Bieter-Fokus</label>
+    <select class="form-select" id="eval-bidder-focus" style="min-width:200px">
+      <option value="">Alle Bieter</option>
+      {% for b in bidders %}
+      <option value="{{ b.id }}">{{ b.name }}</option>
+      {% endfor %}
+    </select>
+    <span class="text-muted" style="font-size:.72rem">Filtert Angebotsdokumente, Matrix-Spalten und Rangfolge</span>
+  </div>
+  {% endif %}
+
+  {% include 'evaluation/_offer_docs_table.html' %}
+
+  {% if bidders %}
+  <form method="post" action="/evaluation/bidder-doc-upload" enctype="multipart/form-data"
+        class="bidder-upload-form eval-upload-form eval-offer-upload-form"
+        onsubmit="return startEvalDocUpload(this)" style="margin-top:.85rem">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <div class="bidder-upload-row">
+      <div>
+        <label class="form-label" style="font-size:.72rem">Für Bieter</label>
+        <select class="form-select" name="bidder_id" id="eval-upload-bidder-id" required style="min-width:180px">
+          {% for b in bidders %}
+          <option value="{{ b.id }}">{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Dokument hochladen</label>
+        <input class="form-input" type="file" name="file" required
+               accept=".pdf,.md,.txt,.json,.yaml,.yml,.csv,.docx,.xlsx,.xls" />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Chunk-Grösse</label>
+        <input class="form-input" type="number" name="chunk_size" value="1000" min="0" max="4000" step="100" style="width:6.5rem" />
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">
+        <svg class="eval-upload-spinner" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 12a9 9 0 11-6.219-8.56"/>
+        </svg>
+        <span class="eval-upload-btn-label">Hochladen</span>
+      </button>
+    </div>
+    <p class="eval-upload-status" aria-live="polite">
+      Upload und Indexierung laufen — bei grossen PDFs kann das 1–3 Minuten dauern. Bitte warten …
+    </p>
+    <div class="bidder-subtype-panel">
+      <label class="form-label" style="font-size:.72rem">Inhaltsarten beim Upload (optional, Mehrfach)</label>
+      <div class="tender-role-checkboxes bidder-subtype-checkboxes">
+        {% for st in angebot_subtypes %}
+        <label class="tender-role-check" title="{{ st }}">
+          <input type="checkbox" name="doc_subtypes" value="{{ st }}" />
+          <span>{{ st }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="text-muted" style="font-size:.85rem;margin:0">Noch keine Bieter — oben anlegen, dann Angebotsdokumente hochladen.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Phase 4: Auswertung -->
+<div class="card eval-phase-card eval-phase-result-card" style="margin-bottom:1rem">
+  <div class="eval-phase-header">
+    <span class="eval-phase-tag eval-phase-result">Auswertung</span>
+    <h2 style="font-size:.95rem;font-weight:700;margin:0">Bewertungsmatrix</h2>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin:.5rem 0 .75rem;flex-wrap:wrap;gap:.5rem">
+    <p class="text-muted" style="font-size:.78rem;margin:0">
+      In den <strong>Bieter-Spalten</strong> (nicht auf den Kriteriennamen) klicken → Dialog mit KI-Vorschlag und Bewertung.
+      <span class="eval-matrix-focus-hint" hidden> — gefiltert durch Bieter-Fokus oben.</span>
+    </p>
+    <a class="btn btn-secondary btn-sm" href="/evaluation/price?project_key={{ project_key }}">Preisblatt</a>
+  </div>
+  {% if matrix_rows %}
+  <div style="overflow-x:auto" id="eval-matrix-wrap">
+    <div class="table-wrap">
+  <table id="eval-matrix-table">
+      <thead>
+        <tr>
+          <th>Ref</th><th>Kriterium</th><th>Art</th><th>Gewicht</th>
+          {% for b in bidders %}<th data-bidder-col="{{ b.id }}">{{ b.name }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in matrix_rows %}
+        <tr>
+          <td style="font-family:var(--font-mono,monospace);font-size:.78rem;white-space:nowrap;color:var(--color-text-muted)">{{ row.referenz or '—' }}</td>
+          <td>{{ row.name }}{% if row.auto_price %} <span class="text-muted" style="font-size:.72rem">(Preisblatt)</span>{% endif %}</td>
+          <td>{{ row.kind }}</td>
+          <td>{{ row.weight or '' }}</td>
+          {% for cell in row.cells %}
+          <td class="eval-matrix-cell" style="cursor:pointer" title="Details anzeigen — KI & Bewertung"
+              data-bidder-col="{{ cell.bidder_id }}"
+              data-cell-url="/evaluation/cell?bidder_id={{ cell.bidder_id }}&criterion_id={{ cell.criterion_id }}&project_key={{ project_key }}"
+              hx-get="/evaluation/cell?bidder_id={{ cell.bidder_id }}&criterion_id={{ cell.criterion_id }}&project_key={{ project_key }}"
+              hx-target="#modal-slot" hx-swap="innerHTML">
+            <strong>{{ cell.display }}</strong>
+            <div style="font-size:.7rem;color:var(--color-text-muted)">
+              Bewerten ›
+              {% if row.has_children %}
+              · {{ cell.answered }}/{{ cell.total }} offiziell
+              {% if cell.ai_answered %}
+              · 🤖 {{ cell.ai_answered }}/{{ cell.ai_total }}{% if cell.ai_avg %} Ø{{ "%.1f"|format(cell.ai_avg) }}{% endif %}
+              {% endif %}
+              {% else %}
+              {% if cell.ai_value is not none %}· 🤖{{ "%.1f"|format(cell.ai_value) }}{% endif %}
+              {% if cell.evaluator_count %} · {{ cell.evaluator_count }} Bewertung{{ "en" if cell.evaluator_count != 1 else "" }}{% endif %}
+              {% endif %}
+            </div>
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  </div>
+  {% else %}
+  <p class="text-muted">Noch keine Kriterien oder Bieter — zuerst Phase ② (optional) und ③ abschliessen.</p>
+  {% endif %}
+</div>
+
+<div class="card eval-phase-card eval-phase-result-card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Rangfolge</h2>
+  {% if has_phase2_criteria %}
+  <p class="text-muted" style="font-size:.75rem;margin:0 0 .75rem">
+  Zweistufige Bewertung: Zuerst ZK-Kriterien (Phase 1) für die Einladungsentscheid — danach Präsentation (Phase 2, z. B. A-01).
+  </p>
+  <h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Vor Präsentation (Phase 1, ZK)</h3>
+  <div class="table-wrap" style="margin-bottom:1rem">
+  <table>
+    <thead><tr>
+      <th>Rang</th><th>Bieter</th><th>ZK %</th><th>Max. bei Präsentation voll</th><th>Einladung?</th><th>Eignung</th>
+    </tr></thead>
+    <tbody>
+      {% for r in rankings %}
+      <tr data-ranking-bidder="{{ r.bidder_id }}"{% if r.can_still_win == false %} style="opacity:.75"{% endif %}>
+        <td>{{ r.interim_rank if r.interim_rank else 'K.O./offen' }}</td>
+        <td>{{ r.bidder_name }}</td>
+        <td>{{ r.interim_score if r.interim_score is not none else '—' }}</td>
+        <td>{{ r.max_score if r.max_score is not none else '—' }}</td>
+        <td>
+          {% if r.ko %}K.O.
+          {% elif r.can_still_win == false %}<span title="Selbst mit voller Punktzahl in Phase 2 nicht mehr erreichbar">nein</span>
+          {% elif r.can_still_win %}ja
+          {% else %}—{% endif %}
+        </td>
+        <td>{{ 'ja' if not r.ko else 'K.O.' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <h3 style="font-size:.85rem;font-weight:600;margin:.5rem 0">Gesamt (alle Phasen bewertet)</h3>
+  {% endif %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Rang</th><th>Bieter</th><th>Gesamt %</th><th>Eignung OK</th></tr></thead>
+    <tbody>
+      {% for r in rankings %}
+      <tr data-ranking-bidder="{{ r.bidder_id }}">
+        <td>{{ r.rank if r.rank else 'K.O./offen' }}</td>
+        <td>{{ r.bidder_name }}</td>
+        <td>{{ r.total_score if r.total_score is not none else '—' }}</td>
+        <td>{{ 'ja' if not r.ko else 'K.O.' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Export</h2>
+
+  <p class="text-muted" style="font-size:.8rem;margin-bottom:.5rem"><strong>Projektweit</strong> (alle Bieter, alle Bewerter):</p>
+  <a class="btn btn-secondary" href="/evaluation/export.csv?project_key={{ project_key }}">CSV</a>
+  <a class="btn btn-secondary" href="/evaluation/export.xlsx?project_key={{ project_key }}" style="margin-left:.5rem">Excel</a>
+
+  {% if bidders %}
+  <hr style="margin:1rem 0;border:none;border-top:1px solid var(--color-border)">
+  <p class="text-muted" style="font-size:.8rem;margin-bottom:.65rem"><strong>Pro Bieter und Quelle</strong> (KI oder einzelner Bewerter):</p>
+  <div style="display:flex;flex-wrap:wrap;gap:.65rem;align-items:flex-end;margin-bottom:.75rem">
+    <div>
+      <label class="form-label" for="export-bidder-id">Bieter</label>
+      <select class="form-select" id="export-bidder-id" style="min-width:180px">
+        {% for b in bidders %}
+        <option value="{{ b.id }}">{{ b.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="form-label" for="export-source">Quelle</label>
+      <select class="form-select" id="export-source" style="min-width:160px">
+        <option value="ai">🤖 KI-Vorschlag</option>
+        {% if may_see_evaluators %}
+        <option value="user">Bewerter (Person)</option>
+        {% endif %}
+      </select>
+    </div>
+    {% if may_see_evaluators and export_evaluators %}
+    <div id="export-evaluator-wrap">
+      <label class="form-label" for="export-evaluator-id">Bewerter</label>
+      <select class="form-select" id="export-evaluator-id" style="min-width:160px">
+        {% for ev in export_evaluators %}
+        <option value="{{ ev.id }}">{{ ev.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem">
+    <a class="btn btn-secondary" id="export-filtered-csv" href="#">CSV</a>
+    <a class="btn btn-secondary" id="export-filtered-xlsx" href="#">Excel</a>
+    <a class="btn btn-secondary" id="export-filtered-html" href="#" target="_blank">HTML</a>
+    <a class="btn btn-secondary" id="export-filtered-docx" href="#">Word</a>
+    <a class="btn btn-secondary" id="export-filtered-pdf" href="#">PDF</a>
+  </div>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Gefilterter Export enthält Werte und Begründungen nur der gewählten Quelle; Excel zusätzlich Blatt «Einzelanforderungen». PDF benötigt WeasyPrint auf dem Server.</p>
+
+  <hr style="margin:1rem 0;border:none;border-top:1px solid var(--color-border)">
+  <p class="text-muted" style="font-size:.8rem;margin-bottom:.5rem"><strong>Alle Bieter × Quellen</strong> (ZIP-Archiv):</p>
+  <div style="display:flex;flex-wrap:wrap;gap:.65rem;align-items:flex-end">
+    <div>
+      <label class="form-label" for="export-zip-format">Format im ZIP</label>
+      <select class="form-select" id="export-zip-format" style="min-width:140px">
+        <option value="xlsx" selected>Excel</option>
+        <option value="docx">Word</option>
+        <option value="csv">CSV</option>
+        <option value="html">HTML</option>
+        <option value="pdf">PDF</option>
+      </select>
+    </div>
+    <a class="btn btn-secondary" id="export-zip-all" href="#">ZIP herunterladen</a>
+  </div>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Enthält je Bieter und vorhandene Quelle (KI + Bewerter) eine Datei — nur Kombinationen mit gespeicherten Bewertungen.</p>
+  {% endif %}
+</div>
+
+<div class="eval-page-lightbox" id="eval-page-lightbox" hidden aria-hidden="true">
+  <button type="button" class="eval-page-lightbox-close" aria-label="Schliessen">&times;</button>
+  <img class="eval-page-lightbox-img" id="eval-page-lightbox-img" alt="" />
+</div>
+<div id="modal-slot"></div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function openEvaluationCell(td) {
+  const url = td && td.dataset ? td.dataset.cellUrl : '';
+  if (!url) return;
+  const slot = document.getElementById('modal-slot');
+  if (window.htmx) {
+    htmx.ajax('GET', url, { target: '#modal-slot', swap: 'innerHTML' });
+    return;
+  }
+  fetch(url, { credentials: 'same-origin', headers: { 'HX-Request': 'true' } })
+    .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
+    .then(html => { slot.innerHTML = html; })
+    .catch(() => {
+      slot.innerHTML = '<div class="card" style="margin-top:1rem;border-color:var(--color-danger)"><p style="margin:0;font-size:.85rem">Zelle konnte nicht geladen werden. Seite neu laden oder Administrator kontaktieren (HTMX/CDN).</p></div>';
+    });
+}
+
+window.addEventListener('load', () => {
+  if (typeof htmx !== 'undefined') return;
+  document.querySelectorAll('.eval-matrix-cell').forEach(td => {
+    td.addEventListener('click', () => openEvaluationCell(td));
+  });
+});
+
+document.getElementById('modal-slot').addEventListener('click', e => {
+  if (e.target.classList.contains('modal-backdrop')) document.getElementById('modal-slot').innerHTML = '';
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const lb = document.getElementById('eval-page-lightbox');
+  if (lb && !lb.hidden) return;
+  document.getElementById('modal-slot').innerHTML = '';
+});
+
+function toggleCritFields() {
+  const kindEl = document.getElementById('crit-kind');
+  if (!kindEl) return;
+  const isEignung = kindEl.value === 'eignung';
+  document.getElementById('crit-weight-field').style.display = isEignung ? 'none' : '';
+  document.getElementById('crit-scale-field').style.display = isEignung ? 'none' : '';
+  document.getElementById('crit-eignung-hint').style.display = isEignung ? '' : 'none';
+  const phaseField = document.getElementById('crit-phase-field');
+  if (phaseField) phaseField.style.display = isEignung ? 'none' : '';
+}
+toggleCritFields();
+
+(function() {
+  const KEY = 'evalScrollY';
+  const ANCHOR = 'evalScrollAnchor';
+  document.querySelectorAll('.bidder-doc-link-form').forEach(function(f) {
+    f.addEventListener('submit', function() {
+      sessionStorage.setItem(KEY, String(window.scrollY));
+      const row = f.closest('.eval-offer-doc-row');
+      if (row) sessionStorage.setItem(ANCHOR, 'eval-bidder-section');
+    });
+  });
+  const y = sessionStorage.getItem(KEY);
+  if (y !== null) {
+    sessionStorage.removeItem(KEY);
+    const aid = sessionStorage.getItem(ANCHOR);
+    sessionStorage.removeItem(ANCHOR);
+    requestAnimationFrame(function() {
+      if (aid) {
+        const el = document.getElementById(aid);
+        if (el) {
+          el.scrollIntoView({ block: 'start' });
+          return;
+        }
+      }
+      window.scrollTo(0, parseInt(y, 10) || 0);
+    });
+  }
+})();
+
+function openEvalPageLightbox(btn) {
+  const src = btn && btn.dataset ? btn.dataset.pageSrc : '';
+  if (!src) return;
+  const lb = document.getElementById('eval-page-lightbox');
+  const lbImg = document.getElementById('eval-page-lightbox-img');
+  if (!lb || !lbImg) {
+    window.open(src, '_blank');
+    return;
+  }
+  lbImg.src = src;
+  lbImg.alt = btn.querySelector('img')?.alt || '';
+  lb.hidden = false;
+  lb.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+}
+
+(function() {
+  const lb = document.getElementById('eval-page-lightbox');
+  const lbImg = document.getElementById('eval-page-lightbox-img');
+  if (!lb || !lbImg) return;
+  function closeLb() {
+    lb.hidden = true;
+    lb.setAttribute('aria-hidden', 'true');
+    lbImg.src = '';
+    document.body.style.overflow = '';
+  }
+  lb.querySelector('.eval-page-lightbox-close')?.addEventListener('click', closeLb);
+  lb.addEventListener('click', function(e) { if (e.target === lb) closeLb(); });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && !lb.hidden) closeLb();
+  });
+})();
+
+(function() {
+  const focusEl = document.getElementById('eval-bidder-focus');
+  const uploadBidderEl = document.getElementById('eval-upload-bidder-id');
+  const projectKey = {{ project_key|tojson }};
+  if (!focusEl || !projectKey) return;
+
+  const storageKey = 'evalBidderFocus:' + projectKey;
+
+  function rowLinkedToFocus(row, focus) {
+    if (!focus) return true;
+    const active = (row.dataset.bidderLinks || '').split(',').filter(Boolean);
+    if (active.length) return active.includes(focus);
+    const any = (row.dataset.allBidderLinks || '').split(',').filter(Boolean);
+    return !any.length;
+  }
+
+  function applyBidderFocus(focus, persist) {
+    const focusHint = document.querySelector('.eval-matrix-focus-hint');
+    if (focusHint) focusHint.hidden = !focus;
+
+    document.querySelectorAll('[data-offer-doc]').forEach(function(row) {
+      const show = rowLinkedToFocus(row, focus);
+      row.style.display = show ? '' : 'none';
+      const detail = row.nextElementSibling;
+      if (detail && detail.hasAttribute('data-offer-doc-detail')) {
+        detail.style.display = show ? '' : 'none';
+      }
+    });
+
+    document.querySelectorAll('[data-bidder-col]').forEach(function(el) {
+      if (!focus) {
+        el.style.display = '';
+        return;
+      }
+      el.style.display = el.dataset.bidderCol === focus ? '' : 'none';
+    });
+
+    document.querySelectorAll('[data-ranking-bidder]').forEach(function(tr) {
+      if (!focus) {
+        tr.style.display = '';
+        return;
+      }
+      tr.style.display = tr.dataset.rankingBidder === focus ? '' : 'none';
+    });
+
+    document.querySelectorAll('[data-bidder-subtypes]').forEach(function(block) {
+      if (!focus) {
+        block.style.display = '';
+        return;
+      }
+      block.style.display = block.dataset.bidderSubtypes === focus ? '' : 'none';
+    });
+
+    document.querySelectorAll('[data-bidder-link]').forEach(function(label) {
+      if (!focus) {
+        label.style.display = '';
+        return;
+      }
+      label.style.display = label.dataset.bidderLink === focus ? '' : 'none';
+    });
+
+    if (uploadBidderEl && focus) {
+      uploadBidderEl.value = focus;
+    }
+
+    if (persist) {
+      try {
+        if (focus) localStorage.setItem(storageKey, focus);
+        else localStorage.removeItem(storageKey);
+      } catch (e) { /* ignore */ }
+      const params = new URLSearchParams(window.location.search);
+      if (focus) params.set('bidder_focus', focus);
+      else params.delete('bidder_focus');
+      const qs = params.toString();
+      const next = window.location.pathname + (qs ? '?' + qs : '');
+      window.history.replaceState(null, '', next);
+    }
+  }
+
+  const qsFocus = new URLSearchParams(window.location.search).get('bidder_focus');
+  let initial = qsFocus || '';
+  if (!initial) {
+    try { initial = localStorage.getItem(storageKey) || ''; } catch (e) { initial = ''; }
+  }
+  if (initial && !focusEl.querySelector('option[value="' + initial + '"]')) {
+    initial = '';
+  }
+  focusEl.value = initial;
+  applyBidderFocus(initial, false);
+
+  focusEl.addEventListener('change', function() {
+    applyBidderFocus(focusEl.value, true);
+  });
+})();
+</script>
+<script>
+function startEvalDocUpload(form) {
+  if (!form || form.dataset.uploading === '1') return false;
+  form.dataset.uploading = '1';
+  form.classList.add('is-busy');
+  const btn = form.querySelector('button[type="submit"]');
+  const label = form.querySelector('.eval-upload-btn-label');
+  if (btn) btn.disabled = true;
+  if (label) label.textContent = 'Wird verarbeitet …';
+  return true;
+}
+
+(function() {
+  const uploadParams = ['tender_upload', 'doc_upload', 'rechunk'];
+  const qs = new URLSearchParams(window.location.search);
+  if (uploadParams.some((k) => qs.has(k))) {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+})();
+
+(function() {
+  const projectKey = {{ project_key|tojson }};
+  const bidderEl = document.getElementById('export-bidder-id');
+  const sourceEl = document.getElementById('export-source');
+  const evaluatorEl = document.getElementById('export-evaluator-id');
+  const evaluatorWrap = document.getElementById('export-evaluator-wrap');
+  if (!bidderEl || !sourceEl) return;
+
+  function syncEvaluatorVisibility() {
+    if (!evaluatorWrap) return;
+    evaluatorWrap.style.display = sourceEl.value === 'user' ? '' : 'none';
+  }
+
+  function buildFilteredExportUrl(format, opts) {
+    const params = new URLSearchParams({
+      project_key: projectKey,
+      bidder_id: bidderEl.value,
+      source: sourceEl.value,
+    });
+    if (sourceEl.value === 'user' && evaluatorEl) {
+      params.set('evaluator_id', evaluatorEl.value);
+    }
+    if (opts && opts.download) {
+      params.set('download', '1');
+    }
+    return '/evaluation/export.' + format + '?' + params.toString();
+  }
+
+  function wireExportLink(id, format) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('click', function(e) {
+      e.preventDefault();
+      if (sourceEl.value === 'user' && evaluatorEl && !evaluatorEl.value) {
+        alert('Bitte einen Bewerter wählen.');
+        return;
+      }
+      if (format === 'html') {
+        window.open(buildFilteredExportUrl(format), '_blank');
+        return;
+      }
+      window.location.href = buildFilteredExportUrl(format, { download: true });
+    });
+  }
+
+  sourceEl.addEventListener('change', syncEvaluatorVisibility);
+  syncEvaluatorVisibility();
+  wireExportLink('export-filtered-csv', 'csv');
+  wireExportLink('export-filtered-xlsx', 'xlsx');
+  wireExportLink('export-filtered-html', 'html');
+  wireExportLink('export-filtered-docx', 'docx');
+  wireExportLink('export-filtered-pdf', 'pdf');
+
+  const zipBtn = document.getElementById('export-zip-all');
+  const zipFmt = document.getElementById('export-zip-format');
+  if (zipBtn && zipFmt) {
+    zipBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      const params = new URLSearchParams({
+        project_key: projectKey,
+        format: zipFmt.value,
+      });
+      window.location.href = '/evaluation/export.zip?' + params.toString();
+    });
+  }
+})();
+</script>
+{% endblock %}

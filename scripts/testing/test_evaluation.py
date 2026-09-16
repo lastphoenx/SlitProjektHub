@@ -1,0 +1,2342 @@
+#!/usr/bin/env python
+"""Tests für Phase C Offertbeurteilung."""
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from sqlmodel import Session, create_engine, SQLModel
+
+from src.m14_auth import AppRole, AppUser
+from src.m15_evaluation import (
+    Bidder,
+    BidderDocumentLink,
+    Criterion,
+    EvaluationProjectConfig,
+    EvaluationTenderDoc,
+    PriceItem,
+    Score,
+    compute_rankings,
+    create_bidder,
+    create_criterion,
+    get_tender_document_ids,
+    import_criteria_payload,
+    link_tender_doc,
+    list_criteria,
+    list_price_items,
+    merge_price_structure_for_bidder,
+    seed_price_structure_for_bidder,
+    tender_roles_for_criterion,
+    unlink_tender_doc,
+    upsert_score,
+    validate_tender_cloud_gate,
+)
+
+
+def _test_session(engine):
+    """IDs nach commit() ohne erneutes session.refresh() nutzbar (SQLAlchemy 2.x)."""
+    return Session(engine, expire_on_commit=False)
+
+
+def _setup_db():
+    engine = create_engine("sqlite:///:memory:")
+    SQLModel.metadata.create_all(engine)
+    with _test_session(engine) as session:
+        session.add(
+            AppRole(key="projektleiter_intern", title="PL intern", sort_order=20)
+        )
+        user = AppUser(
+            username="evaluator",
+            password_hash="x",
+            app_role_key="projektleiter_intern",
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        user_id = user.id
+    return engine, user_id
+
+
+def test_ranking_ko_and_weighted_sum():
+    engine, evaluator_id = _setup_db()
+    project_key = "test-project"
+
+    with _test_session(engine) as session:
+        b1 = Bidder(project_key=project_key, name="A")
+        b2 = Bidder(project_key=project_key, name="B")
+        session.add(b1)
+        session.add(b2)
+        session.commit()
+        session.refresh(b1)
+        session.refresh(b2)
+
+        eign = Criterion(project_key=project_key, kind="eignung", name="E1", scale_max=10)
+        z1 = Criterion(
+            project_key=project_key, kind="zuschlag", name="Z1", weight_pct=60, scale_max=10
+        )
+        z2 = Criterion(
+            project_key=project_key, kind="zuschlag", name="Z2", weight_pct=40, scale_max=10
+        )
+        session.add(eign)
+        session.add(z1)
+        session.add(z2)
+        session.commit()
+        session.refresh(eign)
+        session.refresh(z1)
+        session.refresh(z2)
+
+        session.add(
+            Score(
+                bidder_id=b1.id,
+                criterion_id=eign.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=9.0,
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b1.id,
+                criterion_id=z1.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=8.0,
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b1.id,
+                criterion_id=z2.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=6.0,
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b2.id,
+                criterion_id=eign.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=2.0,
+            )
+        )
+        session.commit()
+
+    # Patch engine for compute_rankings helpers
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    rankings = compute_rankings(project_key)
+    by_name = {r["bidder_name"]: r for r in rankings}
+
+    assert by_name["B"]["ko"] is True
+    assert by_name["B"]["total_score"] is None
+    assert by_name["A"]["total_score"] == 72.0
+    assert by_name["A"]["rank"] == 1
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_compute_rankings_phase2_interim():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-phase2"
+
+    with _test_session(engine) as session:
+        b1 = Bidder(project_key=project_key, name="Leader")
+        b2 = Bidder(project_key=project_key, name="Chaser")
+        b3 = Bidder(project_key=project_key, name="Out")
+        session.add(b1)
+        session.add(b2)
+        session.add(b3)
+        session.commit()
+        session.refresh(b1)
+        session.refresh(b2)
+        session.refresh(b3)
+
+        zk = Criterion(
+            project_key=project_key, kind="zuschlag", name="ZK1", weight_pct=70,
+            scale_max=10, ranking_phase=1,
+        )
+        a01 = Criterion(
+            project_key=project_key, kind="zuschlag", name="A-01 Präsentation", weight_pct=30,
+            scale_max=10, ranking_phase=2,
+        )
+        session.add(zk)
+        session.add(a01)
+        session.commit()
+        session.refresh(zk)
+        session.refresh(a01)
+
+        def score(bid, crit, val):
+            session.add(
+                Score(
+                    bidder_id=bid,
+                    criterion_id=crit,
+                    source_key=f"user:{evaluator_id}",
+                    evaluator_user_id=evaluator_id,
+                    value=val,
+                )
+            )
+
+        score(b1.id, zk.id, 9.0)
+        score(b2.id, zk.id, 9.0)
+        score(b3.id, zk.id, 6.5)
+        session.commit()
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    rankings = {r["bidder_name"]: r for r in compute_rankings(project_key)}
+
+    assert rankings["Leader"]["interim_score"] == 90.0
+    assert rankings["Chaser"]["interim_score"] == 90.0
+    assert rankings["Leader"]["interim_rank"] in (1, 2)
+    assert rankings["Chaser"]["interim_rank"] in (1, 2)
+    assert rankings["Chaser"]["can_still_win"] is True
+    assert rankings["Out"]["can_still_win"] is False
+    assert rankings["Leader"]["has_phase2"] is True
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_create_bidder_and_criterion():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    b = create_bidder("p1", "Firma X")
+    c = create_criterion("p1", "zuschlag", "Preis", weight_pct=50.0)
+    assert b.name == "Firma X"
+    assert c.kind == "zuschlag"
+    assert c.weight_pct == 50.0
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_chunk_meta_prefix_subtype():
+    from src.m09_docs import chunk_meta_prefix
+
+    assert chunk_meta_prefix("Angebot (Bieter)", "x.pdf") == "[Angebot (Bieter) | x.pdf]\n"
+    assert chunk_meta_prefix("Angebot (Bieter)", "x.pdf", "Preisblatt") == (
+        "[Angebot (Bieter) · Preisblatt | x.pdf]\n"
+    )
+
+
+def test_validate_evaluation_cloud_gate():
+    from unittest.mock import patch
+    from src.m15_evaluation import validate_evaluation_cloud_gate
+
+    with patch("src.m15_evaluation.get_bidder_document_ids", return_value=[11, 12]):
+        assert validate_evaluation_cloud_gate("openai", 1, False) == "cloud_confirm"
+        assert validate_evaluation_cloud_gate("openai", 1, True) is None
+        assert validate_evaluation_cloud_gate("ollama", 1, False) is None
+    with patch("src.m15_evaluation.get_bidder_document_ids", return_value=[]):
+        assert validate_evaluation_cloud_gate("openai", 1, False) is None
+
+
+def test_suggest_score_sanitizes_cloud_context():
+    from unittest.mock import patch
+    from src.m15_evaluation import Criterion, suggest_score_with_rag
+
+    crit = Criterion(id=1, project_key="p", kind="zuschlag", name="Lösung", scale_max=10)
+    rag = {
+        "documents": [
+            {
+                "text": "Kontakt Maria Muster, AHV 756.1234.5678.97, Budget CHF 1.2 Mio.",
+                "filename": "angebot.pdf",
+                "chunk_id": 7,
+            }
+        ]
+    }
+    captured: dict = {}
+
+    def fake_try(provider, system, messages, **kwargs):
+        captured["user"] = messages[0]["content"]
+        return '{"value": 8, "justification": "ok", "source_quote": "x", "source_chunk_id": 7}'
+
+    def fake_sanitize(text: str) -> str:
+        return (text or "").replace("Maria Muster", "[Name entfernt]").replace(
+            "756.1234.5678.97", "[AHV]"
+        )
+
+    with patch("src.m15_evaluation.retrieve_relevant_chunks_hybrid", return_value=rag):
+        with patch("src.m15_evaluation.try_models_with_messages", side_effect=fake_try):
+            with patch("src.m15_evaluation.sanitize_for_cloud_text", side_effect=fake_sanitize) as mock_s:
+                suggest_score_with_rag("p", 1, crit, provider="openai", model="gpt-4o-mini")
+
+    mock_s.assert_called()
+    user = captured["user"]
+    assert "Maria Muster" not in user
+    assert "756.1234.5678.97" not in user
+    assert "[Name entfernt]" in user
+
+
+def test_suggest_score_skips_sanitize_for_local_provider():
+    from unittest.mock import patch
+    from src.m15_evaluation import Criterion, suggest_score_with_rag
+
+    crit = Criterion(id=1, project_key="p", kind="zuschlag", name="Lösung", scale_max=10)
+    rag = {
+        "documents": [
+            {"text": "Kontakt Maria Muster intern.", "filename": "angebot.pdf", "chunk_id": 1}
+        ]
+    }
+    captured: dict = {}
+
+    def fake_try(provider, system, messages, **kwargs):
+        captured["user"] = messages[0]["content"]
+        return '{"value": 5, "justification": "ok"}'
+
+    with patch("src.m15_evaluation.retrieve_relevant_chunks_hybrid", return_value=rag):
+        with patch("src.m15_evaluation.try_models_with_messages", side_effect=fake_try):
+            with patch("src.m15_evaluation.sanitize_for_cloud_text") as mock_s:
+                suggest_score_with_rag("p", 1, crit, provider="ollama", model="qwen3.8:27b")
+
+    mock_s.assert_not_called()
+    assert "Maria Muster" in captured["user"]
+
+
+def test_literal_line_ref_excludes_sibling_rows():
+    from src.m15_evaluation import _literal_chunks_for_line_ref
+
+    class FakeChunk:
+        def __init__(self, cid, text, doc_id=1, page=None):
+            self.id = cid
+            self.chunk_text = text
+            self.document_id = doc_id
+            self.page_number = page
+            self.section_path = "Tabelle"
+
+    class FakeDoc:
+        filename = "angebot.pdf"
+        classification = "Angebot (Bieter)"
+        is_deleted = False
+
+    rows = [
+        (FakeChunk(1, "F01-001 Ja Kommentar ProduktX2 headless"), FakeDoc()),
+        (FakeChunk(2, "F01-002 Ja anderer Kommentar"), FakeDoc()),
+    ]
+
+    from unittest.mock import patch
+
+    with patch("src.m03_db.get_session") as mock_sess:
+        mock_sess.return_value.__enter__.return_value.exec.return_value.all.return_value = rows
+        hits = _literal_chunks_for_line_ref((99,), "F01-001")
+    assert len(hits) == 1
+    assert hits[0]["chunk_id"] == 1
+    assert hits[0]["retrieval_method"] == "literal_line"
+
+
+def test_suggest_score_rag_basis_in_return():
+    from unittest.mock import patch
+    from src.m15_evaluation import Criterion, suggest_score_with_rag
+
+    crit = Criterion(
+        id=2,
+        project_key="p",
+        kind="zuschlag",
+        name="F01-001",
+        referenz="F01-001",
+        scale_max=10,
+    )
+    tender_doc = {
+        "chunk_id": 10,
+        "filename": "pflichtenheft.docx",
+        "text": "F01-001 Anforderung Gesamtverständnis",
+        "retrieval_method": "literal_line",
+    }
+    offer_doc = {
+        "chunk_id": 20,
+        "filename": "angebot.pdf",
+        "text": "F01-001 Ja ProduktX2",
+        "retrieval_method": "literal_line",
+    }
+
+    def fake_tender(*a, **k):
+        return [tender_doc]
+
+    def fake_offer(*a, **k):
+        return [offer_doc]
+
+    with patch("src.m15_evaluation._retrieve_suggestion_tender_docs", side_effect=fake_tender):
+        with patch("src.m15_evaluation._retrieve_suggestion_offer_docs", side_effect=fake_offer):
+            with patch(
+                "src.m15_evaluation.try_models_with_messages",
+                return_value='{"value": 7, "justification": "ok", "source_quote": "x", "source_chunk_id": 20}',
+            ):
+                out = suggest_score_with_rag("p", 1, crit, provider="ollama", model="qwen3.8:27b")
+
+    assert out.get("rag_basis")
+    assert out["rag_basis"]["line_ref"] == "F01-001"
+    assert len(out["rag_basis"]["tender"]) == 1
+    assert len(out["rag_basis"]["offer"]) == 1
+    assert out.get("rag_basis_json")
+
+
+def test_upsert_score_persists_rag_basis_json():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+    ev.migrate_evaluation_db()
+
+    b = create_bidder("p1", "Bieter A")
+    c = create_criterion("p1", "zuschlag", "F01-001", scale_max=10, referenz="F01-001")
+    payload = '{"line_ref":"F01-001","tender":[],"offer":[]}'
+    sc = upsert_score(
+        b.id, c.id, 0, 7.0,
+        justification="ki",
+        as_source="ai",
+        rag_basis_json=payload,
+    )
+    assert sc.rag_basis_json == payload
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_enrich_rag_basis_for_display():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+    from src.m03_db import Document, DocumentChunk
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    with _test_session(engine) as session:
+        doc = Document(
+            filename="angebot.pdf",
+            sha256_hash="enrich-test",
+            classification="Angebot (Bieter)",
+            file_path="/tmp/angebot.pdf",
+        )
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
+        ch = DocumentChunk(
+            document_id=doc.id,
+            chunk_index=0,
+            chunk_text="[Angebot | angebot.pdf | S. 7]\nText",
+            page_number=7,
+        )
+        session.add(ch)
+        session.commit()
+        session.refresh(ch)
+        chunk_id = ch.id
+        doc_id = doc.id
+
+    from src.m15_evaluation import enrich_rag_basis_for_display
+
+    basis = {
+        "tender": [],
+        "offer": [{"chunk_id": chunk_id, "filename": "angebot.pdf", "preview": "x", "method": "hybrid"}],
+    }
+    out = enrich_rag_basis_for_display(basis)
+    assert out["offer"][0]["document_id"] == doc_id
+    assert out["offer"][0]["page_number"] == 7
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_build_offer_document_bidder_ids():
+    from src.m15_evaluation import build_offer_document_bidder_ids
+
+    out = build_offer_document_bidder_ids({1: [10, 11], 2: [11], 3: []})
+    assert out[10] == [1]
+    assert out[11] == [1, 2]
+    assert 12 not in out
+
+
+def test_bidder_restore_and_delete_modes():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+    from src.m03_db import Document
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+    ev.migrate_evaluation_db()
+
+    from src.m15_evaluation import (
+        Bidder,
+        BidderDocumentLink,
+        active_bidder_ids_from_assignments,
+        build_offer_document_assignments,
+        create_bidder,
+        get_bidder_document_ids,
+        link_document_to_bidder,
+        remove_bidder,
+        restore_bidder,
+        soft_delete_bidder,
+    )
+
+    project_key = "p-bidder-life"
+    awl = create_bidder(project_key, "Bieter Alpha")
+    apptiva = create_bidder(project_key, "Bieter Beta")
+
+    with _test_session(engine) as session:
+        doc_awl = Document(
+            filename="awl.pdf",
+            sha256_hash="awl-hash",
+            classification="Angebot (Bieter)",
+            file_path="/tmp/awl.pdf",
+        )
+        doc_shared = Document(
+            filename="shared.pdf",
+            sha256_hash="shared-hash",
+            classification="Angebot (Bieter)",
+            file_path="/tmp/shared.pdf",
+        )
+        session.add(doc_awl)
+        session.add(doc_shared)
+        session.commit()
+        session.refresh(doc_awl)
+        session.refresh(doc_shared)
+        awl_doc_id = doc_awl.id
+        shared_doc_id = doc_shared.id
+
+    link_document_to_bidder(awl.id, awl_doc_id)
+    link_document_to_bidder(awl.id, shared_doc_id)
+    link_document_to_bidder(apptiva.id, shared_doc_id)
+
+    remove_bidder(project_key, awl.id, mode="deactivate")
+    assignments = build_offer_document_assignments(project_key)
+    awl_rows = assignments.get(awl_doc_id, [])
+    assert len(awl_rows) == 1
+    assert awl_rows[0]["is_deleted"] is True
+    assert awl_rows[0]["name"] == "Bieter Alpha"
+    assert active_bidder_ids_from_assignments(assignments).get(awl_doc_id) is None
+
+    restore_bidder(project_key, awl.id)
+    assignments2 = build_offer_document_assignments(project_key)
+    assert active_bidder_ids_from_assignments(assignments2).get(awl_doc_id) == [awl.id]
+
+    other_key = "other-project"
+    try:
+        restore_bidder(other_key, awl.id)
+        assert False, "restore across projects should fail"
+    except ValueError:
+        pass
+
+    remove_bidder(project_key, awl.id, mode="deactivate")
+    soft_delete_bidder(awl.id)
+    with _test_session(engine) as session:
+        awl_row = session.get(Bidder, awl.id)
+        assert awl_row is not None and awl_row.is_deleted
+
+    restore_bidder(project_key, awl.id)
+    remove_bidder(project_key, awl.id, mode="unlink")
+    assert get_bidder_document_ids(awl.id) == []
+
+    with _test_session(engine) as session:
+        links = session.exec(
+            __import__("sqlmodel").select(BidderDocumentLink).where(
+                BidderDocumentLink.document_id == awl_doc_id
+            )
+        ).all()
+        assert links == []
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_prepare_rag_bases_for_export_batch_uses_single_load(tmp_path, monkeypatch):
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+    from src.m03_db import Document, DocumentChunk, DocumentPage
+
+    pages_dir = tmp_path / "pages"
+    monkeypatch.setattr("src.m09_docs.PAGES_DIR", pages_dir)
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    with _test_session(engine) as session:
+        doc = Document(
+            filename="a.pdf",
+            sha256_hash="batch-a",
+            classification="Angebot (Bieter)",
+            file_path="/tmp/a.pdf",
+        )
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
+        ch = DocumentChunk(
+            document_id=doc.id,
+            chunk_index=0,
+            chunk_text="[Angebot | a.pdf | S. 2]\nText",
+            page_number=2,
+        )
+        session.add(ch)
+        session.commit()
+        session.refresh(ch)
+        rel = f"{doc.id}/2.webp"
+        img_path = pages_dir / rel
+        img_path.parent.mkdir(parents=True, exist_ok=True)
+        img_path.write_bytes(b"RIFFFAKEWEBP")
+        session.add(
+            DocumentPage(
+                document_id=doc.id,
+                page_number=2,
+                image_path=rel,
+                width=100,
+                height=120,
+            )
+        )
+        session.commit()
+        chunk_id = ch.id
+
+    from src.m15_evaluation import prepare_rag_basis_for_export, prepare_rag_bases_for_export_batch
+
+    basis = {
+        "tender": [],
+        "offer": [{"chunk_id": chunk_id, "filename": "a.pdf", "preview": "x"}],
+    }
+    single = prepare_rag_basis_for_export(basis)
+    batch = prepare_rag_bases_for_export_batch([basis, None, basis])
+    assert batch[0] == single
+    assert batch[1] is None
+    assert batch[2] == single
+
+    session_count = 0
+    real_get_session = ev.get_session
+
+    def counting_session():
+        nonlocal session_count
+        session_count += 1
+        return real_get_session()
+
+    ev.get_session = counting_session
+    prepare_rag_bases_for_export_batch([basis, basis, basis])
+    assert session_count <= 2
+
+    ev.get_session = lambda: _test_session(engine)
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_prepare_rag_basis_for_export_attaches_page_image(tmp_path, monkeypatch):
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+    from src.m03_db import Document, DocumentChunk, DocumentPage
+
+    pages_dir = tmp_path / "pages"
+    monkeypatch.setattr("src.m09_docs.PAGES_DIR", pages_dir)
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    with _test_session(engine) as session:
+        doc = Document(
+            filename="pflichtenheft.pdf",
+            sha256_hash="export-thumb",
+            classification="Ausschreibungsunterlage",
+            file_path="/tmp/pflichtenheft.pdf",
+        )
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
+        ch = DocumentChunk(
+            document_id=doc.id,
+            chunk_index=0,
+            chunk_text="[Vorgabe | pflichtenheft.pdf | S. 3]\nText",
+            page_number=3,
+        )
+        session.add(ch)
+        session.commit()
+        session.refresh(ch)
+        rel = f"{doc.id}/3.webp"
+        img_path = pages_dir / rel
+        img_path.parent.mkdir(parents=True, exist_ok=True)
+        img_path.write_bytes(b"RIFFFAKEWEBP")
+        session.add(
+            DocumentPage(
+                document_id=doc.id,
+                page_number=3,
+                image_path=rel,
+                width=120,
+                height=160,
+            )
+        )
+        session.commit()
+        chunk_id = ch.id
+
+    from src.m15_evaluation import (
+        build_filtered_xlsx_bytes,
+        format_rag_basis_export_text,
+        prepare_rag_basis_for_export,
+    )
+
+    basis = {
+        "tender": [{"chunk_id": chunk_id, "filename": "pflichtenheft.pdf", "preview": "Auszug", "method": "hybrid"}],
+        "offer": [],
+    }
+    out = prepare_rag_basis_for_export(basis)
+    assert out["tender"][0]["page_number"] == 3
+    assert out["tender"][0]["page_image_path"]
+    assert out["tender"][0]["page_image_data_uri"].startswith("data:image/webp;base64,")
+
+    text = format_rag_basis_export_text(out)
+    assert "pflichtenheft.pdf" in text
+    assert "S. 3" in text
+    assert "Auszug" in text
+
+    from src.m15_evaluation import EvaluationExportContext, EvaluationExportRow
+
+    ctx = EvaluationExportContext(
+        project_key="p",
+        project_title="P",
+        bidder_id=1,
+        bidder_name="Bieter",
+        source_key="ai",
+        source_label="KI-Vorschlag",
+        exported_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        top_rows=[
+            EvaluationExportRow(
+                criterion_name="K1",
+                criterion_kind="zuschlag",
+                parent_name="",
+                weight_pct=50,
+                scale_max=10,
+                value=7.0,
+                value_display="7",
+                justification="ok",
+                source_chunk_ref="Zitat",
+                rag_basis=out,
+            )
+        ],
+    )
+    xlsx = build_filtered_xlsx_bytes(ctx)
+    assert xlsx[:2] == b"PK"
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_rag_basis_doc_entry_normalized_score():
+    from src.m15_evaluation import _rag_basis_doc_entry
+
+    entry = _rag_basis_doc_entry(
+        {
+            "chunk_id": 944,
+            "filename": "angebot.pdf",
+            "text": "F01-001 Text",
+            "retrieval_method": "hybrid",
+            "similarity": 0.0,
+            "match_score": 9.18,
+            "normalized_match_score": 0.856,
+        }
+    )
+    assert entry["score"] == 0.856
+    assert entry["score"] <= 1.0
+
+
+def test_format_rag_context_omits_chunk_id():
+    from src.m15_evaluation import _format_rag_context
+
+    ctx = _format_rag_context(
+        [
+            {
+                "chunk_id": 1124,
+                "filename": "Pflichtenheft.docx",
+                "page_number": 12,
+                "section_path": "3.2",
+                "text": "Anforderung KI",
+            }
+        ],
+        empty_msg="leer",
+    )
+    assert "Chunk 1124" not in ctx
+    assert "Pflichtenheft.docx" in ctx
+    assert "S. 12" in ctx
+    assert "Kap. 3.2" in ctx
+
+
+def test_sanitize_suggestion_justification_strips_chunk_refs():
+    from src.m15_evaluation import _sanitize_suggestion_justification
+
+    raw = (
+        "Zwar wird im Kontext (Chunk 1124) KI erwähnt, "
+        "die in den Ausschreibungsunterlagen (Chunk 1449) als wesentliche Anforderungen genannt werden."
+    )
+    cleaned = _sanitize_suggestion_justification(raw)
+    assert "Chunk" not in cleaned
+    assert "1124" not in cleaned
+    assert "1449" not in cleaned
+    assert "KI erwähnt" in cleaned
+
+
+def test_compose_suggestion_justification_sanitizes_chunk_refs():
+    from src.m15_evaluation import Criterion, _compose_suggestion_justification
+
+    crit = Criterion(
+        id=1,
+        project_key="p",
+        kind="zuschlag",
+        name="F01-001",
+        scale_max=10,
+    )
+    parsed = {
+        "strengths": "Gutes Verständnis laut Angebot.",
+        "deductions": "Innovation fehlt laut (Chunk 1124) im Kontext.",
+    }
+    out = _compose_suggestion_justification(crit, 7.0, parsed)
+    assert "Chunk" not in out
+
+
+def test_offer_suggestion_side_docs_no_parent_literal():
+    from unittest.mock import patch
+    from src.m15_evaluation import Criterion, _retrieve_suggestion_offer_docs
+
+    crit = Criterion(id=1, project_key="p", kind="zuschlag", name="F01-001", referenz="F01-001")
+    captured: dict = {}
+
+    def fake_side(query, **kwargs):
+        captured["include_parent_literal"] = kwargs.get("include_parent_literal")
+        return [{"chunk_id": 1, "text": "F01-001", "filename": "a.pdf"}]
+
+    with patch("src.m15_evaluation.bidder_doc_ids_for_criterion", return_value=[5]):
+        with patch("src.m15_evaluation._retrieve_suggestion_side_docs", side_effect=fake_side):
+            with patch("src.m15_evaluation._section_neighbor_chunks", return_value=[]):
+                _retrieve_suggestion_offer_docs("p", 1, crit, "q", limit=12)
+
+    assert captured.get("include_parent_literal") is False
+
+
+def test_tender_doc_link_and_roles():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+    from src.m03_db import Document
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+    ev.migrate_evaluation_db()
+
+    with _test_session(engine) as session:
+        doc = Document(
+            filename="pflichtenheft.pdf",
+            sha256_hash="abc123",
+            classification="Pflichtenheft (Projekt)",
+            file_path="/tmp/x.pdf",
+        )
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
+        doc_id = doc.id
+
+    link_tender_doc("p1", doc_id, "zuschlagskriterien")
+    assert get_tender_document_ids("p1") == [doc_id]
+    assert get_tender_document_ids("p1", roles=("eignungskriterien",)) == []
+
+    link_tender_doc("p1", doc_id, "eignungskriterien")
+    assert get_tender_document_ids("p1", roles=("eignungskriterien",)) == [doc_id]
+    assert get_tender_document_ids("p1", roles=("zuschlagskriterien",)) == [doc_id]
+    assert get_tender_document_ids("p1", roles=("eignungskriterien", "zuschlagskriterien")) == [doc_id]
+
+    from src.m15_evaluation import get_tender_doc_roles, set_tender_doc_roles
+
+    set_tender_doc_roles("p1", doc_id, ["bewertungsvorgaben"])
+    assert get_tender_doc_roles("p1", doc_id) == ["bewertungsvorgaben"]
+
+    crit = Criterion(project_key="p1", kind="zuschlag", name="Z1")
+    assert "zuschlagskriterien" in tender_roles_for_criterion(crit)
+
+    unlink_tender_doc("p1", doc_id)
+    assert get_tender_document_ids("p1") == []
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_import_criteria_payload_skip_existing():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    create_criterion("p1", "zuschlag", "Preis", weight_pct=30, auto_price=True)
+    stats = import_criteria_payload(
+        "p1",
+        {
+            "zuschlag": [
+                {"name": "Preis", "weight_pct": 30, "auto_price": True},
+                {"name": "Qualität", "weight_pct": 70, "description": "Lösung"},
+            ]
+        },
+    )
+    assert stats["skipped"] >= 1
+    assert stats["created"] >= 1
+    names = {c.name for c in list_criteria("p1")}
+    assert "Qualität" in names
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_seed_and_merge_price_structure():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    bidder = create_bidder("p1", "Bieter A")
+    seeded = seed_price_structure_for_bidder(
+        bidder.id,
+        {"einmalig": [{"referenz": "F-01", "leistungsbeschreibung": "Konzept", "anzahl": 0, "kosten_pro_einheit": 0}]},
+    )
+    assert seeded["created"] == 1
+    merged = merge_price_structure_for_bidder(
+        bidder.id,
+        {"einmalig": [{"referenz": "F-01", "leistungsbeschreibung": "Konzept", "anzahl": 5, "kosten_pro_einheit": 100}]},
+    )
+    assert merged["updated"] == 1
+    items = list_price_items(bidder.id)
+    assert items[0].chf == 500.0
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_validate_tender_cloud_gate():
+    from unittest.mock import patch
+    from src.m15_evaluation import validate_tender_cloud_gate
+
+    with patch("src.m15_evaluation.get_tender_document_ids", return_value=[1]):
+        assert validate_tender_cloud_gate("openai", "p1", False) == "cloud_confirm"
+        assert validate_tender_cloud_gate("openai", "p1", True) is None
+        assert validate_tender_cloud_gate("ollama", "p1", False) is None
+
+
+def test_suggest_tender_role_and_validate_criteria():
+    from src.m15_evaluation import (
+        normalize_chunk_size,
+        infer_ranking_phase,
+        suggest_tender_role,
+        validate_criteria_payload,
+    )
+
+    assert suggest_tender_role("Anforderung/Feature", "Anhang2_Preisblatt_Beispiel.pdf") == "preisblatt_vorlage"
+    assert suggest_tender_role("Pflichtenheft (Projekt)", "Pflichtenheft.docx") == "ausschreibungsunterlage"
+    assert infer_ranking_phase("A-01 Angebotspräsentation") == 2
+    assert infer_ranking_phase("ZK3 Lösung") == 1
+    assert normalize_chunk_size(0) == 0
+    assert normalize_chunk_size(150) == 200
+    assert normalize_chunk_size(5000) == 4000
+    warnings = validate_criteria_payload({
+        "zuschlag": [{"name": "A", "weight_pct": 30}, {"name": "B", "weight_pct": 30}],
+    })
+    assert any("100" in w for w in warnings)
+
+
+def test_evaluation_config_roundtrip():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import EvaluationProjectConfig, get_evaluation_config, save_evaluation_config
+    SQLModel.metadata.create_all(engine)
+
+    save_evaluation_config("p1", price_years=[2026, 2027], vergabe_notes="Test", rag_chunks_per_role=14)
+    cfg = get_evaluation_config("p1")
+    assert cfg["price_years"] == [2026, 2027]
+    assert cfg["rag_chunks_per_role"] == 14
+
+    save_evaluation_config("p1", vorgaben_ki_provider="ollama", vorgaben_ki_model="llama3.3:70b")
+    cfg2 = get_evaluation_config("p1")
+    assert cfg2["vorgaben_ki_provider"] == "ollama"
+    assert cfg2["vorgaben_ki_model"] == "llama3.3:70b"
+
+    from unittest.mock import patch
+    from src.m15_evaluation import resolve_vorgaben_ki
+
+    p, m = resolve_vorgaben_ki("p1", "", "", global_provider="openai", global_model="gpt-4o-mini")
+    assert p == "ollama"
+    assert m == "llama3.3:70b"
+    # resolve_visual_llm() prueft have_key(provider) - ohne konfigurierten Key wuerde die
+    # explizite Picker-Wahl "openai" sonst still auf den Projekt-Default zurueckfallen und
+    # den eigentlichen Test (Picker > Projekt-Default) unbemerkt umgehen.
+    with patch("src.m16_idea_visual.have_key", return_value=True):
+        p2, m2 = resolve_vorgaben_ki("p1", "openai", "gpt-4o", global_provider="openai", global_model="gpt-4o-mini")
+    assert p2 == "openai"
+    assert m2 == "gpt-4o"
+
+    from src.m15_evaluation import resolve_bewertung_ki
+
+    save_evaluation_config("p1", bewertung_ki_provider="ollama", bewertung_ki_model="qwen3.8:27b")
+    cfg3 = get_evaluation_config("p1")
+    assert cfg3["bewertung_ki_provider"] == "ollama"
+    assert cfg3["bewertung_ki_model"] == "qwen3.8:27b"
+    p3, m3 = resolve_bewertung_ki("p1", "", "", global_provider="openai", global_model="gpt-4o-mini")
+    assert p3 == "ollama"
+    assert m3 == "qwen3.8:27b"
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_criteria_preview_cache():
+    from src.m15_evaluation import load_criteria_preview, store_criteria_preview
+
+    pid = store_criteria_preview("TEST", {"payload": {"eignung": []}, "error": None})
+    row = load_criteria_preview(pid, "TEST")
+    assert row is not None
+    assert row["payload"] == {"eignung": []}
+    assert load_criteria_preview(pid, "OTHER") is None
+
+
+def test_retrieve_tender_context_multi_fair_pass_budget():
+    from unittest.mock import patch
+
+    from src.m15_evaluation import _retrieve_tender_context_multi
+
+    role_queries = [
+        (("eignungskriterien",), "eignung"),
+        (("zuschlagskriterien",), "zuschlag"),
+        (("bewertungsvorgaben",), "bewertung"),
+    ]
+    pass_labels = iter(["eignung", "zuschlag", "bewertung"])
+
+    def fake_rag(query, **kwargs):
+        label = next(pass_labels)
+        limit = kwargs.get("limit", 12)
+        return {
+            "documents": [
+                {"chunk_id": f"{label}-{i}", "text": f"{label} chunk {i}", "filename": "doc.pdf"}
+                for i in range(limit)
+            ]
+        }
+
+    with patch("src.m15_evaluation.get_tender_document_ids", return_value=[1]):
+        with patch("src.m15_evaluation.retrieve_relevant_chunks_hybrid", side_effect=fake_rag):
+            ctx = _retrieve_tender_context_multi("p1", role_queries, limit_per_role=4)
+
+    assert "eignung chunk 0" in ctx
+    assert "zuschlag chunk 0" in ctx
+    assert "bewertung chunk 0" in ctx
+    assert ctx.index("eignung chunk 0") < ctx.index("zuschlag chunk 0")
+    assert ctx.index("zuschlag chunk 0") < ctx.index("bewertung chunk 0")
+
+
+def test_criteria_preview_meta():
+    from src.m15_evaluation import criteria_apply_requires_confirm, criteria_preview_meta
+
+    data = {
+        "eignung": [],
+        "zuschlag": [{"name": "A", "weight_pct": 30, "description": "x"}, {"name": "B", "weight_pct": 30}],
+    }
+    meta = criteria_preview_meta(data)
+    assert meta["missing_eignung"] is True
+    assert meta["weight_ok"] is False
+    assert meta["requires_confirm"] is True
+    assert criteria_apply_requires_confirm(data) is True
+
+    ok = {
+        "eignung": [{"name": "K1", "description": "ok"}],
+        "zuschlag": [{"name": "Z", "weight_pct": 100, "description": "z"}],
+    }
+    meta2 = criteria_preview_meta(ok)
+    assert meta2["weight_ok"] is True
+    assert meta2["requires_confirm"] is False
+
+
+def test_parse_expected_child_count_and_completeness():
+    from src.m15_evaluation import (
+        criteria_child_completeness,
+        criteria_completeness_warnings,
+        criteria_preview_meta,
+        parse_expected_child_count,
+    )
+
+    assert parse_expected_child_count("18 Einzelanforderungen im Kapitel 7") == 18
+    assert parse_expected_child_count("F01-001 bis F01-008") == 8
+    assert parse_expected_child_count("F-01-001 bis F-01-008") == 8
+    assert parse_expected_child_count("Kein Hinweis") is None
+
+    payload = {
+        "zuschlag": [{
+            "name": "F-01 Funktionalität",
+            "description": "18 Einzelanforderungen",
+            "children": [{"name": "F01-001"}, {"name": "F01-002"}],
+        }],
+    }
+    comp = criteria_child_completeness(payload)
+    assert len(comp) == 1
+    assert comp[0]["found"] == 2
+    assert comp[0]["expected"] == 18
+    assert comp[0]["complete"] is False
+    warns = criteria_completeness_warnings(comp)
+    assert "2 von 18" in warns[0]
+    meta = criteria_preview_meta(payload)
+    assert meta["completeness"][0]["expected"] == 18
+
+
+def test_ensure_criteria_refs_and_import_referenz():
+    from src.m15_evaluation import (
+        _ensure_criteria_refs,
+        format_requirement_ref_display,
+        import_criteria_payload,
+        list_criteria,
+    )
+
+    payload = {
+        "eignung": [{"name": "Wirtschaftliche Leistungsfähigkeit", "description": "K.O."}],
+        "zuschlag": [{
+            "name": "Funktionale Anforderungen",
+            "description": "Füllen Sie das Anforderungsblatt F-01 aus.",
+            "weight_pct": 20,
+            "children": [{"name": "F01-001", "description": "Projektverständnis"}],
+        }],
+    }
+    hints = _ensure_criteria_refs(payload)
+    assert payload["eignung"][0]["requirement_ref"] == "EK1"
+    assert payload["zuschlag"][0]["requirement_ref"] == "F01"
+    assert payload["zuschlag"][0]["children"][0]["requirement_ref"] == "F01-001"
+    assert any("EK1" in h for h in hints)
+    assert format_requirement_ref_display("F01") == "F-01"
+    assert format_requirement_ref_display("EK2") == "EK2"
+    assert format_requirement_ref_display("F01-001") == "F-01-001"
+
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+    SQLModel.metadata.create_all(engine)
+    ev.migrate_evaluation_db()
+
+    stats = import_criteria_payload("p-ref", payload, skip_existing=False)
+    assert stats["created"] >= 3
+    rows = list_criteria("p-ref")
+    parent = next(c for c in rows if c.name == "Funktionale Anforderungen")
+    child = next(c for c in rows if c.name == "F01-001")
+    ek = next(c for c in rows if c.name == "Wirtschaftliche Leistungsfähigkeit")
+    assert parent.referenz == "F01"
+    assert child.referenz == "F01-001"
+    assert ek.referenz == "EK1"
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_ref_enrichment_query_and_child_refs():
+    from src.m15_evaluation import (
+        _merge_criteria_children,
+        _ref_enrichment_query,
+        _stamp_child_requirement_refs,
+    )
+
+    q = _ref_enrichment_query("F02", "UI / UX")
+    assert "F02" in q
+    assert "F-02" in q
+    assert "F02-001" in q
+
+    children = [{"name": "F01-001", "description": "test"}]
+    _stamp_child_requirement_refs(children)
+    assert children[0]["requirement_ref"] == "F01-001"
+
+    merged = _merge_criteria_children(
+        [], [{"name": "T01-003", "description": "x"}], kind="zuschlag",
+    )
+    assert merged[0]["requirement_ref"] == "T01-003"
+
+
+def test_enrichment_ref_diag():
+    from src.m15_evaluation import _enrichment_ref_diag
+
+    ctx = "Anforderung F01-001 Text\nF01-004 weiter\n"
+    d = _enrichment_ref_diag(ctx, "F01")
+    assert "2 Zeilennummer" in d
+    assert "F01-001" in d
+
+    empty = _enrichment_ref_diag("kein blatt", "T01")
+    assert "T01-001 nicht" in empty
+
+
+def test_ki_busy_hint():
+    from unittest.mock import patch
+
+    from src.m15_evaluation import ki_busy_hint
+
+    with patch("src.m08_llm.ollama_runtime_status", return_value={"message": "Ollama ist frei."}):
+        with patch("src.m16_idea_jobs.idea_ki_queue_size", return_value=0):
+            h = ki_busy_hint("openai", "gpt-4o")
+    assert "KI läuft" in h["message"]
+
+    with patch("src.m08_llm.have_key", return_value=True), patch(
+        "src.m08_llm.ollama_runtime_status",
+        return_value={"message": "Modellwechsel nötig."},
+    ), patch("src.m16_idea_jobs.idea_ki_queue_size", return_value=2):
+        h2 = ki_busy_hint("ollama", "llama3.3:70b")
+    assert "Modellwechsel" in h2["message"]
+    assert "Warteschlange" in h2["message"]
+
+
+def test_score_justification_required():
+    from src.m15_evaluation import (
+        Criterion,
+        score_requires_justification,
+        validate_score_justification,
+    )
+
+    eign = Criterion(id=1, project_key="p", kind="eignung", name="E1", scale_max=1)
+    assert score_requires_justification(eign, 0) is True
+    assert score_requires_justification(eign, 1) is False
+    zus = Criterion(id=2, project_key="p", kind="zuschlag", name="Z1", scale_max=10)
+    assert score_requires_justification(zus, 8) is True
+    assert score_requires_justification(zus, 10) is False
+    try:
+        validate_score_justification(zus, 7, "")
+    except ValueError as exc:
+        assert "Begründung" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_user_score_rejects_blind_ai_copy():
+    from types import SimpleNamespace
+    from src.m15_evaluation import validate_user_score_not_blind_ai_copy
+
+    crit = SimpleNamespace(kind="zuschlag", scale_max=10, name="F01-001", auto_price=False)
+    ai_text = "Positiv: gut.\n\nAbzüge (2 P. unter Max. 10): fehlt X."
+    try:
+        validate_user_score_not_blind_ai_copy(
+            1, 2, crit, 8.0, ai_text, ai_reference_justification=ai_text,
+        )
+    except ValueError as exc:
+        assert "identisch mit dem KI-Vorschlag" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+    validate_user_score_not_blind_ai_copy(
+        1, 2, crit, 8.0, ai_text + " Ergänzt durch Bewerter.",
+        ai_reference_justification=ai_text,
+    )
+    validate_user_score_not_blind_ai_copy(
+        1, 2, crit, 10.0, ai_text, ai_reference_justification=ai_text,
+    )
+
+
+def test_sync_price_criterion_scores_reciprocal_gate():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-price"
+    with _test_session(engine) as session:
+        b1 = Bidder(project_key=project_key, name="Günstig")
+        b2 = Bidder(project_key=project_key, name="Teuer")
+        session.add(b1)
+        session.add(b2)
+        session.commit()
+        session.refresh(b1)
+        session.refresh(b2)
+        crit = Criterion(
+            project_key=project_key, kind="zuschlag", name="Preis", weight_pct=30,
+            scale_max=10, auto_price=True,
+        )
+        session.add(crit)
+        session.add(PriceItem(bidder_id=b1.id, category="einmalig", leistungsbeschreibung="A", anzahl=1, kosten_pro_einheit=100))
+        session.commit()
+        session.refresh(crit)
+        b1_id, b2_id, crit_id = b1.id, b2.id, crit.id
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import get_score, sync_price_criterion_scores, price_offers_status
+
+    status = price_offers_status(project_key)
+    assert status["ready"] is False
+    result = sync_price_criterion_scores(project_key)
+    assert result["synced"] is False
+
+    with _test_session(engine) as session:
+        session.add(PriceItem(bidder_id=b2_id, category="einmalig", leistungsbeschreibung="B", anzahl=1, kosten_pro_einheit=200))
+        session.commit()
+
+    result = sync_price_criterion_scores(project_key)
+    assert result["synced"] is True
+    cheap_score = get_score(b1_id, crit_id, "system")
+    dear_score = get_score(b2_id, crit_id, "system")
+    assert cheap_score and cheap_score.value == 10.0
+    assert dear_score and dear_score.value == 5.0
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_build_evaluation_export_includes_justifications():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-export"
+    with _test_session(engine) as session:
+        b = Bidder(project_key=project_key, name="Bieter A")
+        session.add(b)
+        session.commit()
+        session.refresh(b)
+        crit = Criterion(project_key=project_key, kind="zuschlag", name="Qualität", scale_max=10, weight_pct=50)
+        session.add(crit)
+        session.commit()
+        session.refresh(crit)
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=crit.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=7.0,
+                justification="Referenz unvollständig",
+            )
+        )
+        session.commit()
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+    import src.m14_auth as auth14
+
+    old_engine = db.engine
+    old_auth_engine = auth14.engine
+    db.engine = engine
+    ev.engine = engine
+    auth14.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import build_evaluation_export_sheets
+
+    sheets = build_evaluation_export_sheets(project_key, project_title="Test", may_see_evaluators=True)
+    headers, rows = sheets["Bewertungen"]
+    assert "KI-Begründung" in headers
+    assert any("Begründung:" in h for h in headers)
+    assert rows and "Referenz unvollständig" in rows[0]
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    auth14.engine = old_auth_engine
+
+
+def test_build_evaluation_export_context_filtered():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-export-filter"
+    with _test_session(engine) as session:
+        b = Bidder(project_key=project_key, name="Bieter A")
+        b2 = Bidder(project_key=project_key, name="Bieter B")
+        session.add(b)
+        session.add(b2)
+        session.commit()
+        session.refresh(b)
+        session.refresh(b2)
+        crit = Criterion(project_key=project_key, kind="zuschlag", name="Qualität", scale_max=10, weight_pct=50)
+        session.add(crit)
+        session.commit()
+        session.refresh(crit)
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=crit.id,
+                source_key="ai",
+                evaluator_user_id=None,
+                value=6.0,
+                justification="KI sagt mittel",
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=crit.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=7.0,
+                justification="Person sagt gut",
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b2.id,
+                criterion_id=crit.id,
+                source_key="ai",
+                evaluator_user_id=None,
+                value=3.0,
+                justification="Andere Bieter KI",
+            )
+        )
+        session.commit()
+        bidder_a_id = b.id
+        bidder_b_id = b2.id
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import (
+        build_evaluation_export_context,
+        build_evaluation_docx_bytes,
+        context_to_tabular_sheets,
+        export_source_label,
+    )
+
+    ctx_ai = build_evaluation_export_context(
+        project_key, bidder_a_id, "ai", project_title="Test", may_see_evaluators=True
+    )
+    assert ctx_ai.bidder_name == "Bieter A"
+    assert ctx_ai.source_label == "KI-Vorschlag"
+    assert len(ctx_ai.top_rows) == 1
+    assert ctx_ai.top_rows[0].value == 6.0
+    assert ctx_ai.top_rows[0].justification == "KI sagt mittel"
+
+    ctx_user = build_evaluation_export_context(
+        project_key, bidder_a_id, f"user:{evaluator_id}", project_title="Test", may_see_evaluators=True
+    )
+    assert ctx_user.top_rows[0].value == 7.0
+    assert ctx_user.top_rows[0].justification == "Person sagt gut"
+
+    sheets = context_to_tabular_sheets(ctx_ai)
+    headers, rows = sheets["Bewertungen"]
+    assert rows and rows[0][headers.index("Wert")] == 6.0
+    assert "Bieter A" in rows[0]
+
+    docx = build_evaluation_docx_bytes(ctx_ai)
+    assert docx[:2] == b"PK"
+
+    assert export_source_label("ai") == "KI-Vorschlag"
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_build_evaluation_export_context_permission():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-export-perm"
+    with _test_session(engine) as session:
+        b = Bidder(project_key=project_key, name="X")
+        session.add(b)
+        session.commit()
+        session.refresh(b)
+        bidder_id = b.id
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import build_evaluation_export_context
+
+    try:
+        build_evaluation_export_context(
+            project_key, bidder_id, f"user:{evaluator_id}", may_see_evaluators=False
+        )
+        assert False, "expected PermissionError"
+    except PermissionError:
+        pass
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_list_export_combinations_and_zip():
+    import io
+    import zipfile
+
+    engine, evaluator_id = _setup_db()
+    project_key = "p-export-zip"
+    with _test_session(engine) as session:
+        b1 = Bidder(project_key=project_key, name="Alpha")
+        b2 = Bidder(project_key=project_key, name="Beta")
+        session.add(b1)
+        session.add(b2)
+        session.commit()
+        session.refresh(b1)
+        session.refresh(b2)
+        crit = Criterion(project_key=project_key, kind="zuschlag", name="Q", scale_max=10)
+        session.add(crit)
+        session.commit()
+        session.refresh(crit)
+        session.add(
+            Score(
+                bidder_id=b1.id,
+                criterion_id=crit.id,
+                source_key="ai",
+                value=5.0,
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b1.id,
+                criterion_id=crit.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=6.0,
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b2.id,
+                criterion_id=crit.id,
+                source_key="ai",
+                value=4.0,
+            )
+        )
+        session.commit()
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import build_evaluation_export_zip_bytes, list_export_combinations
+
+    combos = list_export_combinations(project_key, may_see_evaluators=True)
+    assert (b1.id, "ai") in combos
+    assert (b1.id, f"user:{evaluator_id}") in combos
+    assert (b2.id, "ai") in combos
+    assert len(combos) == 3
+
+    combos_hidden = list_export_combinations(project_key, may_see_evaluators=False)
+    assert all(sk == "ai" for _, sk in combos_hidden)
+    assert len(combos_hidden) == 2
+
+    blob = build_evaluation_export_zip_bytes(
+        project_key,
+        "xlsx",
+        project_title="ZipTest",
+        may_see_evaluators=True,
+    )
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        names = zf.namelist()
+    assert len(names) == 3
+    assert all(n.endswith(".xlsx") for n in names)
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_bidder_doc_subtypes_multi():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+    from src.m03_db import Document
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    project_key = "p-bid-sub"
+    with _test_session(engine) as session:
+        bidder = Bidder(project_key=project_key, name="Merge")
+        doc = Document(
+            filename="mega-merge.pdf",
+            sha256_hash="mergehash9",
+            classification="Angebot (Bieter)",
+            file_path="/tmp/m.pdf",
+            doc_subtype="Grobkonzept/Lösungskonzept",
+        )
+        session.add(bidder)
+        session.add(doc)
+        session.commit()
+        session.refresh(bidder)
+        session.refresh(doc)
+        bidder_id, doc_id = bidder.id, doc.id
+
+    from src.m15_evaluation import (
+        bidder_doc_ids_for_criterion,
+        get_bidder_doc_subtypes,
+        link_document_to_bidder,
+        set_bidder_doc_subtypes,
+    )
+
+    link_document_to_bidder(bidder_id, doc_id)
+    # Legacy: Document.doc_subtype bis Junction gesetzt wird
+    assert get_bidder_doc_subtypes(bidder_id, doc_id) == ["Grobkonzept/Lösungskonzept"]
+
+    set_bidder_doc_subtypes(
+        bidder_id,
+        doc_id,
+        ["Preisblatt", "Grobkonzept/Lösungskonzept", "Proof of Concept", "Management Summary"],
+    )
+    assert set(get_bidder_doc_subtypes(bidder_id, doc_id)) == {
+        "Preisblatt",
+        "Grobkonzept/Lösungskonzept",
+        "Proof of Concept",
+        "Management Summary",
+    }
+
+    with _test_session(engine) as session:
+        price_crit = Criterion(
+            project_key=project_key, kind="zuschlag", name="Preis", auto_price=True,
+        )
+        z_crit = Criterion(project_key=project_key, kind="zuschlag", name="F-01")
+        session.add(price_crit)
+        session.add(z_crit)
+        session.commit()
+        session.refresh(price_crit)
+        session.refresh(z_crit)
+
+    assert bidder_doc_ids_for_criterion(bidder_id, price_crit) == [doc_id]
+    assert bidder_doc_ids_for_criterion(bidder_id, z_crit) == [doc_id]
+
+    set_bidder_doc_subtypes(bidder_id, doc_id, ["Grobkonzept/Lösungskonzept"])
+    assert bidder_doc_ids_for_criterion(bidder_id, price_crit) == [doc_id]
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_criteria_manage_confirm_after_scores():
+    engine, evaluator_id = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    project_key = "p-gate"
+    with _test_session(engine) as session:
+        b = Bidder(project_key=project_key, name="A")
+        session.add(b)
+        session.commit()
+        session.refresh(b)
+        crit = Criterion(project_key=project_key, kind="zuschlag", name="Z1", weight_pct=50, scale_max=10)
+        session.add(crit)
+        session.commit()
+        session.refresh(crit)
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=crit.id,
+                source_key=f"user:{evaluator_id}",
+                evaluator_user_id=evaluator_id,
+                value=7.0,
+            )
+        )
+        session.commit()
+        crit_id = crit.id
+
+    from src.m15_evaluation import (
+        criteria_editor_payload,
+        save_criteria_editor_payload,
+        validate_criteria_manage_save,
+    )
+
+    payload = criteria_editor_payload(project_key)
+    payload["zuschlag"][0]["weight_pct"] = 40
+
+    try:
+        validate_criteria_manage_save(project_key, payload, [], confirm_active_evaluation=False)
+    except ValueError as exc:
+        assert "Rekursrisiko" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+    save_criteria_editor_payload(
+        project_key, payload, confirm_active_evaluation=True,
+    )
+
+    again = criteria_editor_payload(project_key)
+    assert again["zuschlag"][0]["weight_pct"] == 40
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_evaluator_score_discrepancies():
+    engine, evaluator_id = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    project_key = "p-var"
+    with _test_session(engine) as session:
+        user2 = AppUser(username="ev2", password_hash="x", app_role_key="projektleiter_intern")
+        session.add(user2)
+        session.commit()
+        session.refresh(user2)
+        b = Bidder(project_key=project_key, name="Bieter")
+        z = Criterion(project_key=project_key, kind="zuschlag", name="Qualität", scale_max=10, weight_pct=100)
+        session.add(b)
+        session.add(z)
+        session.commit()
+        session.refresh(b)
+        session.refresh(z)
+        session.add(
+            Score(
+                bidder_id=b.id, criterion_id=z.id,
+                source_key=f"user:{evaluator_id}", evaluator_user_id=evaluator_id, value=2.0,
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b.id, criterion_id=z.id,
+                source_key=f"user:{user2.id}", evaluator_user_id=user2.id, value=9.0,
+            )
+        )
+        session.commit()
+
+    from src.m15_evaluation import list_evaluator_score_discrepancies
+
+    rows = list_evaluator_score_discrepancies(project_key)
+    assert len(rows) == 1
+    assert rows[0]["spread"] == 7.0
+    assert rows[0]["min_value"] == 2.0
+    assert rows[0]["max_value"] == 9.0
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_flatten_eignung_payload():
+    from src.m15_evaluation import _flatten_eignung_payload
+
+    payload = {
+        "eignung": [
+            {
+                "name": "EK1",
+                "description": "Text",
+                "scale_max": 10,
+                "children": [{"name": "EK1-01", "description": "x"}],
+            },
+        ],
+        "zuschlag": [],
+    }
+    hints = _flatten_eignung_payload(payload)
+    assert hints == []
+    assert payload["eignung"][0]["scale_max"] == 1
+    assert len(payload["eignung"][0]["children"]) == 1
+    assert payload["eignung"][0]["children"][0]["scale_max"] == 1
+
+
+def test_child_belongs_to_parent_ref():
+    from src.m15_evaluation import _child_belongs_to_parent_ref
+
+    assert _child_belongs_to_parent_ref("F01-001", "F01")
+    assert _child_belongs_to_parent_ref("F01-004", "F-01")
+    assert not _child_belongs_to_parent_ref("F01-001", "S01")
+    assert not _child_belongs_to_parent_ref("F01-001", "R01")
+
+
+def test_child_grounded_and_line_structure():
+    from src.m15_evaluation import (
+        _child_grounded_in_context,
+        _extract_line_numbers_from_text,
+        _zuschlag_has_line_structure_evidence,
+    )
+
+    ctx = (
+        "F01-001 Bitte beschreiben Sie Ihr Verständnis des Projekts.\n"
+        "F01-002 Pushnachrichten Kursausfälle müssen unterstützt werden."
+    )
+    assert len(_extract_line_numbers_from_text(ctx, "F01")) >= 2
+    assert _zuschlag_has_line_structure_evidence([], ctx, "F01")
+
+    good = {"name": "F01-001", "description": "Bitte beschreiben Sie Ihr Verständnis des Projekts"}
+    bad = {"name": "F01-001", "description": "Bitte beschreiben Sie Ihr Verständnis des Projekts"}
+    assert _child_grounded_in_context(good, ctx, "F01", "Einleitung F-01")
+    assert not _child_grounded_in_context(bad, ctx, "S01", "SLA Vorschlag")
+
+
+def test_criterion_ref_prefix():
+    from src.m15_evaluation import _criterion_ref_prefix, _normalize_requirement_ref
+
+    assert _criterion_ref_prefix("F-01") == "F01"
+    assert _criterion_ref_prefix("F01") == "F01"
+    assert _criterion_ref_prefix("T-10") == "T10"
+    assert _criterion_ref_prefix("Preis") is None
+    assert _normalize_requirement_ref("EK2") == "EK2"
+    assert _normalize_requirement_ref("W-01") == "W01"
+
+
+def test_missing_line_suffix_detection():
+    from src.m15_evaluation import _missing_line_suffixes
+
+    children = [
+        {"name": "T01-001", "description": "a"},
+        {"name": "T01-002", "description": "b"},
+        {"name": "T01-004", "description": "d"},
+        {"name": "T01-010", "description": "j"},
+    ]
+    ctx = (
+        "T01-001 Erste Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-002 Zweite Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-003 Dritte Anforderung fehlt in der KI-Liste aber steht im Kontext.\n"
+        "T01-004 Vierte Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-010 Zehnte Anforderung mit ausreichend langem Text für den Test."
+    )
+    missing = _missing_line_suffixes(children, "T01", ctx, {"description": ""})
+    assert missing == [3]
+
+
+def test_extract_line_block_from_context():
+    from src.m15_evaluation import _extract_line_block_from_context
+
+    ctx = (
+        "T01-002 Zweite Anforderung mit ausreichend langem Text.\n"
+        "T01-003 Dritte Anforderung: Der Lieferant muss X nachweisen und Y erfüllen.\n"
+        "T01-004 Vierte Anforderung mit ausreichend langem Text."
+    )
+    block = _extract_line_block_from_context(ctx, "T01-003", "T01-004")
+    assert block is not None
+    assert "Dritte Anforderung" in block
+    assert "T01-004" not in block
+
+
+def test_fill_missing_line_children():
+    from src.m15_evaluation import _fill_missing_line_children
+
+    ctx = (
+        "T01-001 Erste Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-002 Zweite Anforderung mit ausreichend langem Text für den Test.\n"
+        "T01-003 Dritte Anforderung: Der Lieferant muss X nachweisen und Y erfüllen.\n"
+        "T01-004 Vierte Anforderung mit ausreichend langem Text für den Test."
+    )
+    entry = {
+        "name": "Technische Anforderungen",
+        "requirement_ref": "T01",
+        "description": "",
+        "children": [
+            {"name": "T01-001", "description": "Erste", "scale_max": 10},
+            {"name": "T01-002", "description": "Zweite", "scale_max": 10},
+            {"name": "T01-004", "description": "Vierte", "scale_max": 10},
+        ],
+    }
+    filled = _fill_missing_line_children(entry, ctx, "T01")
+    assert filled == 1
+    names = [c["name"] for c in entry["children"]]
+    assert names == ["T01-001", "T01-002", "T01-003", "T01-004"]
+    t03 = next(c for c in entry["children"] if c["name"] == "T01-003")
+    assert "Dritte Anforderung" in t03["description"]
+    assert t03.get("requirement_ref") == "T01-003"
+
+
+def test_suggestion_justification_requires_deductions():
+    from types import SimpleNamespace
+    from src.m15_evaluation import (
+        _compose_suggestion_justification,
+        _suggestion_deduction_grounding_issues,
+        _suggestion_missing_deduction_rationale,
+    )
+
+    crit = SimpleNamespace(kind="zuschlag", scale_max=10)
+    parsed = {
+        "strengths": "Gutes Verständnis des Projekts.",
+        "deductions": "Innovationsaspekte und Erfolgsfaktoren nicht konkret benannt.",
+        "value": 8,
+    }
+    text = _compose_suggestion_justification(crit, 8.0, parsed)
+    assert "Positiv:" in text
+    assert "Abzüge (2 P. unter Max. 10):" in text
+    assert not _suggestion_missing_deduction_rationale(crit, 8.0, text)
+
+    praise_only = "Das Angebot zeigt ein gutes Verständnis des Projekts."
+    assert _suggestion_missing_deduction_rationale(crit, 8.0, praise_only)
+
+    positiv = (
+        "Positiv: asynchrone Verarbeitung über Job-Queue mit Retry-Logik.\n\n"
+        "Abzüge (2 P. unter Max. 10): Fehlende Gegenmaßnahmen und Herausforderungen."
+    )
+    offer = "Zentrale Herausforderung ist die Integration; Job-Queue mit Retry-Logik."
+    issues = _suggestion_deduction_grounding_issues(positiv, offer, "")
+    assert any("herausforderung" in i.lower() or "job-queue" in i.lower() for i in issues)
+
+
+def test_extract_ek_line_numbers():
+    from src.m15_evaluation import _extract_line_numbers_from_text, _normalize_line_ref
+
+    ctx = "EK2-01 Personalressourcen\nEK2-02 Kapazität\nEK2-03 Entwickler"
+    assert _normalize_line_ref("EK2-06") == "EK2-06"
+    found = _extract_line_numbers_from_text(ctx, "EK2")
+    assert found >= {"EK2-01", "EK2-02", "EK2-03"}
+
+
+def test_resolve_requirement_search():
+    from src.m15_evaluation import _resolve_requirement_search
+
+    ref, term = _resolve_requirement_search({
+        "name": "Funktionale Anforderungen",
+        "requirement_ref": "F01",
+        "description": "Füllen Sie das Anforderungsblatt aus.",
+    })
+    assert ref == "F01"
+    assert term == "F01"
+
+    ref2, term2 = _resolve_requirement_search({
+        "name": "Preis",
+        "description": "Datenblatt Preis W-01 ausfüllen",
+    })
+    assert ref2 == "W01"
+    assert term2 == "W01"
+
+    ref3, term3 = _resolve_requirement_search({
+        "name": "Projektorganisation und -planung",
+        "description": "Beschreiben Sie Ihr Projektvorgehen",
+    })
+    assert ref3 is None
+    assert term3 == "Projektorganisation und -planung"
+
+
+def test_retrieve_tender_context_respects_max_format_chunks():
+    from unittest.mock import patch
+
+    from src.m15_evaluation import _retrieve_tender_context_multi
+
+    role_queries = [(("zuschlagskriterien",), "zk")]
+
+    def fake_rag(query, **kwargs):
+        limit = kwargs.get("limit", 12)
+        return {
+            "documents": [
+                {"chunk_id": i, "text": f"chunk {i}", "filename": "doc.pdf"}
+                for i in range(limit)
+            ]
+        }
+
+    with patch("src.m15_evaluation.get_tender_document_ids", return_value=[1]):
+        with patch("src.m15_evaluation.retrieve_relevant_chunks_hybrid", side_effect=fake_rag):
+            ctx = _retrieve_tender_context_multi(
+                "p1", role_queries, limit_per_role=12, max_format_chunks=36,
+            )
+    assert "chunk 0" in ctx
+    assert "chunk 11" in ctx
+
+
+def test_evaluation_config_extraction_roundtrip():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import get_evaluation_config, save_evaluation_config
+
+    save_evaluation_config("p-ext", rag_chunks_extraction=40)
+    cfg = get_evaluation_config("p-ext")
+    assert cfg["rag_chunks_extraction"] == 40
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_criteria_editor_payload_and_save():
+    engine, _ = _setup_db()
+    project_key = "p-crit-edit"
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    old_get = ev.get_session
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import (
+        criteria_editor_payload,
+        create_criterion,
+        list_criteria,
+        save_criteria_editor_payload,
+    )
+
+    parent = create_criterion(
+        project_key, "zuschlag", "F-01", weight_pct=20, scale_max=10, description="Intro"
+    )
+    create_criterion(
+        project_key, "zuschlag", "F01-001", scale_max=10,
+        parent_id=parent.id, description="Alt",
+    )
+
+    payload = criteria_editor_payload(project_key)
+    assert len(payload["zuschlag"]) == 1
+    assert payload["zuschlag"][0]["name"] == "F-01"
+    assert len(payload["zuschlag"][0]["children"]) == 1
+    child_id = payload["zuschlag"][0]["children"][0]["id"]
+    parent_id = payload["zuschlag"][0]["id"]
+
+    payload["zuschlag"][0]["description"] = "Neue Intro"
+    payload["zuschlag"][0]["children"][0]["description"] = "Neuer Text"
+    payload["zuschlag"][0]["children"].append({
+        "name": "F01-002",
+        "description": "Zweite Frage",
+        "scale_max": 10,
+    })
+
+    stats = save_criteria_editor_payload(project_key, payload)
+    assert stats["updated"] >= 2
+    assert stats["created"] >= 1
+
+    again = criteria_editor_payload(project_key)
+    z = again["zuschlag"][0]
+    assert z["description"] == "Neue Intro"
+    assert len(z["children"]) == 2
+    names = {c["name"] for c in z["children"]}
+    assert names == {"F01-001", "F01-002"}
+
+    save_criteria_editor_payload(project_key, again, deleted_ids=[child_id])
+    remaining = list_criteria(project_key)
+    child_names = [c.name for c in remaining if c.parent_id == parent_id]
+    assert "F01-001" not in child_names
+    assert "F01-002" in child_names
+
+    db.engine = old_engine
+    ev.engine = old_engine
+    ev.get_session = old_get
+
+
+def test_compute_price_reciprocal():
+    from src.m15_evaluation import compute_price_criterion_value
+
+    assert compute_price_criterion_value(10, 120_000, 120_000) == 10.0
+    assert compute_price_criterion_value(10, 120_000, 150_000) == 8.0
+    assert compute_price_criterion_value(10, 120_000, 200_000) == 6.0
+
+
+def test_import_criteria_dedup_by_referenz():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+    ev.migrate_evaluation_db()
+
+    parent = create_criterion("p-dedup", "zuschlag", "F-01 Bereich", referenz="F01")
+    create_criterion(
+        "p-dedup", "zuschlag", "Altes Label F01-001",
+        referenz="F01-001", parent_id=parent.id,
+    )
+    stats = import_criteria_payload(
+        "p-dedup",
+        {
+            "zuschlag": [{
+                "name": "F-01 Bereich neu formuliert",
+                "requirement_ref": "F01",
+                "children": [{
+                    "name": "Neue Formulierung Zeile 1",
+                    "requirement_ref": "F01-001",
+                    "description": "Text",
+                }],
+            }]
+        },
+    )
+    assert stats["skipped"] >= 2
+    assert stats["created"] == 0
+    names = [c.name for c in list_criteria("p-dedup")]
+    assert names.count("Neue Formulierung Zeile 1") == 0
+    assert "Altes Label F01-001" in names
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_ref_prefixes_and_scale_bands_config():
+    from src.m15_evaluation import (
+        DEFAULT_REF_PREFIXES,
+        format_ref_prefixes_prompt,
+        format_scale_bands_prompt,
+        get_evaluation_config,
+        normalize_ref_prefixes,
+        normalize_scale_bands,
+        save_evaluation_config,
+        _normalize_requirement_ref,
+    )
+
+    assert normalize_ref_prefixes(["a", "B", "A"]) == ["A", "B"]
+    assert normalize_ref_prefixes('["A", "B"]') == ["A", "B"]
+    assert _normalize_requirement_ref("A01", ["A", "B"]) == "A01"
+    assert _normalize_requirement_ref("F01", DEFAULT_REF_PREFIXES) == "F01"
+    bands = normalize_scale_bands([
+        {"min": 0, "max": 0, "label": "nein"},
+        {"min": 1, "max": 3, "label": "teilweise"},
+    ])
+    prompt = format_scale_bands_prompt(bands, 3)
+    assert "0:" in prompt
+    assert "1–3:" in prompt
+    assert "Mehrbuchstabig" in format_ref_prefixes_prompt(["EK", "F"])
+
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+    ev.migrate_evaluation_db()
+    save_evaluation_config("p-cfg26", ref_prefixes=["A", "B"], scale_bands=bands)
+    cfg = get_evaluation_config("p-cfg26")
+    assert cfg["ref_prefixes"] == ["A", "B"]
+    assert len(cfg["scale_bands"]) == 2
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_chunk_meta_prefix_with_location():
+    from src.m09_docs import chunk_meta_prefix
+
+    p = chunk_meta_prefix(
+        "Angebot (Bieter)", "konzept.pdf", "Grobkonzept",
+        section_path="4.2 Architektur", page_number=12,
+    )
+    assert "Kap. 4.2 Architektur" in p
+    assert "S. 12" in p
+    assert "konzept.pdf" in p
+
+
+def test_section_neighbor_chunks_cap():
+    from src.m15_evaluation import SECTION_NEIGHBOR_CHUNK_CAP, _section_neighbor_chunks
+
+    base = [{
+        "chunk_id": 1,
+        "document_id": 5,
+        "section_path": "4.2",
+        "filename": "x.pdf",
+        "text": "a",
+    }]
+    extras = _section_neighbor_chunks(base, cap=SECTION_NEIGHBOR_CHUNK_CAP)
+    assert len(extras) <= SECTION_NEIGHBOR_CHUNK_CAP
+
+
+def test_child_ai_score_summary():
+    from src.m15_evaluation import Criterion, Score, child_ai_score_summary
+
+    ch1 = Criterion(id=10, project_key="p", kind="zuschlag", name="T01-001")
+    ch2 = Criterion(id=11, project_key="p", kind="zuschlag", name="T01-002")
+    ch3 = Criterion(id=12, project_key="p", kind="zuschlag", name="T01-003")
+    scores_by_cell = {
+        (5, 10): [Score(bidder_id=5, criterion_id=10, source_key="ai", value=10.0)],
+        (5, 11): [Score(bidder_id=5, criterion_id=11, source_key="ai", value=8.0)],
+        (5, 12): [],
+    }
+    n, total, avg = child_ai_score_summary(5, [ch1, ch2, ch3], scores_by_cell)
+    assert n == 2
+    assert total == 3
+    assert avg == 9.0
+
+
+def test_evaluation_batch_log_roundtrip():
+    engine, _ = _setup_db()
+    project_key = "test-batch-log"
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    with _test_session(engine) as session:
+        bidder = Bidder(project_key=project_key, name="Bieter Beta")
+        session.add(bidder)
+        session.commit()
+        session.refresh(bidder)
+        parent = Criterion(project_key=project_key, kind="zuschlag", name="F01 Parent", referenz="F01")
+        session.add(parent)
+        session.commit()
+        session.refresh(parent)
+        child = Criterion(
+            project_key=project_key,
+            kind="zuschlag",
+            name="F01-001",
+            referenz="F01-001",
+            parent_id=parent.id,
+        )
+        session.add(child)
+        session.commit()
+        session.refresh(child)
+        bidder_id = bidder.id
+        parent_id = parent.id
+        child_id = child.id
+
+    from src.m15_evaluation import log_evaluation_batch_step, list_evaluation_batch_logs
+
+    log_evaluation_batch_step(
+        run_id="run-test-1",
+        project_key=project_key,
+        bidder_id=bidder_id,
+        parent_criterion_id=parent_id,
+        criterion_id=child_id,
+        step_index=1,
+        ok=True,
+        value=8.5,
+        llm_provider="openai",
+        llm_model="gpt-4o",
+    )
+    log_evaluation_batch_step(
+        run_id="run-test-1",
+        project_key=project_key,
+        bidder_id=bidder_id,
+        parent_criterion_id=parent_id,
+        criterion_id=child_id,
+        step_index=2,
+        ok=False,
+        error_message="Kein KI-Vorschlag",
+    )
+
+    rows = list_evaluation_batch_logs(project_key, bidder_id=bidder_id, parent_criterion_id=parent_id)
+    assert len(rows) == 2
+    assert rows[0]["ok"] is False
+    assert rows[0]["error_message"] == "Kein KI-Vorschlag"
+    assert rows[1]["ok"] is True
+    assert rows[1]["value"] == 8.5
+    assert rows[1]["bidder_name"] == "Bieter Beta"
+    assert rows[1]["parent_referenz"] == "F01"
+    assert rows[1]["criterion_referenz"] == "F01-001"
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+if __name__ == "__main__":
+    test_create_bidder_and_criterion()
+    test_ranking_ko_and_weighted_sum()
+    test_compute_rankings_phase2_interim()
+    test_chunk_meta_prefix_subtype()
+    test_validate_evaluation_cloud_gate()
+    test_suggest_score_sanitizes_cloud_context()
+    test_suggest_score_skips_sanitize_for_local_provider()
+    test_literal_line_ref_excludes_sibling_rows()
+    test_suggest_score_rag_basis_in_return()
+    test_upsert_score_persists_rag_basis_json()
+    test_enrich_rag_basis_for_display()
+    test_build_offer_document_bidder_ids()
+    test_bidder_restore_and_delete_modes()
+    test_child_ai_score_summary()
+    test_evaluation_batch_log_roundtrip()
+    test_prepare_rag_bases_for_export_batch_uses_single_load()
+    test_prepare_rag_basis_for_export_attaches_page_image()
+    test_rag_basis_doc_entry_normalized_score()
+    test_format_rag_context_omits_chunk_id()
+    test_sanitize_suggestion_justification_strips_chunk_refs()
+    test_compose_suggestion_justification_sanitizes_chunk_refs()
+    test_offer_suggestion_side_docs_no_parent_literal()
+    test_tender_doc_link_and_roles()
+    test_import_criteria_payload_skip_existing()
+    test_seed_and_merge_price_structure()
+    test_validate_tender_cloud_gate()
+    test_suggest_tender_role_and_validate_criteria()
+    test_evaluation_config_roundtrip()
+    test_retrieve_tender_context_multi_fair_pass_budget()
+    test_criteria_preview_cache()
+    test_criteria_preview_meta()
+    test_parse_expected_child_count_and_completeness()
+    test_ensure_criteria_refs_and_import_referenz()
+    test_ref_enrichment_query_and_child_refs()
+    test_enrichment_ref_diag()
+    test_ki_busy_hint()
+    test_score_justification_required()
+    test_user_score_rejects_blind_ai_copy()
+    test_sync_price_criterion_scores_reciprocal_gate()
+    test_build_evaluation_export_includes_justifications()
+    test_build_evaluation_export_context_filtered()
+    test_build_evaluation_export_context_permission()
+    test_list_export_combinations_and_zip()
+    test_bidder_doc_subtypes_multi()
+    test_criteria_manage_confirm_after_scores()
+    test_evaluator_score_discrepancies()
+    test_criterion_ref_prefix()
+    test_flatten_eignung_payload()
+    test_child_belongs_to_parent_ref()
+    test_child_grounded_and_line_structure()
+    test_missing_line_suffix_detection()
+    test_extract_line_block_from_context()
+    test_fill_missing_line_children()
+    test_suggestion_justification_requires_deductions()
+    test_extract_ek_line_numbers()
+    test_resolve_requirement_search()
+    test_retrieve_tender_context_respects_max_format_chunks()
+    test_evaluation_config_extraction_roundtrip()
+    test_criteria_editor_payload_and_save()
+    test_compute_price_reciprocal()
+    test_import_criteria_dedup_by_referenz()
+    test_ref_prefixes_and_scale_bands_config()
+    test_chunk_meta_prefix_with_location()
+    test_section_neighbor_chunks_cap()
+    print("OK")

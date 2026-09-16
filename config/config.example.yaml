@@ -1,0 +1,35 @@
+# Vorlage — nicht direkt editieren.
+# Kopieren: cp config/config.example.yaml config/config.yaml
+# config/config.yaml ist gitignored (keine Host-/Netzwerk-Details im öffentlichen Repo).
+
+app_name: "SlitProjektHub"
+paths:
+  base_dir: "."
+  data_dir: "data"
+  db_dir: "data/db"
+  rag_dir: "data/rag"
+  backups_dir: "backups"
+database:
+  url: "sqlite:///data/db/slitproj.db"
+  wal_mode: true
+ui:
+  title: "SlitProjektHub"
+  sidebar_title: "Navigation"
+
+auth:
+  enabled: true
+  two_factor_mode: off          # off | optional | required
+  two_factor_enabled: false     # Legacy: true ≈ required
+  session_timeout_minutes: 60
+  # Reverse-Proxy im LAN: echte IP(s) nur in config.yaml auf dem Server setzen.
+  trusted_proxy_ips: []
+  # Beispiel nach cp: trusted_proxy_ips: ["<nginx-reverse-proxy-lan-ip>"]
+
+llm_defaults:
+  provider: "anthropic"
+  model: "sonnet"
+  temperature: 0.7
+  rag_top_k: 5
+  rag_chunk_size: 1000
+  rag_similarity_threshold: 0.5
+  rag_enabled: true

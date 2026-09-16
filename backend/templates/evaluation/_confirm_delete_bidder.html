@@ -1,0 +1,66 @@
+<div class="modal-backdrop">
+  <div class="modal" style="max-width:520px" role="dialog" aria-modal="true">
+    <div class="modal-header">
+      <h2 class="modal-title">Bieter «{{ bidder.name }}» entfernen?</h2>
+      <button type="button" class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''" title="Abbrechen">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <p class="text-muted" style="font-size:.82rem;margin-bottom:.75rem">
+      Verknüpfte Angebots-Dokumente: <strong>{{ summary.linked_doc_count }}</strong>
+      {% if summary.exclusive_doc_count %}
+      · davon nur diesem Bieter: <strong>{{ summary.exclusive_doc_count }}</strong>
+      {% endif %}
+    </p>
+
+    <form method="post" action="/evaluation/delete-bidder">
+      <input type="hidden" name="project_key" value="{{ project_key }}" />
+      <input type="hidden" name="bidder_id" value="{{ bidder.id }}" />
+
+      <fieldset style="border:none;padding:0;margin:0 0 1rem">
+        <legend class="form-label" style="margin-bottom:.5rem">Was soll passieren?</legend>
+
+        <label class="eval-delete-mode-option">
+          <input type="radio" name="mode" value="deactivate" checked />
+          <span>
+            <strong>Nur Bieter deaktivieren</strong>
+            <span class="text-muted" style="display:block;font-size:.75rem;margin-top:.15rem">
+              Dokument-Zuordnungen bleiben in der DB — Bieter kann wiederhergestellt werden.
+            </span>
+          </span>
+        </label>
+
+        <label class="eval-delete-mode-option">
+          <input type="radio" name="mode" value="unlink" />
+          <span>
+            <strong>Bieter deaktivieren + Zuordnungen lösen</strong>
+            <span class="text-muted" style="display:block;font-size:.75rem;margin-top:.15rem">
+              Angebots-Dateien bleiben im Projekt, sind aber keinem Bieter mehr zugeordnet.
+            </span>
+          </span>
+        </label>
+
+        <label class="eval-delete-mode-option">
+          <input type="radio" name="mode" value="delete_exclusive_docs" />
+          <span>
+            <strong>Bieter deaktivieren + exklusive Dokumente löschen</strong>
+            <span class="text-muted" style="display:block;font-size:.75rem;margin-top:.15rem">
+              Soft-Delete nur für Dateien, die <em>ausschliesslich</em> diesem Bieter gehören
+              ({{ summary.exclusive_doc_count }} Stück). Geteilte Merge-PDFs bleiben, Zuordnung wird gelöst.
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('modal-slot').innerHTML=''">
+          Abbrechen
+        </button>
+        <button type="submit" class="btn btn-danger">Entfernen bestätigen</button>
+      </div>
+    </form>
+  </div>
+</div>

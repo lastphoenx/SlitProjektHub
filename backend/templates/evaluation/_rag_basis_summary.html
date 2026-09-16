@@ -1,0 +1,10 @@
+{% if rag_basis %}
+{% set source_count = (rag_basis.tender|length) + (rag_basis.offer|length) %}
+<p class="eval-rag-basis-summary" style="font-size:.78rem;margin:.35rem 0 0;color:var(--color-text-muted);line-height:1.4">
+  📎 <strong>{{ source_count }}</strong> Quelle{{ 'n' if source_count != 1 else '' }}
+  {% if rag_basis.line_ref %} · Zeile <strong>{{ rag_basis.line_ref }}</strong>{% endif %}
+  <span class="text-muted" style="font-size:.72rem">
+    ({{ rag_basis.tender|length }} Vorgaben, {{ rag_basis.offer|length }} Angebot)
+  </span>
+</p>
+{% endif %}

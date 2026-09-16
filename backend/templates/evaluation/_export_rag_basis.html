@@ -1,0 +1,24 @@
+{% if row.rag_basis and ctx.source_key == 'ai' %}
+<div class="rag">
+  {% for section_key, section_title in [('tender', 'Vorgaben'), ('offer', 'Angebot')] %}
+    {% set items = row.rag_basis.get(section_key) or [] %}
+    {% if items %}
+    <div><strong>{{ section_title }}</strong></div>
+    {% for item in items %}
+    <div class="rag-item">
+      <strong>{{ item.filename or '—' }}</strong>
+      {% if item.page_number %} · S. {{ item.page_number }}{% endif %}
+      {% if item.method %} · {{ item.method }}{% endif %}
+      {% if item.score is not none %}
+        {% if item.score <= 1 %} · {{ (item.score * 100)|round(0)|int }}%{% else %} · {{ item.score }}{% endif %}
+      {% endif %}
+      {% if item.preview %}<div>{{ item.preview }}</div>{% endif %}
+      {% if item.page_image_data_uri %}
+      <img class="rag-thumb" src="{{ item.page_image_data_uri }}" alt="S. {{ item.page_number or '?' }}" />
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
+  {% endfor %}
+</div>
+{% endif %}

@@ -1,0 +1,183 @@
+<div class="modal-backdrop">
+  <div class="modal eval-cell-modal" role="dialog" aria-modal="true">
+    <div class="modal-header" style="flex-shrink:0">
+      <div style="min-width:0">
+        <h2 class="modal-title" style="font-size:.95rem">{{ bidder.name }} — {{ criterion.name }}</h2>
+        <p class="text-muted" style="font-size:.75rem;margin-top:.2rem">Skala 0–{{ criterion.scale_max }}{% if criterion.kind == 'zuschlag' and criterion.weight_pct %} · Gewicht {{ criterion.weight_pct }}%{% endif %}</p>
+        {% if criterion.description %}
+        <p style="font-size:.8rem;margin-top:.4rem;white-space:pre-wrap">{{ criterion.description }}</p>
+        {% endif %}
+      </div>
+      <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''" title="Schließen">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <div class="eval-cell-modal-body">
+      <div class="card" style="margin-bottom:.75rem;background:var(--color-surface-2)">
+        <strong>Offiziell{% if criterion.auto_price %} (aus Preisblatt){% else %} (Ø Bewerter){% endif %}:</strong>
+        {% if criterion.scale_max == 1 %}
+          {{ "Ja" if official == 1 else ("Nein" if official == 0 else "—") }}
+        {% else %}
+          {{ "%.2f"|format(official) if official is not none else "—" }}
+        {% endif %}
+      </div>
+
+      {% if ai_row %}
+      <div class="eval-ki-saved-card card" style="margin-bottom:.75rem;background:var(--color-surface-2)">
+        <div class="eval-ki-saved-header">
+          <strong>🤖 KI-Vorschlag</strong>
+          <span class="eval-ki-saved-value">
+            {{ ("Ja" if ai_row.value == 1 else "Nein") if criterion.scale_max == 1 else ai_row.value }}
+          </span>
+        </div>
+        {% set justification = ai_row.justification %}
+        {% set source_chunk_ref = ai_row.source_chunk_ref %}
+        {% include "evaluation/_eval_ki_body.html" %}
+        {% if not ai_row.justification and not ai_row.source_chunk_ref and not rag_basis %}
+        <p class="text-muted" style="font-size:.82rem;margin:.35rem 0 0">—</p>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      <div class="table-wrap" style="margin-bottom:.75rem">
+        <table>
+          <thead><tr><th>Quelle</th><th>Wert</th><th>Begründung</th></tr></thead>
+          <tbody>
+            {% for sc in user_rows %}
+            <tr>
+              <td>
+                {% if may_see_evaluators %}Bewerter #{{ sc.evaluator_user_id }}{% else %}Bewerter{% endif %}
+                {% if sc.evaluator_user_id == my_user_id %}<span class="text-muted">(du)</span>{% endif %}
+              </td>
+              <td>{{ ("Ja" if sc.value == 1 else "Nein") if criterion.scale_max == 1 else sc.value }}</td>
+              <td style="font-size:.8rem">{{ sc.justification or "" }}</td>
+            </tr>
+            {% else %}
+            {% if not ai_row %}<tr><td colspan="3" class="text-muted">Noch keine Bewertung.</td></tr>{% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if may_evaluate %}
+      {% if score_error %}
+      <div class="card" style="margin-bottom:.5rem;border-color:var(--color-danger)">
+        <p style="font-size:.8rem;margin:0;color:var(--color-danger)">{{ score_error }}</p>
+      </div>
+      {% endif %}
+      <form method="post" action="/evaluation/score" style="display:grid;gap:.5rem" id="eval-score-form" {% if request.headers.get('hx-request') %}hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML"{% endif %}>
+        <input type="hidden" name="project_key" value="{{ project_key }}" />
+        <input type="hidden" name="bidder_id" value="{{ bidder.id }}" />
+        <input type="hidden" name="criterion_id" value="{{ criterion.id }}" />
+        <label class="form-label">{{ "Deine Bewertung ändern" if my_user_id in user_rows|map(attribute='evaluator_user_id')|list else "Deine Bewertung" }}</label>
+        {% if criterion.scale_max == 1 %}
+        <select class="form-select" name="value" id="eval-score-value" required onchange="syncJustificationRequired()">
+          <option value="">— wählen —</option>
+          <option value="1">Ja / erfüllt</option>
+          <option value="0">Nein / nicht erfüllt</option>
+        </select>
+        {% else %}
+        <input class="form-input" name="value" id="eval-score-value" type="number" step="0.5" min="0" max="{{ criterion.scale_max }}" required oninput="syncJustificationRequired()" />
+        {% endif %}
+        <textarea class="form-input" name="justification" id="eval-score-justification" rows="2"
+                  placeholder="Begründung (Pflicht bei «Nein» / Abzug von Maximalpunktzahl)"></textarea>
+        <textarea class="form-input" name="source_chunk_ref" rows="2" placeholder="Zitat/Quelle aus dem Angebot"></textarea>
+        <div id="cell-llm-picker" style="margin:.25rem 0">
+          {% set form_id = 'eval-cell-' ~ bidder.id ~ '-' ~ criterion.id %}
+          {% set llm_role = 'output' %}
+          {% set picker_title = 'KI für Bewertungsvorschlag' %}
+          {% set picker_hint = 'Aufgabe ④ Matrix-Zelle: Dual-RAG (Vorgabe + Angebot) als Text — kein PDF-Vision. Leer = KI-Einstellungen (' ~ (llm_provider or 'openai') ~ ' / ' ~ (llm_model or 'Standard') ~ '). Empfehlung: Ollama qwen3.8:27b oder gpt-4o-mini — siehe Hinweis oben. Cloud: Bestätigung unten bei verknüpften Bieter-Dokumenten.' %}
+          {% set form_visual_provider = form_visual_provider | default('') %}
+          {% set form_visual_model = form_visual_model | default('') %}
+          {% include 'partials/_llm_picker.html' %}
+        </div>
+        {% if has_bidder_docs %}
+        <div id="eval-cloud-gate-wrap" style="display:none;padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+          <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
+            Cloud-Provider mit verknüpften Angebotsdokumenten — Auszüge werden vor der Übertragung gefiltert.
+          </p>
+          <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
+            <input type="checkbox" name="cloud_confirm" value="1" id="eval-cloud-confirm" style="margin-top:.15rem" />
+            <span>Ich bestätige, dass die an die Cloud übermittelten Angebotsauszüge auf personenbezogene Daten geprüft wurden.</span>
+          </label>
+        </div>
+        {% endif %}
+        <div style="display:flex;gap:.5rem">
+          <button type="submit" class="btn btn-primary btn-sm">Speichern</button>
+          <button type="button" class="btn btn-secondary btn-sm eval-ki-btn" onclick="cellSuggest(this)">
+            <span class="ki-btn-idle">KI-Vorschlag (RAG)</span>
+            <span class="ki-btn-busy" hidden>
+              <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+              KI läuft …
+            </span>
+          </button>
+        </div>
+      </form>
+      <div id="cell-suggest-target" data-bidder="{{ bidder.id }}" data-criterion="{{ criterion.id }}" data-project="{{ project_key }}"></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+<script>
+function syncJustificationRequired() {
+  const valEl = document.getElementById('eval-score-value');
+  const justEl = document.getElementById('eval-score-justification');
+  if (!valEl || !justEl) return;
+  const scaleMax = {{ criterion.scale_max }};
+  const kind = {{ criterion.kind | tojson }};
+  const raw = valEl.value;
+  if (raw === '' || raw === null) { justEl.required = false; return; }
+  const v = parseFloat(raw);
+  let need = false;
+  if (kind === 'eignung') {
+    need = scaleMax === 1 ? v < 1 : v < scaleMax / 2;
+  } else if (kind === 'zuschlag') {
+    need = v < scaleMax - 0.0001;
+  }
+  justEl.required = need;
+}
+syncJustificationRequired();
+(function() {
+  const picker = document.querySelector('#cell-llm-picker select[name="visual_llm_provider"]');
+  const wrap = document.getElementById('eval-cloud-gate-wrap');
+  function isCloud(p) { return p === 'openai' || p === 'anthropic'; }
+  function syncGate() {
+    if (!wrap) return;
+    const chosen = picker && picker.value ? picker.value : (window.KI && window.KI.provider) || '{{ llm_provider }}';
+    wrap.style.display = isCloud(chosen) ? 'block' : 'none';
+  }
+  if (picker) picker.addEventListener('change', syncGate);
+  syncGate();
+})();
+async function cellSuggest(btn) {
+  if (typeof evalKiBusy === 'function' && evalKiBusy()) return;
+  const target = document.getElementById('cell-suggest-target');
+  const picker = document.querySelector('#cell-llm-picker select[name="visual_llm_provider"]');
+  const modelSel = document.querySelector('#cell-llm-picker select[name="visual_llm_model"]');
+  const visProvider = picker ? picker.value : '';
+  const visModel = modelSel ? modelSel.value : '';
+  const prov = visProvider || (window.KI && window.KI.provider) || '{{ llm_provider }}';
+  const mod = visModel || (window.KI && window.KI.model) || '{{ llm_model }}';
+  if (typeof evalStartKiAsync === 'function' && !evalStartKiAsync(prov, mod)) return;
+  const fd = new FormData();
+  fd.append('project_key', target.dataset.project);
+  fd.append('bidder_id', target.dataset.bidder);
+  fd.append('criterion_id', target.dataset.criterion);
+  fd.append('visual_llm_provider', visProvider);
+  fd.append('visual_llm_model', visModel);
+  fd.append('provider', prov);
+  fd.append('model', mod);
+  const confirm = document.getElementById('eval-cloud-confirm');
+  if (confirm && confirm.checked) fd.append('cloud_confirm', '1');
+  target.innerHTML = '<p class="text-muted" style="margin-top:.5rem">RAG + LLM …</p>';
+  try {
+    const r = await fetch('/evaluation/suggest', { method: 'POST', body: fd });
+    target.innerHTML = await r.text();
+  } catch (err) {
+    target.innerHTML = '<p class="text-muted" style="margin-top:.5rem;color:#fca5a5">KI-Vorschlag fehlgeschlagen.</p>';
+  } finally {
+    if (typeof evalSetKiBusy === 'function') evalSetKiBusy(false);
+  }
+}
+</script>

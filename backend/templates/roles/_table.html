@@ -1,0 +1,25 @@
+﻿{% if roles %}
+<table x-data>
+  <thead>
+    <tr>
+      <th style="width:100px">Kürzel</th>
+      <th>Rollenbezeichnung</th>
+      <th>Beschreibung</th>
+      <th>Verantwortlichkeiten</th>
+      <th style="width:100px">RAG</th>
+      <th style="width:100px">Aktionen</th>
+    </tr>
+  </thead>
+  <tbody id="roles-tbody">
+    {% for r in roles %}
+      {% include "roles/_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-state">
+  <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+  <p style="font-size:1rem;font-weight:600;margin-bottom:.25rem">Noch keine Rollen</p>
+  <p>Klicke auf „Neue Rolle", um loszulegen.</p>
+</div>
+{% endif %}

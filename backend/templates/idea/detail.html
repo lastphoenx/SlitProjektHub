@@ -1,0 +1,798 @@
+{% extends "base.html" %}
+{% block title %}{{ idea.ai_project_name or idea.title or "Projektidee" }} — SlitProjektHub{% endblock %}
+{% block topbar_title %}Projektidee{% endblock %}
+
+{% block content %}
+<div class="page-wide">
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ idea.ai_project_name or idea.title or "Projektidee #" ~ idea.id }}</h1>
+    <p class="page-subtitle">
+      {% if idea.status == 'bewertet' %}<span class="badge">🤖 bewertet</span>{% else %}<span class="badge badge-neutral">neu</span>{% endif %}
+      {% if submitter %} · eingereicht von {{ submitter }}{% endif %}
+      · {{ idea.created_at.strftime('%d.%m.%Y %H:%M') }}
+    </p>
+  </div>
+  <a class="btn btn-secondary" href="/idea">← Alle Ideen</a>
+</div>
+
+{% set job = ki_job %}
+{% if job and job.status in ['queued', 'running', 'error'] %}
+<div id="idea-job-banner"
+     class="idea-busy-banner{% if job.status == 'error' %} is-error{% endif %}"
+     data-active="{{ '1' if job.status in ['queued', 'running'] else '0' }}"
+     data-idea-id="{{ idea.id }}"
+     data-kind="{{ job.kind or '' }}"
+     style="margin-bottom:1rem">
+  {% if job.status != 'error' %}
+  <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+  {% endif %}
+  <span id="idea-job-msg">{{ job.error or job.message }}</span>
+</div>
+{% endif %}
+
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Eingabe (Fachabteilung)</h2>
+  <form method="post" action="/idea/{{ idea.id }}/edit" style="display:grid;gap:.6rem">
+    <div>
+      <label class="form-label" style="font-size:.72rem">Arbeitstitel</label>
+      <input class="form-input" name="title" value="{{ idea.title or '' }}" {% if not may_edit %}disabled{% endif %} />
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.72rem">Beschreibung</label>
+      <textarea class="form-input" name="idea_text" rows="5" required {% if not may_edit %}disabled{% endif %}>{{ idea.idea_text }}</textarea>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.6rem">
+      <div>
+        <label class="form-label" style="font-size:.72rem">Fachabteilung</label>
+        <input class="form-input" name="fachabteilung" value="{{ idea.fachabteilung or '' }}" {% if not may_edit %}disabled{% endif %} />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Eigene Schätzung intern (PT)</label>
+        <input class="form-input" name="internal_pt_human" type="number" step="0.5" min="0" value="{{ idea.internal_pt_human if idea.internal_pt_human is not none else '' }}" {% if not may_edit %}disabled{% endif %} />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:.72rem">Eigene Schätzung extern (CHF)</label>
+        <input class="form-input" name="external_cost_human" type="number" step="100" min="0" value="{{ idea.external_cost_human if idea.external_cost_human is not none else '' }}" {% if not may_edit %}disabled{% endif %} />
+      </div>
+    </div>
+    {% if may_edit %}
+    <div><button type="submit" class="btn btn-secondary btn-sm">Änderungen speichern</button></div>
+    {% endif %}
+  </form>
+
+  {% if attach_error %}
+  <p class="text-muted" style="color:#fca5a5;font-size:.78rem;margin-bottom:.5rem">
+    {% if attach_error == 'too_many' %}Maximal {{ max_attachments or 10 }} Unterlagen.
+    {% elif attach_error == 'too_large' %}Datei zu gross (max. 10 MB).
+    {% elif attach_error == 'invalid_type' %}Dateityp nicht erlaubt.
+    {% elif attach_error == 'empty' %}Leere Datei.
+    {% else %}Unterlage konnte nicht verarbeitet werden.{% endif %}
+  </p>
+  {% endif %}
+
+  <div id="idea-attachments" style="margin-top:.75rem">
+    <label class="form-label" style="font-size:.72rem">Unterlagen für KI-Bewertung / Visualisierung</label>
+    {% include 'idea/_source_files.html' %}
+    {% if idea.source_reference_text %}
+    <details style="font-size:.7rem;margin-top:.35rem">
+      <summary class="text-muted" style="cursor:pointer">Extrahierter Text (lokal)</summary>
+      <pre style="white-space:pre-wrap;font-size:.68rem;margin-top:.35rem;background:var(--color-surface-2);padding:.5rem;border-radius:.375rem">{{ idea.source_reference_text[:2000] }}{% if idea.source_reference_text|length > 2000 %}…{% endif %}</pre>
+    </details>
+    {% endif %}
+    {% if may_edit %}
+    <form method="post" action="/idea/{{ idea.id }}/add-source-attachments" enctype="multipart/form-data" style="margin-top:.5rem">
+      {% set zone_id = 'idea-src' %}
+      {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
+      {% set max_files = max_attachments or 10 %}
+      {% set hint = 'Dateien werden beim Ablegen gespeichert. Max. ' ~ (max_attachments or 10) ~ ' gesamt, 10 MB je Datei' %}
+      {% set autosubmit = true %}
+      {% include 'partials/_file_upload_zone.html' %}
+      {% set autosubmit = false %}
+      <button type="submit" class="btn btn-secondary btn-sm" style="margin-top:.35rem">Unterlagen hinzufügen</button>
+    </form>
+    {% endif %}
+  </div>
+
+
+  {% if idea.image_path %}
+  <div style="margin-top:.75rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.35rem">
+      <label class="form-label" style="font-size:.72rem;margin:0">
+        Visualisierung
+        {% if idea.image_source == 'dalle' %}<span class="text-muted">(Cloud-Illustration)</span>
+        {% elif idea.image_source == 'diagram' %}<span class="text-muted">(Prozessdiagramm, lokal)</span>
+        {% elif idea.image_source == 'upload' %}<span class="text-muted">(Upload)</span>{% endif %}
+      </label>
+      {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-image' %}
+      {% set inline_url = '/idea/image/' ~ idea.id ~ '?disposition=inline' %}
+      {% set download_url = '/idea/image/' ~ idea.id %}
+      {% include 'partials/_media_actions.html' %}
+    </div>
+    <img src="/idea/image/{{ idea.id }}?disposition=inline" alt="Visualisierung der Projektidee" class="result-thumb" style="max-height:280px" />
+    {% if idea.image_source == 'dalle' and idea.illustration_model %}
+    <p class="text-muted" style="font-size:.7rem;margin-top:.35rem">
+      Modell: {{ idea.illustration_model }}
+      {% if idea.illustration_generated_at %} · {{ idea.illustration_generated_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}
+      · Automatisch gefiltert vor Cloud-Übertragung — bitte trotzdem prüfen (kein Rohtext der Idee).
+    </p>
+    {% if idea.illustration_prompt_safe %}
+    <details style="font-size:.7rem;margin-top:.25rem">
+      <summary class="text-muted" style="cursor:pointer">Verwendeter Cloud-Prompt (gefiltert)</summary>
+      <pre style="white-space:pre-wrap;margin-top:.35rem;font-size:.68rem;background:var(--color-surface-2);padding:.5rem;border-radius:.375rem">{{ idea.illustration_prompt_safe }}</pre>
+    </details>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if may_edit %}
+  <form method="post" action="/idea/{{ idea.id }}/delete" style="margin-top:1rem" onsubmit="return confirm('Idee wirklich löschen?')">
+    <button type="submit" class="btn btn-danger btn-sm">Idee löschen</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+  <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem;display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+    Visualisierung erstellen
+    <span id="idea-gen-run-badge" class="badge idea-run-badge" hidden>läuft</span>
+  </h2>
+  <p class="text-muted" style="font-size:.78rem;margin-bottom:.75rem">
+    Input-KI liest Unterlagen; Ausgabe-KI strukturiert Folien/Berichte. Cloud-PNG nutzt OpenAI Bildmodell (gefiltert).
+    {% if idea.user_assessed_at and not visual_meta.prefer_ai_default %}
+      Der Report verwendet <strong>Ihre Einschätzung</strong> ({{ visual_meta.user_at }}), nicht die KI-Vorbewertung
+      {% if visual_meta.ai_at %}({{ visual_meta.ai_at }}){% endif %}.
+    {% elif idea.user_assessed_at and visual_meta.user_older_than_ai %}
+      Die KI-Vorbewertung ({{ visual_meta.ai_at }}) ist neuer als Ihre Einschätzung ({{ visual_meta.user_at }}).
+      Beim nächsten Generieren ist «Aktuelle KI verwenden» vorausgewählt.
+    {% else %}
+      Der Report verwendet die <strong>KI-Vorbewertung</strong>{% if visual_meta.ai_at %} ({{ visual_meta.ai_at }}){% endif %}, solange Sie keine Einschätzung speichern.
+    {% endif %}
+  </p>
+
+  {% if visual_ok %}
+  <p class="text-muted" style="color:#86efac;margin-bottom:.75rem;font-size:.85rem">✓ Visualisierung erstellt.</p>
+  {% endif %}
+  {% if visual_error == 'no_key' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">OpenAI API-Key fehlt für Cloud-PNG.</p>
+  {% elif visual_error == 'not_assessed' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Zuerst KI bewerten.</p>
+  {% elif visual_error == 'cloud_confirm' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud mit Unterlagen oder Cloud-PNG: Bestätigung für Datenübertragung erforderlich.</p>
+  {% elif visual_error == 'vision_cloud_confirm' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Cloud-Vision (Referenzbilder): Bestätigung erforderlich — oder Ollama-Vision wählen.</p>
+  {% elif visual_error == 'already_running' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Es läuft bereits eine Bewertung oder Generierung für diese Idee. Bitte warten.</p>
+  {% elif visual_error %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Visualisierung fehlgeschlagen (Provider/Modell prüfen).</p>
+  {% endif %}
+  {% if deck_error or illustration_error %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5;font-size:.78rem">Hinweis: alte Einzel-Aktionen — bitte unten „Visualisierung erstellen“ nutzen.</p>
+  {% endif %}
+
+  {% if idea.status != 'bewertet' %}
+  <p class="text-muted">Nach der KI-Vorbewertung können Berichte, Folien und Bilder erzeugt werden.</p>
+  {% else %}
+  {% set has_html = html_path or idea.html_path %}
+  <div id="visual-results" class="visual-results-grid">
+    <h3 style="font-size:.82rem;font-weight:700;margin:0">Erzeugte Visualisierung</h3>
+    {% if visual_ok and not has_html and not idea.deck_path and not idea.docx_path %}
+    <p class="text-muted" style="font-size:.78rem;margin:0;grid-column:1/-1">Erzeugt — falls die Karte fehlt, Seite neu laden.</p>
+    {% endif %}
+
+    {% if has_html %}
+    <div class="result-card visual-pane">
+      <div class="visual-pane-head">
+        <strong style="font-size:.95rem">HTML-Bericht</strong>
+        <div class="flex items-center gap-1">
+          {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-html' %}
+          {% set inline_url = report_urls.inline %}
+          {% set download_url = report_urls.download %}
+          {% include 'partials/_media_actions.html' %}
+        </div>
+      </div>
+      <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 .15rem">
+        Erzeugt {{ visual_meta.html_at or "—" }}
+        {% if visual_meta.html_older_than_ai %}
+        · <span style="color:#fcd34d">älter als KI-Vorbewertung ({{ visual_meta.ai_at }})</span>
+        {% elif visual_meta.html_older_than_user %}
+        · <span style="color:#fcd34d">älter als Ihre Einschätzung ({{ visual_meta.user_at }})</span>
+        {% endif %}
+      </p>
+      <div class="visual-pane-body">
+        <iframe src="{{ report_urls.inline }}" title="HTML-Bericht Vorschau"></iframe>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if idea.deck_path %}
+    <div class="result-card result-card-clickable visual-pane"
+         data-hx-preview="/idea/{{ idea.id }}/preview-deck"
+         onclick="ideaOpenResult(this, event)"
+         title="Vorschau öffnen">
+      <div class="visual-pane-head" onclick="event.stopPropagation()">
+        <strong style="font-size:.95rem">PowerPoint</strong>
+        <div class="flex items-center gap-1">
+          {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-deck' %}
+          {% set inline_url = '/idea/deck-preview/' ~ idea.id ~ '?disposition=inline' if idea.deck_preview_path else None %}
+          {% set download_url = '/idea/deck/' ~ idea.id %}
+          {% include 'partials/_media_actions.html' %}
+        </div>
+      </div>
+      {% if visual_meta.deck_at %}
+      <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0">Erzeugt {{ visual_meta.deck_at }}</p>
+      {% endif %}
+      <div class="visual-pane-body">
+        {% if idea.deck_preview_path %}
+        <img src="/idea/deck-preview/{{ idea.id }}?disposition=inline" alt="PPTX" />
+        {% else %}
+        <p class="text-muted" style="padding:1rem">Keine Folien-Vorschau — PPTX herunterladen.</p>
+        {% endif %}
+      </div>
+      {% if may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="margin-top:.4rem;flex-shrink:0" onsubmit="return confirm('Bericht/PPTX löschen?')" onclick="event.stopPropagation()">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if idea.docx_path %}
+    <div class="result-card visual-pane">
+      <div class="visual-pane-head">
+        <strong style="font-size:.95rem">Word-Bericht</strong>
+        <div class="flex items-center gap-1">
+          {% set preview_hx_get = None %}
+          {% set inline_url = None %}
+          {% set download_url = '/idea/docx/' ~ idea.id %}
+          {% include 'partials/_media_actions.html' %}
+        </div>
+      </div>
+      {% if visual_meta.docx_at %}
+      <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0">Erzeugt {{ visual_meta.docx_at }}</p>
+      {% endif %}
+      <div class="visual-pane-body">
+        <div class="docx-sheet">
+          <h4>{{ idea.ai_project_name or idea.title or "Word-Bericht" }}</h4>
+          <p>{{ (user_defaults.summary if user_defaults and user_defaults.summary else idea.ai_summary) or "Kein Fliesstext — Datei herunterladen." }}</p>
+          {% if phases %}
+          <p style="font-weight:700;margin:.8rem 0 .3rem">Phasen</p>
+          <ul>
+            {% for p in phases[:6] %}
+            <li>{{ p.name }}{% if p.duration_estimate %} <span style="color:#64748b">({{ p.duration_estimate }})</span>{% endif %}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          <p style="color:#64748b;margin-top:1rem">Kein natives Word-Preview im Browser — Download für die .docx-Datei.</p>
+        </div>
+      </div>
+      {% if may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/clear-docx" style="margin-top:.4rem;flex-shrink:0" onsubmit="return confirm('Word-Bericht löschen?')">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if idea.image_path and idea.image_source in ['dalle', 'diagram'] %}
+    <div class="result-card result-card-clickable visual-pane"
+         data-hx-preview="/idea/{{ idea.id }}/preview-image"
+         onclick="ideaOpenResult(this, event)"
+         title="Vorschau öffnen">
+      <div class="visual-pane-head" onclick="event.stopPropagation()">
+        <strong style="font-size:.95rem">PNG {% if idea.image_source == 'dalle' %}(Cloud){% else %}(lokal){% endif %}</strong>
+        <div class="flex items-center gap-1">
+        {% set preview_hx_get = '/idea/' ~ idea.id ~ '/preview-image' %}
+        {% set inline_url = '/idea/image/' ~ idea.id ~ '?disposition=inline' %}
+        {% set download_url = '/idea/image/' ~ idea.id %}
+        {% include 'partials/_media_actions.html' %}
+        </div>
+      </div>
+      <div class="visual-pane-body">
+        <img src="/idea/image/{{ idea.id }}?disposition=inline" alt="PNG" />
+      </div>
+      {% if may_edit %}
+      <form method="post" action="/idea/{{ idea.id }}/clear-illustration" style="margin-top:.4rem;flex-shrink:0" onsubmit="return confirm('Illustration löschen?')" onclick="event.stopPropagation()">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">Löschen</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if has_html and not idea.deck_path and may_edit %}
+    <form method="post" action="/idea/{{ idea.id }}/clear-deck" style="grid-column:1/-1" onsubmit="return confirm('HTML-Bericht löschen?')">
+      <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:.7rem">HTML-Bericht löschen</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <form method="post" action="/idea/{{ idea.id }}/generate-visual" id="idea-gen-form" class="idea-gen-form idea-form-grid" style="margin-bottom:1rem" enctype="multipart/form-data">
+    <div class="span-2 idea-busy-banner" hidden>
+      <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+      <span>Generiere … bitte warten (30s–2min). Nicht erneut klicken.</span>
+    </div>
+    <div class="span-2">
+      <input type="hidden" name="llm_provider" value="{{ llm_provider }}" />
+      <input type="hidden" name="llm_model" value="{{ llm_model }}" />
+      <label class="form-label">Ausgabe-Format</label>
+      <select class="form-select" name="output_format" id="idea-output-format">
+        {% for key, label in idea_visual_formats.items() %}
+        <option value="{{ key }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="span-2" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.78rem;cursor:pointer">
+        <input type="checkbox" name="prefer_ai" value="1" style="margin-top:.15rem"
+          {% if visual_meta.prefer_ai_default %}checked{% endif %} />
+        <span>
+          <strong>Aktuelle KI-Vorbewertung verwenden</strong>
+          {% if visual_meta.ai_at %}({{ visual_meta.ai_at }}){% endif %}
+          statt der gespeicherten Einschätzung
+          {% if visual_meta.user_at %}({{ visual_meta.user_at }}){% endif %}.
+          Sonst bleibt der Bericht auf den alten User-Texten.
+        </span>
+      </label>
+    </div>
+    {% set form_id = 'idea-visual' %}
+    {% set llm_role = 'input' %}
+    {% set form_input_provider = '' %}
+    {% set form_input_model = '' %}
+    {% include 'partials/_llm_picker.html' %}
+    {% set llm_role = 'output' %}
+    {% set picker_title = 'KI für Ausgabe-Struktur (HTML / PPTX / Word)' %}
+    {% set form_visual_provider = '' %}
+    {% set form_visual_model = '' %}
+    {% include 'partials/_llm_picker.html' %}
+    <div class="span-2">
+    {% set prefix = 'source_tasks' %}
+    {% set title = 'Unterlagen-Verarbeitung (optional)' %}
+    {% set hint = 'Nur relevant wenn Unterlagen vorhanden — gleiche Optionen wie bei der Bewertung.' %}
+    {% set tasks = source_process_tasks %}
+    {% include 'partials/_ki_tasks_checkboxes.html' %}
+    <p class="form-label" style="margin:.6rem 0 .2rem">Gespeicherte Unterlagen ({{ source_attachments|length }})</p>
+    {% include 'idea/_source_files.html' %}
+    {% if may_edit %}
+    {% set zone_id = 'idea-visual-src' %}
+    {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
+    {% set max_files = max_attachments or 10 %}
+    {% set hint = 'Weitere Dateien hier werden vor dem Generieren gespeichert' %}
+    {% set autosubmit = false %}
+    {% include 'partials/_file_upload_zone.html' %}
+    {% endif %}
+    </div>
+    {% if may_edit %}
+    <div class="span-2 idea-visual-cloud-wrap" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+      <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
+        Bei Cloud-Provider (OpenAI/Anthropic) mit Unterlagen — Text wird vor Übertragung gefiltert.
+      </p>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer;margin-bottom:.35rem">
+        <input type="checkbox" name="cloud_confirm" value="1" id="idea-visual-cloud-confirm" style="margin-top:.15rem" />
+        <span>Unterlagen/Text wurden gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an die Cloud gehen.</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="vision_cloud_confirm" value="1" id="idea-visual-vision-cloud" style="margin-top:.15rem" />
+        <span>Referenzbilder an Cloud-Vision — ich habe geprüft, dass keine sensiblen Inhalte sichtbar sind.</span>
+      </label>
+    </div>
+    {% endif %}
+    <div id="idea-cloud-image-wrap" class="span-2" style="display:none">
+      <label class="form-label" style="font-size:.72rem">OpenAI Bildmodell (nur Cloud-PNG)</label>
+      <select class="form-select" name="image_model">
+        {% for key in openai_image_models %}
+        <option value="{{ key }}" {% if key == default_image_model %}selected{% endif %}>{{ key }}</option>
+        {% endfor %}
+      </select>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;margin-top:.5rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="cloud_confirm" value="1" id="idea-cloud-confirm" style="margin-top:.15rem" />
+        <span>Prompt wurde automatisch gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an OpenAI gehen.</span>
+      </label>
+    </div>
+    <div class="span-2">
+      <label class="form-label" style="font-size:.72rem">Optionale Anpassung</label>
+      <textarea class="form-input" name="refinement_notes" rows="2"
+        placeholder="z.B. Phasen hervorheben, weniger Text, mehr Blau …"></textarea>
+    </div>
+    <div class="span-2">
+    <button type="submit" form="idea-gen-form" class="btn btn-primary idea-gen-btn">
+      <span class="idea-btn-idle">Visualisierung generieren</span>
+      <span class="idea-btn-busy" hidden>
+        <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+        Generiere …
+      </span>
+    </button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+  {% if assess_ok %}
+  <p class="text-muted" style="color:#86efac;margin-bottom:.75rem;font-size:.85rem">✓ KI-Vorbewertung abgeschlossen.</p>
+  {% endif %}
+  {% if assess_error == 'cloud_confirm' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5;font-size:.78rem">
+    Cloud-Bewertung mit Unterlagen: Bestätigung für Datenübertragung an OpenAI/Anthropic erforderlich.
+  </p>
+  {% elif assess_error == 'vision_cloud_confirm' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5;font-size:.78rem">
+    Cloud-Vision (Referenzbilder): Bestätigung erforderlich — oder Ollama-Vision-Modell wählen.
+  </p>
+  {% elif assess_error == 'already_running' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Es läuft bereits eine Bewertung oder Generierung für diese Idee. Bitte warten.</p>
+  {% elif assess_error == 'not_assessed' %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">Zuerst eine KI-Vorbewertung erzeugen, danach kann die Einschätzung zurückgesetzt werden.</p>
+  {% elif assess_error %}
+  <p class="text-muted" style="margin-bottom:.75rem;color:#fca5a5">KI-Bewertung fehlgeschlagen (Provider/Modell prüfen oder erneut versuchen).</p>
+  {% endif %}
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.75rem;flex-wrap:wrap">
+    <h2 style="font-size:.95rem;font-weight:700;margin:0;display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+      🤖 KI-Vorbewertung
+      <span id="idea-assess-run-badge" class="badge idea-run-badge" hidden>läuft</span>
+    </h2>
+  </div>
+
+  <form method="post" action="/idea/{{ idea.id }}/assess" id="idea-assess-form" class="idea-assess-form idea-form-grid" style="margin-bottom:1rem;padding:.85rem;border:1px solid var(--color-border);border-radius:.5rem;background:var(--color-surface-2)" enctype="multipart/form-data" data-has-user="{{ '1' if idea.user_assessed_at else '0' }}">
+    <input type="hidden" name="overwrite_user" value="0" />
+    <div class="span-2 idea-busy-banner" hidden>
+      <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+      <span>Bewertung läuft … bitte warten (30s–2min). Nicht erneut klicken.</span>
+    </div>
+    {% set form_id = 'idea-assess' %}
+    {% if ollama_ok %}
+    <p class="text-muted span-2" style="font-size:.68rem;margin:0 0 .45rem">
+      Standard: <strong>Ollama (lokal)</strong> — Daten bleiben im Haus. Cloud nur bei expliziter Auswahl.
+    </p>
+    {% endif %}
+    {% set llm_role = 'input' %}
+    {% set form_input_provider = default_assess_provider %}
+    {% set form_input_model = default_assess_model %}
+    {% include 'partials/_llm_picker.html' %}
+    <div class="span-2">
+    {% set prefix = 'source_tasks' %}
+    {% set title = 'Unterlagen-Verarbeitung' %}
+    {% set hint = 'Lokal: Textextraktion. KI: Vision-Bilder oder Bildbeschreibung für den Bewertungs-Prompt.' %}
+    {% set tasks = source_process_tasks %}
+    {% include 'partials/_ki_tasks_checkboxes.html' %}
+    <p class="form-label" style="margin:.6rem 0 .2rem">Gespeicherte Unterlagen ({{ source_attachments|length }})</p>
+    {% include 'idea/_source_files.html' %}
+    {% if may_edit %}
+    {% set zone_id = 'idea-assess-src' %}
+    {% set accept = '.png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.md,.docx' %}
+    {% set max_files = max_attachments or 10 %}
+    {% set hint = 'Weitere Dateien hier werden vor der Bewertung gespeichert' %}
+    {% set autosubmit = false %}
+    {% include 'partials/_file_upload_zone.html' %}
+    {% endif %}
+    </div>
+    {% set llm_role = 'output' %}
+    {% set picker_title = 'KI für Bewertung (JSON-Ergebnis)' %}
+    {% set form_visual_provider = default_assess_provider %}
+    {% set form_visual_model = default_assess_model %}
+    {% include 'partials/_llm_picker.html' %}
+    <div class="span-2">
+    {% set prefix = 'assess_tasks' %}
+    {% set title = 'Bewertungs-Inhalte' %}
+    {% set hint = 'Welche Felder die KI erzeugen soll — abgewählte bleiben bei erneuter Bewertung erhalten.' %}
+    {% set tasks = assess_tasks %}
+    {% include 'partials/_ki_tasks_checkboxes.html' %}
+    </div>
+    {% if may_edit %}
+    <div id="idea-assess-cloud-wrap" class="span-2" style="padding:.45rem .55rem;border:1px solid var(--color-border);border-radius:.375rem">
+      <p class="text-muted" style="font-size:.68rem;margin:0 0 .4rem">
+        Nur bei Cloud-Provider (OpenAI/Anthropic) mit Unterlagen — Text wird vor Übertragung gefiltert.
+      </p>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer;margin-bottom:.35rem">
+        <input type="checkbox" name="cloud_confirm" value="1" id="idea-assess-cloud-confirm" style="margin-top:.15rem" />
+        <span>Unterlagen/Text wurden gefiltert — ich habe geprüft, dass keine personenbezogenen Daten an die Cloud gehen.</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.72rem;cursor:pointer">
+        <input type="checkbox" name="vision_cloud_confirm" value="1" id="idea-assess-vision-cloud" style="margin-top:.15rem" />
+        <span>Referenzbilder an Cloud-Vision — ich habe geprüft, dass keine sensiblen Inhalte sichtbar sind.</span>
+      </label>
+    </div>
+    {% endif %}
+    <div class="span-2">
+    {% if idea.user_assessed_at %}
+    <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.78rem;cursor:pointer;margin-bottom:.6rem">
+      <input type="checkbox" id="idea-overwrite-user" style="margin-top:.15rem" />
+      <span>Nach dieser Bewertung <strong>meine gespeicherte Einschätzung</strong> durch die neuen KI-Werte ersetzen (sonst bleibt sie unverändert).</span>
+    </label>
+    {% endif %}
+    <button type="submit" form="idea-assess-form" class="btn btn-primary idea-assess-btn">
+      <span class="idea-btn-idle">{{ "Erneut bewerten" if idea.status == 'bewertet' else "KI bewerten" }}</span>
+      <span class="idea-btn-busy" hidden>
+        <svg class="idea-busy-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20" opacity=".25"/><path d="M12 2a10 10 0 019.95 9"/></svg>
+        Bewertung läuft …
+      </span>
+    </button>
+    </div>
+  </form>
+
+  {% if idea.status != 'bewertet' %}
+  <p class="text-muted">Noch nicht bewertet. Klicke oben auf «KI bewerten».</p>
+  {% else %}
+  {% include 'idea/_user_assessment.html' %}
+  <p class="text-muted" style="font-size:.7rem;border-top:1px solid var(--color-border);padding-top:.5rem;margin-top:1rem">
+    KI-Vorbewertung von {{ idea.ai_assessed_at|idea_dt if idea.ai_assessed_at else "—" }}
+    · {{ idea.ai_provider }} / {{ idea.ai_model }} · ersetzt keine fachliche Prüfung.
+  </p>
+  {% endif %}
+</div>
+
+</div>
+
+<form id="idea-delete-att-form" method="post" action="/idea/{{ idea.id }}/delete-source-attachment" hidden>
+  <input type="hidden" name="att_path" value="" />
+</form>
+<div id="modal-slot"></div>
+<script>
+document.addEventListener('click', function (e) {
+  const btn = e.target.closest('.idea-att-del');
+  if (!btn) return;
+  const path = btn.getAttribute('data-att-path');
+  const name = btn.getAttribute('data-att-name') || '';
+  if (!path) return;
+  if (!confirm('Unterlage «' + name + '» löschen?')) return;
+  const form = document.getElementById('idea-delete-att-form');
+  if (!form) return;
+  form.querySelector('[name="att_path"]').value = path;
+  form.submit();
+});
+function ideaOpenResult(el, event) {
+  if (event.target.closest('a,button,form')) return;
+  const url = el.getAttribute('data-open');
+  const hx = el.getAttribute('data-hx-preview');
+  if (url) {
+    window.open(url, '_blank', 'noopener');
+    return;
+  }
+  if (hx && window.htmx) {
+    htmx.ajax('GET', hx, {target: '#modal-slot', swap: 'innerHTML'});
+  }
+}
+document.getElementById('modal-slot').addEventListener('click', e => {
+  if (e.target.classList.contains('modal-backdrop')) document.getElementById('modal-slot').innerHTML = '';
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('modal-slot').innerHTML = '';
+});
+function ideaCloseModal() {
+  document.getElementById('modal-slot').innerHTML = '';
+}
+function ideaShowModal(html) {
+  document.getElementById('modal-slot').innerHTML = html;
+  const root = document.getElementById('modal-slot');
+  root.querySelectorAll('[data-idea-modal-cancel]').forEach(btn => {
+    btn.addEventListener('click', ideaCloseModal);
+  });
+}
+function ideaModal(title, body, actions) {
+  return '<div class="modal-backdrop"><div class="modal" style="max-width:540px" role="dialog" aria-modal="true">' +
+    '<div class="modal-header"><h2 class="modal-title">' + title + '</h2>' +
+    '<button type="button" class="btn btn-ghost btn-icon" data-idea-modal-cancel title="Abbrechen">' +
+    '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+    '</button></div>' + body +
+    '<div class="idea-confirm-actions" style="margin-top:1.15rem">' + actions + '</div></div></div>';
+}
+function ideaSubmitAssess(form, overwrite) {
+  const inp = form.querySelector('[name="overwrite_user"]');
+  if (inp) inp.value = overwrite ? '1' : '0';
+  form.setAttribute('data-user-confirm-done', '1');
+  ideaCloseModal();
+  if (typeof form.requestSubmit === 'function') form.requestSubmit();
+  else form.submit();
+}
+document.querySelectorAll('.idea-assess-form').forEach(form => {
+  form.addEventListener('submit', function (e) {
+    if (form.getAttribute('data-user-confirm-done') === '1') return;
+    const box = document.getElementById('idea-overwrite-user');
+    const hid = form.querySelector('[name="overwrite_user"]');
+    if (box && box.checked) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      ideaShowModal(ideaModal(
+        'Einschätzung wirklich ersetzen?',
+        '<p style="color:#fca5a5;margin:0">Nach der KI-Bewertung wird Ihre gespeicherte Einschätzung durch die neuen KI-Werte überschrieben. Die bisherigen Angaben gehen verloren. Abbrechen hält alles wie bisher — die KI läuft dann nicht.</p>',
+        '<button type="button" class="btn btn-secondary" data-idea-modal-cancel>Abbrechen</button>' +
+        '<button type="button" class="btn btn-danger" id="idea-assess-replace-go">Ja, ersetzen und bewerten</button>'
+      ));
+      document.getElementById('idea-assess-replace-go').addEventListener('click', function () {
+        ideaSubmitAssess(form, true);
+      });
+      return;
+    }
+    if (hid) hid.value = '0';
+  }, true);
+});
+document.getElementById('idea-reset-ai')?.addEventListener('click', function () {
+  const form = document.getElementById('idea-reset-form');
+  if (!form) return;
+  ideaShowModal(ideaModal(
+    'Einschätzung auf KI zurücksetzen?',
+    '<p style="color:#fca5a5;margin:0 0 .6rem">Ihre gespeicherte Einschätzung wird sofort durch die aktuelle KI-Vorbewertung ersetzt. Die bisherigen Werte gehen verloren und gelten danach für den Report.</p>' +
+    '<p style="color:var(--color-text-muted);font-size:.82rem;margin:0">Abbrechen lässt Ihre Einschätzung unverändert.</p>',
+    '<button type="button" class="btn btn-secondary" data-idea-modal-cancel>Abbrechen</button>' +
+    '<button type="button" class="btn btn-danger" id="idea-reset-go">Ja, auf KI zurücksetzen</button>'
+  ));
+  document.getElementById('idea-reset-go').addEventListener('click', function () {
+    ideaCloseModal();
+    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+    else form.submit();
+  });
+});
+(function () {
+  const box = document.getElementById('idea-job-banner');
+  if (!box || box.getAttribute('data-active') !== '1') return;
+  const ideaId = box.getAttribute('data-idea-id');
+  const msg = document.getElementById('idea-job-msg');
+  let tries = 0;
+  async function tick() {
+    tries += 1;
+    try {
+      const r = await fetch('/idea/' + ideaId + '/job-status', { headers: { accept: 'application/json' } });
+      if (r.ok) {
+        const j = await r.json();
+        if (msg && (j.message || j.error)) msg.textContent = j.error || j.message;
+        if (j.status === 'done') {
+          const kind = j.kind || box.getAttribute('data-kind') || 'assess';
+          const q = kind === 'visual' ? 'visual_ok=1#visual-results' : 'assess_ok=1#idea-assessment';
+          location.href = '/idea/' + ideaId + '?' + q;
+          return;
+        }
+        if (j.status === 'error') {
+          box.classList.add('is-error');
+          box.setAttribute('data-active', '0');
+          if (msg) msg.textContent = j.error || j.message || 'Fehlgeschlagen.';
+          return;
+        }
+      }
+    } catch (err) {}
+    setTimeout(tick, tries > 40 ? 5000 : 2000);
+  }
+  setTimeout(tick, 800);
+})();
+function ideaKiForms() {
+  return Array.from(document.querySelectorAll('.idea-assess-form, .idea-gen-form'));
+}
+function ideaKiBusy() {
+  if (document.getElementById('idea-job-banner')?.getAttribute('data-active') === '1') return true;
+  return ideaKiForms().some(f => f.getAttribute('data-busy') === '1');
+}
+function ideaSetFormBusy(form, on, submitter, showBanner) {
+  if (!form) return;
+  form.setAttribute('data-busy', on ? '1' : '0');
+  form.setAttribute('aria-busy', on ? 'true' : 'false');
+  var banner = form.querySelector('.idea-busy-banner');
+  if (banner) banner.hidden = !(on && showBanner);
+  var btn = submitter && form.contains(submitter) ? submitter : form.querySelector('[type="submit"]');
+  if (!btn) return;
+  var idle = btn.querySelector('.idea-btn-idle');
+  var busy = btn.querySelector('.idea-btn-busy');
+  if (idle) idle.hidden = !!on;
+  if (busy) busy.hidden = !on;
+  btn.classList.toggle('is-busy', !!on);
+  btn.setAttribute('aria-disabled', on ? 'true' : 'false');
+}
+function ideaSetAllKiBusy(on, submitter) {
+  ideaKiForms().forEach(function (form) {
+    var showBanner = !!(on && submitter && form.contains(submitter));
+    ideaSetFormBusy(form, on, submitter, showBanner);
+  });
+  var genOn = !!(on && submitter && document.querySelector('.idea-gen-form')?.contains(submitter));
+  var assessOn = !!(on && submitter && document.querySelector('.idea-assess-form')?.contains(submitter));
+  var genBadge = document.getElementById('idea-gen-run-badge');
+  var assessBadge = document.getElementById('idea-assess-run-badge');
+  if (genBadge) genBadge.hidden = !genOn;
+  if (assessBadge) assessBadge.hidden = !assessOn;
+}
+function ideaBindBusyForm(form, opts) {
+  if (!form) return;
+  form.addEventListener('invalid', function () { ideaSetAllKiBusy(false); }, true);
+  form.addEventListener('submit', function (e) {
+    if (ideaKiBusy() && form.getAttribute('data-busy') !== '1') {
+      e.preventDefault();
+      return;
+    }
+    ideaSetAllKiBusy(true, e.submitter || form.querySelector('[type="submit"]'));
+  });
+}
+document.querySelectorAll('.idea-gen-form').forEach(form => {
+  ideaBindBusyForm(form, { badgeId: 'idea-gen-run-badge' });
+});
+document.querySelectorAll('.idea-assess-form').forEach(form => {
+  ideaBindBusyForm(form, { badgeId: 'idea-assess-run-badge' });
+});
+if (document.getElementById('idea-job-banner')?.getAttribute('data-active') === '1') {
+  ideaKiForms().forEach(function (form) {
+    ideaSetFormBusy(form, true, null, false);
+  });
+}
+(function() {
+  function reindex(tbody) {
+    tbody.querySelectorAll('tr').forEach((tr, i) => {
+      tr.querySelectorAll('input, select').forEach(el => {
+        const stem = el.getAttribute('data-name');
+        if (stem) el.name = stem + i;
+        else if (el.name) el.name = el.name.replace(/\d+$/, '') + i;
+      });
+    });
+  }
+  function addRow(tbody, tplId) {
+    const tpl = document.getElementById(tplId);
+    if (!tpl || !tbody) return;
+    tbody.appendChild(tpl.content.cloneNode(true));
+    reindex(tbody);
+  }
+  function fillRows(tbody, tplId, items, apply) {
+    tbody.innerHTML = '';
+    (items && items.length ? items : [{}]).forEach(item => {
+      addRow(tbody, tplId);
+      apply(tbody.lastElementChild, item || {});
+    });
+    reindex(tbody);
+  }
+  const chBody = document.getElementById('idea-ch-body');
+  const phBody = document.getElementById('idea-ph-body');
+  if (chBody) {
+    document.getElementById('idea-ch-add')?.addEventListener('click', () => addRow(chBody, 'idea-ch-tpl'));
+    chBody.addEventListener('click', e => {
+      if (!e.target.closest('.idea-row-del')) return;
+      if (chBody.querySelectorAll('tr').length > 1) e.target.closest('tr').remove();
+      reindex(chBody);
+    });
+  }
+  if (phBody) {
+    document.getElementById('idea-ph-add')?.addEventListener('click', () => addRow(phBody, 'idea-ph-tpl'));
+    phBody.addEventListener('click', e => {
+      if (!e.target.closest('.idea-row-del')) return;
+      if (phBody.querySelectorAll('tr').length > 1) e.target.closest('tr').remove();
+      reindex(phBody);
+    });
+  }
+  document.getElementById('idea-copy-ai')?.addEventListener('click', () => {
+    const el = document.getElementById('idea-ai-json');
+    if (!el) return;
+    const data = JSON.parse(el.textContent || '{}');
+    const set = (name, val) => {
+      const n = document.querySelector('[name="' + name + '"]');
+      if (n) n.value = val == null ? '' : val;
+    };
+    set('user_summary', data.summary);
+    set('user_internal_pt', data.internal_pt);
+    set('user_internal_pt_reasoning', data.internal_pt_reasoning);
+    set('user_external_cost', data.external_cost);
+    set('user_external_cost_reasoning', data.external_cost_reasoning);
+    set('user_recommendation', data.recommendation);
+    fillRows(chBody, 'idea-ch-tpl', data.challenges, (tr, c) => {
+      tr.querySelector('[data-name="ch_title_"]').value = c.title || '';
+      tr.querySelector('[data-name="ch_desc_"]').value = c.description || '';
+      tr.querySelector('[data-name="ch_likelihood_"]').value = c.likelihood || 'mittel';
+      tr.querySelector('[data-name="ch_severity_"]').value = c.severity || 'mittel';
+    });
+    fillRows(phBody, 'idea-ph-tpl', data.phases, (tr, p) => {
+      tr.querySelector('[data-name="ph_name_"]').value = p.name || '';
+      tr.querySelector('[data-name="ph_desc_"]').value = p.description || '';
+      tr.querySelector('[data-name="ph_duration_"]').value = p.duration_estimate || '';
+      tr.querySelector('[data-name="ph_pt_"]').value = p.internal_pt == null ? '' : p.internal_pt;
+    });
+  });
+})();
+(function() {
+  const fmt = document.getElementById('idea-output-format');
+  const wrap = document.getElementById('idea-cloud-image-wrap');
+  const cbox = document.getElementById('idea-cloud-confirm');
+  if (fmt && wrap) {
+    function sync() {
+      const cloud = fmt.value === 'png_cloud';
+      wrap.style.display = cloud ? '' : 'none';
+      if (cbox) cbox.required = cloud;
+    }
+    fmt.addEventListener('change', sync);
+    sync();
+  }
+})();
+</script>
+{% endblock %}

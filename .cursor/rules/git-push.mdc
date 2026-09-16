@@ -1,0 +1,18 @@
+---
+description: Git push für SlitProjektHub — SSH-URL, kein WSL
+alwaysApply: true
+---
+
+# Git Push (SlitProjektHub)
+
+Remote ist oft HTTPS; Push **per SSH-URL** mit eigenem Deploy-Key.
+
+```powershell
+cd <REPO_ROOT>
+$env:GIT_SSH_COMMAND = "ssh -i <SSH_KEY_PATH> -o IdentitiesOnly=yes"
+git push git@github.com:lastphoenx/SlitProjektHub.git main
+```
+
+Alternativ: `.\scripts\git-push-main.ps1` (lokal konfiguriert).
+
+**Nicht:** WSL-Raten, `git push origin main` ohne SSH-URL wenn Remote HTTPS ist.

@@ -1,0 +1,61 @@
+{# KI für Visualisierung: Standard / Anthropic / Ollama (+ OpenAI wenn Key) #}
+<div style="padding:.5rem .6rem;border:1px dashed var(--color-border);border-radius:.375rem;background:var(--color-surface-2)">
+  <label class="form-label" style="font-size:.72rem;margin-bottom:.35rem">KI für Visualisierung (optional)</label>
+  <p class="text-muted" style="font-size:.68rem;margin:0 0 .45rem">
+    Struktur/Prompt für PPTX/Preview. Mit Referenz-Upload: <strong>Vision-Modelle</strong> (Badge) lesen Bilder/PDF-Seiten.
+    Cloud-PNG (DALL·E) nur bei Ausgabe „Cloud-Illustration“. Frontier-Modelle (gpt-5.4, sonnet-4.6, qwen2.5vl) empfohlen.
+  </p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+    <div>
+      <label class="form-label" style="font-size:.68rem">Provider</label>
+      <select class="form-select visual-llm-provider" name="visual_llm_provider" data-form="{{ form_id or 'default' }}">
+        <option value="" {% if not form_visual_provider %}selected{% endif %}>Standard (KI-Einstellungen)</option>
+        {% if 'anthropic' in visual_llm_providers %}
+        <option value="anthropic" {% if form_visual_provider == 'anthropic' %}selected{% endif %}>Anthropic (Cloud)</option>
+        {% endif %}
+        {% if 'ollama' in visual_llm_providers %}
+        <option value="ollama" {% if form_visual_provider == 'ollama' %}selected{% endif %}>Ollama (lokal)</option>
+        {% endif %}
+        {% if 'openai' in visual_llm_providers %}
+        <option value="openai" {% if form_visual_provider == 'openai' %}selected{% endif %}>OpenAI (Cloud)</option>
+        {% endif %}
+      </select>
+    </div>
+    <div>
+      <label class="form-label" style="font-size:.68rem">Modell</label>
+      <select class="form-select visual-llm-model" name="visual_llm_model" id="visual-llm-model-{{ form_id or 'default' }}">
+        <option value="">— Standard —</option>
+        {% for p, models in visual_llm_models.items() %}
+        {% for m in models %}
+        <option value="{{ m }}" data-provider="{{ p }}"
+          {% if visual_vision_models.get(p) and m in visual_vision_models[p] %}data-vision="1"{% endif %}
+          {% if form_visual_provider == p and form_visual_model == m %}selected{% endif %}>
+          {{ m }}{% if visual_vision_models.get(p) and m in visual_vision_models[p] %} · Vision{% endif %}
+        </option>
+        {% endfor %}
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  document.querySelectorAll('.visual-llm-provider').forEach(sel => {
+    const formId = sel.dataset.form || 'default';
+    const modelSel = document.getElementById('visual-llm-model-' + formId);
+    if (!modelSel) return;
+    function syncModels() {
+      const p = sel.value;
+      modelSel.querySelectorAll('option[data-provider]').forEach(o => {
+        o.hidden = p && o.dataset.provider !== p;
+      });
+      if (p && modelSel.value) {
+        const cur = modelSel.querySelector('option[value="' + modelSel.value + '"]');
+        if (cur && cur.hidden) modelSel.value = '';
+      }
+    }
+    sel.addEventListener('change', syncModels);
+    syncModels();
+  });
+})();
+</script>
