@@ -51,6 +51,7 @@ from src.m15_evaluation import (
     BIDDER_DELETE_MODES,
     remove_bidder,
     restore_bidder,
+    embed_offline_images_in_export_context,
     build_evaluation_export_context,
     build_evaluation_docx_bytes,
     build_evaluation_export_zip_bytes,
@@ -1743,16 +1744,20 @@ async def evaluation_export_html(
     may_see = can_view_evaluator_details(who)
     ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
     filename = _filtered_export_filename(ctx, "html")
+    image_mode = "url"
+    if download:
+        embed_offline_images_in_export_context(ctx)
+        image_mode = "embed"
     response = templates.TemplateResponse(
         "evaluation/export_report.html",
         {
             "request": request,
-            "export_image_mode": "url",
+            "export_image_mode": image_mode,
             **_export_report_template_ctx(ctx),
         },
     )
     if download:
-        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
 
 
@@ -1833,7 +1838,7 @@ async def evaluation_export_zip(
             project_title=_project_title(project_key),
             may_see_evaluators=may_see,
             render_html=(
-                (lambda ctx, image_mode=("file" if fmt == "pdf" else "url"): render_evaluation_export_html(ctx, image_mode=image_mode))
+                (lambda ctx, image_mode=("file" if fmt == "pdf" else "embed"): render_evaluation_export_html(ctx, image_mode=image_mode))
                 if fmt in ("html", "pdf")
                 else None
             ),

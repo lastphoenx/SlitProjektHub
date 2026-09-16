@@ -20,6 +20,8 @@
         <img class="rag-thumb" src="{{ item.page_image_url }}" alt="S. {{ item.page_number or '?' }}" loading="lazy" />
         <span class="rag-thumb-hint">Seite vergrössern</span>
       </a>
+      {% elif export_image_mode == 'embed' and item.get('page_image_data_uri') %}
+      <img class="rag-thumb" src="{{ item.page_image_data_uri }}" alt="S. {{ item.page_number or '?' }}" />
       {% elif export_image_mode|default('file') == 'file' and item.get('page_image_file_uri') %}
       <img class="rag-thumb" src="{{ item.page_image_file_uri }}" alt="S. {{ item.page_number or '?' }}" />
       {% elif item.get('page_image_data_uri') %}

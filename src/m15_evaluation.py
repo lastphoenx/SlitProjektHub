@@ -3553,6 +3553,37 @@ def format_rag_basis_export_text(rag_basis: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+def embed_rag_basis_offline_images(basis: dict[str, Any] | None, *, max_width: int = 520) -> dict[str, Any] | None:
+    """JPEG-Data-URIs für offline HTML-Archiv (Screenshots ohne Server-Login)."""
+    if not basis:
+        return None
+    import base64
+
+    result = dict(basis)
+    for key in ("tender", "offer"):
+        out_items: list[dict[str, Any]] = []
+        for item in result.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            img_path = row.get("page_image_path")
+            if img_path:
+                buf = _load_export_embed_image(str(img_path), max_width=max_width)
+                if buf:
+                    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+                    row["page_image_data_uri"] = f"data:image/jpeg;base64,{encoded}"
+            out_items.append(row)
+        result[key] = out_items
+    return result
+
+
+def embed_offline_images_in_export_context(ctx: EvaluationExportContext) -> None:
+    """Ersetzt rag_basis pro Zeile durch Version mit eingebetteten JPEG-Vorschauen."""
+    for row in ctx.top_rows + ctx.child_rows:
+        if row.rag_basis:
+            row.rag_basis = embed_rag_basis_offline_images(row.rag_basis)
+
+
 def _load_export_embed_image(path: str, *, max_width: int = 130) -> io.BytesIO | None:
     """WebP/PNG → kleines JPEG für Excel/Word (python-docx unterstützt kein WebP)."""
     try:
@@ -5701,6 +5732,7 @@ def build_evaluation_export_zip_bytes(
             elif fmt == "docx":
                 data = build_evaluation_docx_bytes(ctx)
             elif fmt == "html":
+                embed_offline_images_in_export_context(ctx)
                 data = render_html(ctx).encode("utf-8")
             else:
                 html = render_html(ctx)

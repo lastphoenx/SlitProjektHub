@@ -791,11 +791,12 @@
   <div style="display:flex;flex-wrap:wrap;gap:.5rem">
     <a class="btn btn-secondary" id="export-filtered-csv" href="#">CSV</a>
     <a class="btn btn-secondary" id="export-filtered-xlsx" href="#">Excel</a>
-    <a class="btn btn-secondary" id="export-filtered-html" href="#" target="_blank">HTML</a>
+    <a class="btn btn-secondary" id="export-filtered-html" href="#">HTML speichern</a>
+    <a class="btn btn-secondary" id="export-filtered-html-preview" href="#">HTML Vorschau</a>
     <a class="btn btn-secondary" id="export-filtered-docx" href="#">Word</a>
     <a class="btn btn-secondary" id="export-filtered-pdf" href="#">PDF</a>
   </div>
-  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Gefilterter Export enthält Werte und Begründungen nur der gewählten Quelle; Excel zusätzlich Blatt «Einzelanforderungen». PDF benötigt WeasyPrint auf dem Server.</p>
+  <p class="text-muted" style="font-size:.75rem;margin-top:.5rem">Gefilterter Export enthält Werte und Begründungen nur der gewählten Quelle. <strong>HTML speichern</strong> lädt eine .html-Datei mit eingebetteten Screenshots (offline nutzbar). <strong>HTML Vorschau</strong> öffnet im Tab mit Lightbox (Login nötig für Bilder).</p>
   <p id="export-status" class="text-muted" style="font-size:.8rem;margin-top:.5rem;min-height:1.2em" hidden aria-live="polite"></p>
 
   <hr style="margin:1rem 0;border:none;border-top:1px solid var(--color-border)">
@@ -1133,37 +1134,35 @@ function startEvalDocUpload(form) {
     setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
   }
 
-  async function runFilteredExport(el, format, label) {
+  async function runFilteredExport(el, format, label, opts) {
     if (!el || el.dataset.exporting === '1') return;
     if (sourceEl.value === 'user' && evaluatorEl && !evaluatorEl.value) {
       alert('Bitte einen Bewerter wählen.');
       return;
     }
-    const url = buildFilteredExportUrl(format, { download: format !== 'html' });
+    const exportOpts = opts || {};
+    const url = buildFilteredExportUrl(format, exportOpts);
     el.dataset.exporting = '1';
     el.classList.add('is-busy');
     el.textContent = 'Wird erstellt …';
     exportBusyLinks.add(el);
     setExportStatus('Export (' + label + ') läuft — bei vielen Nachweisen kann das dauern …', false);
     try {
+      if (format === 'html' && exportOpts.preview) {
+        const tab = window.open(url, '_blank');
+        if (!tab) {
+          throw new Error('Pop-up blockiert — bitte Pop-ups für diese Seite erlauben.');
+        }
+        setExportStatus('HTML-Vorschau geöffnet (neuer Tab).', false);
+        return;
+      }
       const response = await fetch(url, { credentials: 'same-origin' });
       if (!response.ok) {
         throw new Error(await readExportError(response));
       }
-      if (format === 'html') {
-        const html = await response.text();
-        const tab = window.open('', '_blank');
-        if (tab) {
-          tab.document.open();
-          tab.document.write(html);
-          tab.document.close();
-        } else {
-          throw new Error('Pop-up blockiert — bitte Pop-ups für diese Seite erlauben.');
-        }
-        setExportStatus('HTML-Export geöffnet (neuer Tab).', false);
-      } else {
+      {
         const blob = await response.blob();
-        const fallback = 'bewertung.' + format;
+        const fallback = format === 'html' ? 'bewertung.html' : ('bewertung.' + format);
         const filename = filenameFromDisposition(response.headers.get('Content-Disposition'), fallback);
         triggerDownload(blob, filename);
         const mb = (blob.size / (1024 * 1024)).toFixed(1);
@@ -1176,22 +1175,23 @@ function startEvalDocUpload(form) {
     }
   }
 
-  function wireExportLink(id, format, label) {
+  function wireExportLink(id, format, label, opts) {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('click', function(e) {
       e.preventDefault();
-      runFilteredExport(el, format, label);
+      runFilteredExport(el, format, label, opts);
     });
   }
 
   sourceEl.addEventListener('change', syncEvaluatorVisibility);
   syncEvaluatorVisibility();
-  wireExportLink('export-filtered-csv', 'csv', 'CSV');
-  wireExportLink('export-filtered-xlsx', 'xlsx', 'Excel');
-  wireExportLink('export-filtered-html', 'html', 'HTML');
-  wireExportLink('export-filtered-docx', 'docx', 'Word');
-  wireExportLink('export-filtered-pdf', 'pdf', 'PDF');
+  wireExportLink('export-filtered-csv', 'csv', 'CSV', { download: true });
+  wireExportLink('export-filtered-xlsx', 'xlsx', 'Excel', { download: true });
+  wireExportLink('export-filtered-html', 'html', 'HTML speichern', { download: true });
+  wireExportLink('export-filtered-html-preview', 'html', 'HTML Vorschau', { preview: true });
+  wireExportLink('export-filtered-docx', 'docx', 'Word', { download: true });
+  wireExportLink('export-filtered-pdf', 'pdf', 'PDF', { download: true });
 
   const zipBtn = document.getElementById('export-zip-all');
   const zipFmt = document.getElementById('export-zip-format');

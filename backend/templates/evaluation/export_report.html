@@ -13,7 +13,8 @@
       margin: 0;
       padding: 1.5rem clamp(1rem, 3vw, 2.5rem) 2.5rem;
     }
-    body.export-url {
+    body.export-url,
+    body.export-embed {
       max-width: min(1480px, 98vw);
       margin: 0 auto;
     }
@@ -63,6 +64,7 @@
       border-radius: 3px;
     }
     body.export-url .rag-thumb { max-width: min(480px, 100%); cursor: zoom-in; }
+    body.export-embed .rag-thumb { max-width: min(480px, 100%); }
     body.export-file .rag-thumb { max-width: 280px; }
     .footer { margin-top: 2rem; font-size: .75rem; color: #777; }
 
