@@ -314,7 +314,11 @@ async def evaluation_rankings_fragment(request: Request, project_key: str = ""):
     if not project_key:
         raise HTTPException(400, "project_key fehlt")
     ctx = {"request": request, **_rankings_panel_context(project_key)}
-    return templates.TemplateResponse("evaluation/_rankings_panel.html", ctx)
+    return templates.TemplateResponse(
+        "evaluation/_rankings_panel.html",
+        ctx,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/evaluation/matrix-fragment", response_class=HTMLResponse)
@@ -335,6 +339,7 @@ async def evaluation_matrix_fragment(request: Request, project_key: str = ""):
             "bidders": bidders,
             "matrix_rows": matrix_rows,
         },
+        headers={"Cache-Control": "no-store"},
     )
 
 

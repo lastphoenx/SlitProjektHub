@@ -651,11 +651,7 @@
     <a class="btn btn-secondary btn-sm" href="/evaluation/price?project_key={{ project_key }}">Preisblatt</a>
   </div>
   {% if matrix_rows %}
-  <div id="eval-matrix-panel"
-       hx-get="/evaluation/matrix-fragment?project_key={{ project_key }}"
-       hx-trigger="evalMatrixRefresh from:body"
-       hx-target="#eval-matrix-panel"
-       hx-swap="innerHTML">
+  <div id="eval-matrix-panel" data-project-key="{{ project_key }}">
     {% include "evaluation/_matrix_table.html" %}
   </div>
   {% else %}
@@ -668,9 +664,7 @@
     <h2 style="font-size:.95rem;font-weight:700;margin:0">Rangfolge</h2>
     {% if project_key %}
     <button type="button" class="btn btn-secondary btn-sm" id="eval-rankings-refresh-btn"
-            hx-get="/evaluation/rankings-fragment?project_key={{ project_key }}"
-            hx-target="#eval-rankings-panel"
-            hx-swap="innerHTML">
+            data-idle-label="Rangfolge aktualisieren">
       Rangfolge aktualisieren
     </button>
     {% endif %}
@@ -678,11 +672,8 @@
   <p class="text-muted" style="font-size:.75rem;margin:0 0 .75rem">
     Basiert auf dem Ø der <strong>Bewerter-Werte</strong> — reine KI-Vorschläge zählen erst nach «Als meine Bewertung speichern».
   </p>
-  <div id="eval-rankings-panel"
-       {% if project_key %}hx-get="/evaluation/rankings-fragment?project_key={{ project_key }}"
-       hx-trigger="evalRankingsRefresh from:body"
-       hx-target="#eval-rankings-panel"
-       hx-swap="innerHTML"{% endif %}>
+  <p id="eval-rankings-status" class="text-muted" style="font-size:.75rem;margin:0 0 .75rem;min-height:1.2em" aria-live="polite"></p>
+  <div id="eval-rankings-panel" data-project-key="{{ project_key }}">
     {% include "evaluation/_rankings_panel.html" %}
   </div>
 </div>
@@ -973,6 +964,143 @@ function openEvalPageLightbox(btn) {
     if (target.id === 'eval-matrix-panel' || target.id === 'eval-rankings-panel') {
       applyBidderFocus(focusEl.value, false);
     }
+  });
+
+  document.body.addEventListener('evalPanelsSwapped', function(evt) {
+    const targetId = evt.detail && evt.detail.targetId;
+    if (targetId === 'eval-matrix-panel' || targetId === 'eval-rankings-panel') {
+      applyBidderFocus(focusEl.value, false);
+    }
+  });
+})();
+</script>
+<script>
+(function() {
+  const rankingsBtn = document.getElementById('eval-rankings-refresh-btn');
+  const rankingsPanel = document.getElementById('eval-rankings-panel');
+  const rankingsStatus = document.getElementById('eval-rankings-status');
+  const matrixPanel = document.getElementById('eval-matrix-panel');
+  let rankingsBusy = false;
+  let matrixBusy = false;
+
+  function projectKey() {
+    if (rankingsPanel && rankingsPanel.dataset.projectKey) {
+      return rankingsPanel.dataset.projectKey;
+    }
+    if (matrixPanel && matrixPanel.dataset.projectKey) {
+      return matrixPanel.dataset.projectKey;
+    }
+    const sel = document.querySelector('select[name="project_key"]');
+    return sel ? sel.value : '';
+  }
+
+  function setRankingsStatus(msg, isError) {
+    if (!rankingsStatus) return;
+    if (!msg) {
+      rankingsStatus.textContent = '';
+      rankingsStatus.style.color = '';
+      return;
+    }
+    rankingsStatus.textContent = msg;
+    rankingsStatus.style.color = isError ? 'var(--color-danger, #c0392b)' : '';
+  }
+
+  function setRankingsBtnBusy(on) {
+    if (!rankingsBtn) return;
+    const idle = rankingsBtn.dataset.idleLabel || 'Rangfolge aktualisieren';
+    rankingsBtn.disabled = !!on;
+    rankingsBtn.classList.toggle('is-busy', !!on);
+    rankingsBtn.setAttribute('aria-busy', on ? 'true' : 'false');
+    rankingsBtn.textContent = on ? 'Wird aktualisiert …' : idle;
+  }
+
+  async function loadFragment(path, targetEl) {
+    const pk = projectKey();
+    if (!pk || !targetEl) return;
+    const url = path + '?project_key=' + encodeURIComponent(pk);
+    const response = await fetch(url, {
+      credentials: 'same-origin',
+      headers: { 'HX-Request': 'true' },
+      cache: 'no-store',
+    });
+    if (!response.ok) {
+      let detail = 'HTTP ' + response.status;
+      try {
+        const text = await response.text();
+        if (text) detail = text.slice(0, 160);
+      } catch (e) { /* ignore */ }
+      throw new Error(detail);
+    }
+    targetEl.innerHTML = await response.text();
+    if (window.htmx && typeof htmx.process === 'function') {
+      htmx.process(targetEl);
+    }
+    document.body.dispatchEvent(new CustomEvent('evalPanelsSwapped', {
+      detail: { targetId: targetEl.id },
+    }));
+  }
+
+  window.evalRefreshRankings = async function(opts) {
+    opts = opts || {};
+    if (!rankingsPanel || rankingsBusy) return;
+    rankingsBusy = true;
+    if (opts.showBusy !== false) {
+      setRankingsBtnBusy(true);
+      setRankingsStatus('Rangfolge wird neu berechnet …', false);
+    }
+    try {
+      await loadFragment('/evaluation/rankings-fragment', rankingsPanel);
+      if (opts.showStatus !== false) {
+        const now = new Date().toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
+        setRankingsStatus('Rangfolge aktualisiert (' + now + ').', false);
+      }
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err);
+      setRankingsStatus('Aktualisierung fehlgeschlagen: ' + msg, true);
+      if (typeof showToast === 'function') {
+        showToast('Rangfolge konnte nicht aktualisiert werden.', 'error');
+      }
+    } finally {
+      rankingsBusy = false;
+      setRankingsBtnBusy(false);
+    }
+  };
+
+  window.evalRefreshMatrix = async function() {
+    if (!matrixPanel || matrixBusy) return;
+    matrixBusy = true;
+    try {
+      await loadFragment('/evaluation/matrix-fragment', matrixPanel);
+    } catch (err) {
+      if (typeof showToast === 'function') {
+        showToast('Matrix konnte nicht aktualisiert werden.', 'error');
+      }
+    } finally {
+      matrixBusy = false;
+    }
+  };
+
+  if (rankingsBtn) {
+    rankingsBtn.addEventListener('click', function() {
+      if (rankingsBtn.disabled) return;
+      evalRefreshRankings({ showBusy: true, showStatus: true });
+    });
+  }
+
+  document.body.addEventListener('htmx:afterRequest', function(evt) {
+    const xhr = evt.detail && evt.detail.xhr;
+    if (!xhr) return;
+    const header = xhr.getResponseHeader('HX-Trigger');
+    if (!header) return;
+    try {
+      const triggers = JSON.parse(header);
+      if (triggers.evalRankingsRefresh) {
+        evalRefreshRankings({ showBusy: false, showStatus: true });
+      }
+      if (triggers.evalMatrixRefresh) {
+        evalRefreshMatrix();
+      }
+    } catch (e) { /* ignore malformed trigger header */ }
   });
 })();
 </script>
