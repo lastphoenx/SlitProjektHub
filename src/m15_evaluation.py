@@ -3553,11 +3553,31 @@ def format_rag_basis_export_text(rag_basis: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
-def embed_rag_basis_offline_images(basis: dict[str, Any] | None, *, max_width: int = 520) -> dict[str, Any] | None:
-    """JPEG-Data-URIs für offline HTML-Archiv (Screenshots ohne Server-Login)."""
+def _offline_html_image_data_uri(path: str) -> str | None:
+    """Seitenvorschau ohne Recompress — Original-WebP (bis 1400px) als Data-URI."""
+    import base64
+
+    try:
+        img_path = Path(path)
+        raw = img_path.read_bytes()
+        if not raw:
+            return None
+        if img_path.suffix.lower() == ".webp":
+            encoded = base64.b64encode(raw).decode("ascii")
+            return f"data:image/webp;base64,{encoded}"
+        buf = _load_export_embed_image(str(img_path), max_width=1400, jpeg_quality=90)
+        if not buf:
+            return None
+        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}"
+    except OSError:
+        return None
+
+
+def embed_rag_basis_offline_images(basis: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Volle Seitenvorschau-Qualität für offline HTML-Archiv (kein Downscale)."""
     if not basis:
         return None
-    import base64
 
     result = dict(basis)
     for key in ("tender", "offer"):
@@ -3568,10 +3588,9 @@ def embed_rag_basis_offline_images(basis: dict[str, Any] | None, *, max_width: i
             row = dict(item)
             img_path = row.get("page_image_path")
             if img_path:
-                buf = _load_export_embed_image(str(img_path), max_width=max_width)
-                if buf:
-                    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-                    row["page_image_data_uri"] = f"data:image/jpeg;base64,{encoded}"
+                data_uri = _offline_html_image_data_uri(str(img_path))
+                if data_uri:
+                    row["page_image_data_uri"] = data_uri
             out_items.append(row)
         result[key] = out_items
     return result
@@ -3584,8 +3603,8 @@ def embed_offline_images_in_export_context(ctx: EvaluationExportContext) -> None
             row.rag_basis = embed_rag_basis_offline_images(row.rag_basis)
 
 
-def _load_export_embed_image(path: str, *, max_width: int = 130) -> io.BytesIO | None:
-    """WebP/PNG → kleines JPEG für Excel/Word (python-docx unterstützt kein WebP)."""
+def _load_export_embed_image(path: str, *, max_width: int = 130, jpeg_quality: int = 72) -> io.BytesIO | None:
+    """WebP/PNG → JPEG für Excel/Word-Thumbnails (python-docx unterstützt kein WebP)."""
     try:
         from PIL import Image
 
@@ -3596,7 +3615,7 @@ def _load_export_embed_image(path: str, *, max_width: int = 130) -> io.BytesIO |
                 new_h = max(1, int(height * max_width / width))
                 im = im.resize((max_width, new_h), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=72, optimize=True)
+            im.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
             buf.seek(0)
             return buf
     except Exception:
