@@ -190,7 +190,7 @@ def test_compute_rankings_phase2_interim():
 
         score(b1.id, zk.id, 9.0)
         score(b2.id, zk.id, 9.0)
-        score(b3.id, zk.id, 6.5)
+        score(b3.id, zk.id, 4.0)
         session.commit()
 
     import src.m15_evaluation as ev

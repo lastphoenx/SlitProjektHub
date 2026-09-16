@@ -106,7 +106,7 @@
       <td title="Phase 1 + volle Punktzahl A-01 (hypothetisch)">{{ r.max_score if r.max_score is not none else '—' }}{% if r.max_score is not none %} / {{ total_max_points|int }}{% endif %}</td>
       <td>
         {% if r.ko %}K.O.
-        {% elif r.can_still_win == false %}<span title="Selbst mit voller Punktzahl in Phase 2 nicht mehr erreichbar">nein</span>
+        {% elif r.can_still_win == false %}<span title="Selbst mit voller Punktzahl in Phase 2 nicht mehr vor dem Phase-1-Führenden">nein</span>
         {% elif r.can_still_win %}ja
         {% else %}—{% endif %}
       </td>

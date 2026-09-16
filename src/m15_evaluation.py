@@ -2538,7 +2538,7 @@ def compute_rankings(project_key: str, *, source_mode: str = "official") -> list
     Bei Phase-2-Kriterien (z. B. A-01 Präsentation) zusätzlich:
     - interim_score / interim_rank: nur Phase 1 (Summe Punkte×Gewicht, max = Summe Phase-1-Gewichte)
     - max_score: Phase 1 + Phase 2 hypothetisch voll
-    - can_still_win: max_score >= bester erreichbarer max_score
+    - can_still_win: max_score >= interim_score des Phase-1-Führenden (Präsi voll vs. Führender Phase 1)
     """
     bidders = list_bidders(project_key)
     criteria = list_criteria(project_key)
@@ -2637,7 +2637,6 @@ def compute_rankings(project_key: str, *, source_mode: str = "official") -> list
         )
 
     leader_interim: Optional[float] = None
-    leader_max: Optional[float] = None
     if has_phase2:
         interim_vals = [
             r["interim_score"]
@@ -2645,18 +2644,13 @@ def compute_rankings(project_key: str, *, source_mode: str = "official") -> list
             if not r["ko"] and r["interim_score"] is not None
         ]
         leader_interim = max(interim_vals) if interim_vals else None
-        max_vals = [
-            r["max_score"]
-            for r in rows
-            if not r["ko"] and r["max_score"] is not None
-        ]
-        leader_max = max(max_vals) if max_vals else None
         for r in rows:
-            if r["ko"] or leader_max is None or r["max_score"] is None:
+            if r["ko"] or leader_interim is None or r["max_score"] is None:
                 r["can_still_win"] = None
             else:
-                # Einladung möglich, wenn volle Phase 2 den besten erreichbaren Gesamtstand erreicht
-                r["can_still_win"] = r["max_score"] >= leader_max - 0.01
+                # Einladung möglich, wenn volle Phase-2-Punkte den Phase-1-Führenden überholen können
+                # (Führender könnte in A-01 minimal punkten).
+                r["can_still_win"] = r["max_score"] >= leader_interim - 0.01
 
     eligible = [r for r in rows if not r["ko"] and r["total_score"] is not None]
     ineligible = [r for r in rows if r["ko"] or r["total_score"] is None]
