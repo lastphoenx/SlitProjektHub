@@ -2,6 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Offertbeurteilung — {{ ctx.bidder_name }}</title>
   <style>
     :root { color-scheme: light; }
@@ -15,8 +16,10 @@
     }
     body.export-url,
     body.export-embed {
-      max-width: min(1480px, 98vw);
-      margin: 0 auto;
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      padding: 1rem clamp(0.75rem, 2vw, 2.5rem) 2rem;
     }
     body.export-file {
       padding: 0;
@@ -63,28 +66,62 @@
       border: 1px solid #ccc;
       border-radius: 3px;
     }
-    body.export-url .rag-thumb { max-width: min(480px, 100%); cursor: zoom-in; }
-    body.export-embed .rag-thumb { max-width: min(960px, 100%); }
+    body.export-url .rag-thumb,
+    body.export-embed .rag-thumb {
+      width: 100%;
+      max-width: 100%;
+      height: auto;
+    }
+    body.export-url .rag-thumb-link { cursor: zoom-in; }
     body.export-file .rag-thumb { max-width: 280px; }
     .footer { margin-top: 2rem; font-size: .75rem; color: #777; }
 
-    /* HTML: breite Tabelle */
-    .export-table-wrap { overflow-x: auto; margin-bottom: 1rem; }
+    /* HTML: fluid Tabelle — Breite per Viewport, nicht Monitor-Zoll */
+    .export-table-wrap {
+      overflow-x: auto;
+      margin-bottom: 1rem;
+      -webkit-overflow-scrolling: touch;
+    }
     table.export-table {
       width: 100%;
-      min-width: 920px;
       border-collapse: collapse;
-      font-size: .88rem;
+      font-size: clamp(0.8rem, 0.75rem + 0.15vw, 0.92rem);
+      table-layout: fixed;
     }
     table.export-table th,
     table.export-table td {
       border: 1px solid #ccc;
-      padding: .5rem .6rem;
+      padding: 0.5rem 0.6rem;
       vertical-align: top;
       text-align: left;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     table.export-table th { background: #f3f3f3; font-weight: 600; }
-    table.export-table .col-evidence { min-width: 420px; width: 46%; }
+    table.export-table .col-crit { width: 13%; }
+    table.export-table .col-kind { width: 7%; }
+    table.export-table .col-weight { width: 6%; }
+    table.export-table .col-scale { width: 5%; }
+    table.export-table .col-value { width: 5%; }
+    table.export-table .col-evidence { width: 64%; }
+
+    @media (max-width: 899px) {
+      table.export-table { min-width: 640px; table-layout: auto; }
+      table.export-table .col-evidence { min-width: 280px; }
+    }
+    @media (min-width: 1200px) {
+      table.export-table .col-crit { width: 11%; }
+      table.export-table .col-evidence { width: 68%; }
+    }
+    @media (min-width: 1600px) {
+      table.export-table .col-crit { width: 10%; }
+      table.export-table .col-evidence { width: 72%; }
+      body.export-url,
+      body.export-embed { padding-inline: clamp(1rem, 3vw, 4rem); }
+    }
+    @media (min-width: 2000px) {
+      table.export-table .col-evidence { width: 75%; }
+    }
 
     /* PDF: Karten statt Tabelle (WeasyPrint) */
     .criterion-block {
@@ -133,8 +170,8 @@
     }
     .export-lightbox[hidden] { display: none !important; }
     .export-lightbox img {
-      max-width: min(96vw, 1400px);
-      max-height: 92vh;
+      max-width: min(98vw, 2400px);
+      max-height: 94vh;
       object-fit: contain;
       background: #fff;
       border-radius: 4px;
@@ -180,22 +217,22 @@
   <table class="export-table">
     <thead>
       <tr>
-        <th>Kriterium</th>
-        <th>Art</th>
-        {% if show_weight %}<th>Gewicht %</th>{% endif %}
-        <th>Skala</th>
-        <th>Wert</th>
+        <th class="col-crit">Kriterium</th>
+        <th class="col-kind">Art</th>
+        {% if show_weight %}<th class="col-weight">Gewicht %</th>{% endif %}
+        <th class="col-scale">Skala</th>
+        <th class="col-value">Wert</th>
         <th class="col-evidence">Begründung &amp; Nachweise</th>
       </tr>
     </thead>
     <tbody>
       {% for row in rows %}
       <tr>
-        <td>{{ row.criterion_name }}</td>
-        <td>{{ row.criterion_kind }}</td>
-        {% if show_weight %}<td>{{ row.weight_pct if row.weight_pct is not none else '—' }}</td>{% endif %}
-        <td>0–{{ row.scale_max }}</td>
-        <td>{{ row.value_display or '—' }}</td>
+        <td class="col-crit">{{ row.criterion_name }}</td>
+        <td class="col-kind">{{ row.criterion_kind }}</td>
+        {% if show_weight %}<td class="col-weight">{{ row.weight_pct if row.weight_pct is not none else '—' }}</td>{% endif %}
+        <td class="col-scale">0–{{ row.scale_max }}</td>
+        <td class="col-value">{{ row.value_display or '—' }}</td>
         <td class="col-evidence">{{ justification_cell(row) }}</td>
       </tr>
       {% endfor %}
@@ -245,22 +282,22 @@
   <table class="export-table">
     <thead>
       <tr>
-        <th>Übergeordnet</th>
-        <th>Anforderung</th>
+        <th class="col-crit">Übergeordnet</th>
+        <th class="col-kind">Anforderung</th>
         <th>Art</th>
-        <th>Skala</th>
-        <th>Wert</th>
+        <th class="col-scale">Skala</th>
+        <th class="col-value">Wert</th>
         <th class="col-evidence">Begründung &amp; Nachweise</th>
       </tr>
     </thead>
     <tbody>
       {% for row in ctx.child_rows %}
       <tr>
-        <td>{{ row.parent_name }}</td>
-        <td>{{ row.criterion_name }}</td>
+        <td class="col-crit">{{ row.parent_name }}</td>
+        <td class="col-kind">{{ row.criterion_name }}</td>
         <td>{{ row.criterion_kind }}</td>
-        <td>0–{{ row.scale_max }}</td>
-        <td>{{ row.value_display or '—' }}</td>
+        <td class="col-scale">0–{{ row.scale_max }}</td>
+        <td class="col-value">{{ row.value_display or '—' }}</td>
         <td class="col-evidence">{{ justification_cell(row) }}</td>
       </tr>
       {% endfor %}
