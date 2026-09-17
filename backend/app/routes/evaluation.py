@@ -290,6 +290,21 @@ def _enrich_ranking_rows(rankings: list, criteria: list, price_status: dict) -> 
         row["price_points"] = price_pts
 
 
+def _merge_ai_invitation_fields(
+    official_rankings: list[dict],
+    ai_rankings: list[dict],
+) -> None:
+    """Einladung? und «Max. bei Präsentation voll» aus Matrix/KI (volle Phase 1), nicht nur Preis."""
+    ai_by_id = {r["bidder_id"]: r for r in ai_rankings}
+    for row in official_rankings:
+        ai = ai_by_id.get(row["bidder_id"])
+        if not ai:
+            continue
+        row["matrix_interim_score"] = ai.get("interim_score")
+        row["matrix_max_score"] = ai.get("max_score")
+        row["can_still_win"] = ai.get("can_still_win")
+
+
 def _price_ranking_rows(rankings: list) -> list[dict]:
     rows = [
         {
@@ -369,6 +384,7 @@ def _rankings_panel_context(project_key: str) -> dict:
         None,
     )
     _enrich_ranking_rows(rankings, criteria, price_status)
+    _merge_ai_invitation_fields(rankings, ai_rankings)
     coverage = _phase1_coverage_label(rankings, criteria)
     only_price = "nur der Preis" in coverage or "praktisch nur der Preis" in coverage
     zuschlag_top = [
@@ -395,6 +411,7 @@ def _rankings_panel_context(project_key: str) -> dict:
         "priciest_tco": price_status.get("priciest"),
         "phase1_coverage_label": coverage,
         "phase1_interim_subtitle": "aktuell nur Preis" if only_price else "alle bewerteten ZK-Kriterien",
+        "phase1_invite_uses_matrix": only_price,
         "ai_coverage_label": _ai_coverage_label(ai_rankings, criteria),
         "price_rankings": _price_ranking_rows(rankings),
         "phase1_max_points": phase1_max_points,
@@ -814,15 +831,35 @@ async def evaluation_save_score(
             source_chunk_ref=source_chunk_ref or None,
         )
     except ValueError as exc:
+        err_msg = str(exc)
         if request.headers.get("hx-request"):
-            return await evaluation_cell(
+            adopt_draft = None
+            form_draft = None
+            if ai_reference_justification.strip():
+                adopt_draft = {
+                    "adopt_value": value,
+                    "adopt_justification": justification,
+                    "adopt_source_chunk_ref": source_chunk_ref,
+                    "ai_reference_justification": ai_reference_justification,
+                    "adopt_requires_justification": score_requires_justification(crit, value),
+                }
+            else:
+                form_draft = {
+                    "value": value,
+                    "justification": justification,
+                    "source_chunk_ref": source_chunk_ref,
+                }
+            resp = await evaluation_cell(
                 request,
                 bidder_id=bidder_id,
                 criterion_id=criterion_id,
                 project_key=project_key,
-                score_error=str(exc),
+                score_error=err_msg,
+                form_draft=form_draft,
+                adopt_draft=adopt_draft,
             )
-        raise HTTPException(400, str(exc)) from exc
+            return resp
+        raise HTTPException(400, err_msg) from exc
     if request.headers.get("hx-request"):
         resp = await evaluation_cell(
             request, bidder_id=bidder_id, criterion_id=criterion_id, project_key=project_key
@@ -874,6 +911,8 @@ async def evaluation_cell(
     criterion_id: int,
     project_key: str = "",
     score_error: str = "",
+    form_draft: dict | None = None,
+    adopt_draft: dict | None = None,
 ):
     """Detail-Panel einer Matrix-Zelle: KI-Vorschlag + jede Bewerter-Zeile einzeln,
     plus Formular fuer die eigene Bewertung. Das ist die 'mehrere Spalten'-Ansicht."""
@@ -968,6 +1007,8 @@ async def evaluation_cell(
         "my_user_id": uid,
         "has_bidder_docs": bool(get_bidder_document_ids(bidder_id)),
         "score_error": score_error,
+        "form_draft": form_draft,
+        "adopt_draft": adopt_draft,
         "requires_justification": score_requires_justification,
     }
     ctx.update(_llm_picker_context())

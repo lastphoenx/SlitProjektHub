@@ -2526,7 +2526,7 @@ def _zuschlag_weighted_score(
         )
     if not any_scored:
         return None, details
-    return round(weighted_sum, 2), details
+    return round(weighted_sum, 4), details
 
 
 def compute_rankings(project_key: str, *, source_mode: str = "official") -> list[dict[str, Any]]:
@@ -2650,7 +2650,7 @@ def compute_rankings(project_key: str, *, source_mode: str = "official") -> list
             else:
                 # Einladung möglich, wenn volle Phase-2-Punkte den Phase-1-Führenden überholen können
                 # (Führender könnte in A-01 minimal punkten).
-                r["can_still_win"] = r["max_score"] >= leader_interim - 0.01
+                r["can_still_win"] = r["max_score"] >= leader_interim - 0.001
 
     eligible = [r for r in rows if not r["ko"] and r["total_score"] is not None]
     ineligible = [r for r in rows if r["ko"] or r["total_score"] is None]

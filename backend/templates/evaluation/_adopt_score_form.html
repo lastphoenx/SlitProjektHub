@@ -1,0 +1,29 @@
+<form method="post" action="/evaluation/score" hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML"
+      style="margin-top:.75rem;padding-top:.65rem;border-top:1px solid var(--color-border);display:grid;gap:.45rem">
+  <input type="hidden" name="project_key" value="{{ project_key }}" />
+  <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+  <input type="hidden" name="criterion_id" value="{{ criterion_id }}" />
+  <input type="hidden" name="value" value="{{ adopt_value }}" />
+  <input type="hidden" name="ai_reference_justification" value="{{ ai_reference_justification or '' }}" />
+
+  {% if score_error %}
+  <div class="card" style="border-color:var(--color-danger);padding:.45rem .55rem">
+    <p style="font-size:.8rem;margin:0;color:var(--color-danger)">{{ score_error }}</p>
+  </div>
+  {% endif %}
+
+  <p class="eval-ki-suggestion-label" style="margin:0">Als meine Bewertung übernehmen</p>
+  <p class="text-muted" style="font-size:.72rem;margin:0">
+    Begründung lesen und anpassen — wird unter Ihrem Namen gespeichert
+    {% if adopt_requires_justification %}(Pflicht bei Punktabzug){% endif %}.
+  </p>
+  <label class="form-label" for="adopt-justification-{{ criterion_id }}">Ihre Begründung</label>
+  <textarea class="form-input" id="adopt-justification-{{ criterion_id }}" name="justification" rows="5"
+            {% if adopt_requires_justification %}required{% endif %}>{{ adopt_justification or '' }}</textarea>
+  <label class="form-label" for="adopt-source-{{ criterion_id }}">Zitat/Quelle aus dem Angebot</label>
+  <textarea class="form-input" id="adopt-source-{{ criterion_id }}" name="source_chunk_ref" rows="2"
+            placeholder="Optional — aus KI-Vorschlag übernommen, editierbar">{{ adopt_source_chunk_ref or '' }}</textarea>
+  <div>
+    <button type="submit" class="btn btn-primary btn-sm">Als meine Bewertung speichern</button>
+  </div>
+</form>

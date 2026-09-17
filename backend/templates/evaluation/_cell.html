@@ -61,12 +61,13 @@
       </div>
 
       {% if may_evaluate %}
-      {% if score_error %}
+      {% if score_error and not adopt_draft %}
       <div class="card" style="margin-bottom:.5rem;border-color:var(--color-danger)">
         <p style="font-size:.8rem;margin:0;color:var(--color-danger)">{{ score_error }}</p>
       </div>
       {% endif %}
-      <form method="post" action="/evaluation/score" style="display:grid;gap:.5rem" id="eval-score-form" {% if request.headers.get('hx-request') %}hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML"{% endif %}>
+      <form method="post" action="/evaluation/score" hx-post="/evaluation/score" hx-target="#modal-slot" hx-swap="innerHTML"
+            style="display:grid;gap:.5rem" id="eval-score-form">
         <input type="hidden" name="project_key" value="{{ project_key }}" />
         <input type="hidden" name="bidder_id" value="{{ bidder.id }}" />
         <input type="hidden" name="criterion_id" value="{{ criterion.id }}" />
@@ -74,15 +75,16 @@
         {% if criterion.scale_max == 1 %}
         <select class="form-select" name="value" id="eval-score-value" required onchange="syncJustificationRequired()">
           <option value="">— wählen —</option>
-          <option value="1">Ja / erfüllt</option>
-          <option value="0">Nein / nicht erfüllt</option>
+          <option value="1"{% if form_draft and form_draft.value == 1 %} selected{% endif %}>Ja / erfüllt</option>
+          <option value="0"{% if form_draft and form_draft.value == 0 %} selected{% endif %}>Nein / nicht erfüllt</option>
         </select>
         {% else %}
-        <input class="form-input" name="value" id="eval-score-value" type="number" step="0.5" min="0" max="{{ criterion.scale_max }}" required oninput="syncJustificationRequired()" />
+        <input class="form-input" name="value" id="eval-score-value" type="number" step="0.5" min="0" max="{{ criterion.scale_max }}" required oninput="syncJustificationRequired()"
+               value="{{ form_draft.value if form_draft and form_draft.value is not none else '' }}" />
         {% endif %}
         <textarea class="form-input" name="justification" id="eval-score-justification" rows="2"
-                  placeholder="Begründung (Pflicht bei «Nein» / Abzug von Maximalpunktzahl)"></textarea>
-        <textarea class="form-input" name="source_chunk_ref" rows="2" placeholder="Zitat/Quelle aus dem Angebot"></textarea>
+                  placeholder="Begründung (Pflicht bei «Nein» / Abzug von Maximalpunktzahl)">{{ form_draft.justification if form_draft else '' }}</textarea>
+        <textarea class="form-input" name="source_chunk_ref" rows="2" placeholder="Zitat/Quelle aus dem Angebot">{{ form_draft.source_chunk_ref if form_draft else '' }}</textarea>
         <div id="cell-llm-picker" style="margin:.25rem 0">
           {% set form_id = 'eval-cell-' ~ bidder.id ~ '-' ~ criterion.id %}
           {% set llm_role = 'output' %}
@@ -114,7 +116,22 @@
           </button>
         </div>
       </form>
-      <div id="cell-suggest-target" data-bidder="{{ bidder.id }}" data-criterion="{{ criterion.id }}" data-project="{{ project_key }}"></div>
+      <div id="cell-suggest-target" data-bidder="{{ bidder.id }}" data-criterion="{{ criterion.id }}" data-project="{{ project_key }}">
+        {% if adopt_draft %}
+        <div class="card eval-ki-suggestion" style="margin-top:.5rem;background:var(--color-surface-2)">
+          <strong>🤖 Als meine Bewertung übernehmen</strong>
+          <p style="margin:.35rem 0 0">Wert: <strong>{{ adopt_draft.adopt_value }}</strong></p>
+          {% with project_key=project_key, bidder_id=bidder.id, criterion_id=criterion.id,
+                    adopt_value=adopt_draft.adopt_value, adopt_justification=adopt_draft.adopt_justification,
+                    adopt_source_chunk_ref=adopt_draft.adopt_source_chunk_ref,
+                    ai_reference_justification=adopt_draft.ai_reference_justification,
+                    adopt_requires_justification=adopt_draft.adopt_requires_justification,
+                    score_error=score_error %}
+          {% include "evaluation/_adopt_score_form.html" %}
+          {% endwith %}
+        </div>
+        {% endif %}
+      </div>
       {% endif %}
     </div>
   </div>
