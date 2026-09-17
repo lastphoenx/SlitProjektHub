@@ -136,13 +136,72 @@
 </script>
 {% endif %}
 
+{% if may_evaluate and bidder_id %}
+<div style="display:flex;justify-content:flex-end;margin-bottom:.65rem">
+  {% if price_edit_mode %}
+  <a class="btn btn-secondary btn-sm" href="/evaluation/price?project_key={{ project_key }}&bidder_id={{ bidder_id }}">Fertig</a>
+  {% else %}
+  <a class="btn btn-secondary btn-sm" href="/evaluation/price?project_key={{ project_key }}&bidder_id={{ bidder_id }}&edit=1">Bearbeiten</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% macro price_row_actions(i, loop_index, loop_length) %}
+<div class="price-row-actions" style="display:flex;gap:.2rem;flex-wrap:wrap;justify-content:flex-end">
+  {% if price_edit_mode %}
+  <form method="post" action="/evaluation/price-item/move" style="display:inline">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+    <input type="hidden" name="item_id" value="{{ i.id }}" />
+    <input type="hidden" name="direction" value="up" />
+    <button type="submit" class="btn btn-secondary btn-sm" title="Nach oben" {% if loop_index == 0 %}disabled{% endif %}>↑</button>
+  </form>
+  <form method="post" action="/evaluation/price-item/move" style="display:inline">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+    <input type="hidden" name="item_id" value="{{ i.id }}" />
+    <input type="hidden" name="direction" value="down" />
+    <button type="submit" class="btn btn-secondary btn-sm" title="Nach unten" {% if loop_index >= loop_length - 1 %}disabled{% endif %}>↓</button>
+  </form>
+  <button type="submit" class="btn btn-primary btn-sm" form="price-edit-{{ i.id }}" title="Speichern">✓</button>
+  {% endif %}
+  <form method="post" action="/evaluation/price-item/delete" style="display:inline">
+    <input type="hidden" name="project_key" value="{{ project_key }}" />
+    <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+    <input type="hidden" name="item_id" value="{{ i.id }}" />
+    <button type="submit" class="btn btn-danger btn-sm" title="Löschen">×</button>
+  </form>
+</div>
+{% endmacro %}
+
 <div class="card" style="margin-bottom:1rem">
   <h2 style="font-size:.95rem;font-weight:700;margin-bottom:.75rem">Umsetzungs- und Entwicklungskosten (einmalig)</h2>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Referenz</th><th>Leistungsbeschreibung</th><th>Anzahl</th><th>Einheit</th><th>Kosten/Einheit</th><th>CHF</th><th>Bemerkung</th><th></th></tr></thead>
+      <thead><tr><th>Referenz</th><th>Leistungsbeschreibung</th><th>Anzahl</th><th>Einheit</th><th>Kosten/Einheit</th><th>CHF</th><th>Bemerkung</th><th style="width:{% if price_edit_mode %}9rem{% else %}3rem{% endif %}"></th></tr></thead>
       <tbody>
         {% for i in einmalig %}
+        {% if price_edit_mode and may_evaluate %}
+        <form id="price-edit-{{ i.id }}" method="post" action="/evaluation/price-item" style="display:contents">
+          <tr>
+            <td>
+              <input type="hidden" name="project_key" value="{{ project_key }}" />
+              <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+              <input type="hidden" name="item_id" value="{{ i.id }}" />
+              <input type="hidden" name="category" value="einmalig" />
+              <input type="hidden" name="return_edit" value="1" />
+              <input class="form-input" name="referenz" value="{{ i.referenz or '' }}" placeholder="F-01" style="min-width:5rem" />
+            </td>
+            <td><input class="form-input" name="leistungsbeschreibung" value="{{ i.leistungsbeschreibung }}" required style="min-width:12rem" /></td>
+            <td><input class="form-input" name="anzahl" type="number" step="0.01" value="{{ i.anzahl }}" style="min-width:4.5rem" /></td>
+            <td><input class="form-input" name="einheit" value="{{ i.einheit or '' }}" style="min-width:4.5rem" /></td>
+            <td><input class="form-input" name="kosten_pro_einheit" type="number" step="0.01" value="{{ i.kosten_pro_einheit }}" style="min-width:5rem" /></td>
+            <td>{{ "%.2f"|format(i.chf) }}</td>
+            <td><input class="form-input" name="bemerkung" value="{{ i.bemerkung or '' }}" style="min-width:8rem" /></td>
+            <td>{{ price_row_actions(i, loop.index0, einmalig|length) }}</td>
+          </tr>
+        </form>
+        {% else %}
         <tr>
           <td>{{ i.referenz or "" }}</td>
           <td>{{ i.leistungsbeschreibung }}</td>
@@ -162,6 +221,7 @@
             {% endif %}
           </td>
         </tr>
+        {% endif %}
         {% endfor %}
       </tbody>
     </table>
@@ -171,6 +231,7 @@
     <input type="hidden" name="project_key" value="{{ project_key }}" />
     <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
     <input type="hidden" name="category" value="einmalig" />
+    {% if price_edit_mode %}<input type="hidden" name="return_edit" value="1" />{% endif %}
     <input class="form-input" name="referenz" placeholder="Referenz (F-01)" />
     <input class="form-input" name="leistungsbeschreibung" placeholder="Leistungsbeschreibung" required style="grid-column:span 2" />
     <input class="form-input" name="anzahl" type="number" step="0.01" placeholder="Anzahl" />
@@ -189,9 +250,30 @@
     <strong style="font-size:.85rem">{{ year }}</strong>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Leistungsbeschreibung</th><th>Anzahl</th><th>Einheit</th><th>Kosten/Einheit</th><th>CHF</th><th>Bemerkung</th><th></th></tr></thead>
+        <thead><tr><th>Leistungsbeschreibung</th><th>Anzahl</th><th>Einheit</th><th>Kosten/Einheit</th><th>CHF</th><th>Bemerkung</th><th style="width:{% if price_edit_mode %}9rem{% else %}3rem{% endif %}"></th></tr></thead>
         <tbody>
           {% for i in items %}
+          {% if price_edit_mode and may_evaluate %}
+          <form id="price-edit-{{ i.id }}" method="post" action="/evaluation/price-item" style="display:contents">
+            <tr>
+              <td>
+                <input type="hidden" name="project_key" value="{{ project_key }}" />
+                <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
+                <input type="hidden" name="item_id" value="{{ i.id }}" />
+                <input type="hidden" name="category" value="wiederkehrend" />
+                <input type="hidden" name="year" value="{{ i.year }}" />
+                <input type="hidden" name="return_edit" value="1" />
+                <input class="form-input" name="leistungsbeschreibung" value="{{ i.leistungsbeschreibung }}" required style="min-width:12rem" />
+              </td>
+              <td><input class="form-input" name="anzahl" type="number" step="0.01" value="{{ i.anzahl }}" style="min-width:4.5rem" /></td>
+              <td><input class="form-input" name="einheit" value="{{ i.einheit or '' }}" style="min-width:4.5rem" /></td>
+              <td><input class="form-input" name="kosten_pro_einheit" type="number" step="0.01" value="{{ i.kosten_pro_einheit }}" style="min-width:5rem" /></td>
+              <td>{{ "%.2f"|format(i.chf) }}</td>
+              <td><input class="form-input" name="bemerkung" value="{{ i.bemerkung or '' }}" style="min-width:8rem" /></td>
+              <td>{{ price_row_actions(i, loop.index0, items|length) }}</td>
+            </tr>
+          </form>
+          {% else %}
           <tr>
             <td>{{ i.leistungsbeschreibung }}</td>
             <td>{{ i.anzahl }}</td>
@@ -210,6 +292,7 @@
               {% endif %}
             </td>
           </tr>
+          {% endif %}
           {% endfor %}
         </tbody>
       </table>
@@ -223,6 +306,7 @@
     <input type="hidden" name="project_key" value="{{ project_key }}" />
     <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
     <input type="hidden" name="category" value="wiederkehrend" />
+    {% if price_edit_mode %}<input type="hidden" name="return_edit" value="1" />{% endif %}
     <select class="form-select" name="year" required>
       {% for y in price_years %}
       <option value="{{ y }}">{{ y }}</option>

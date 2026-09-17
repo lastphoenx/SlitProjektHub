@@ -56,6 +56,7 @@ from src.m15_evaluation import (
     build_evaluation_docx_bytes,
     build_evaluation_export_zip_bytes,
     build_evaluation_pdf_bytes,
+    build_filtered_csv_bytes,
     build_filtered_xlsx_bytes,
     context_to_tabular_sheets,
     list_evaluator_ids_for_project,
@@ -64,6 +65,7 @@ from src.m15_evaluation import (
     create_bidder,
     create_criterion,
     delete_price_item,
+    move_price_item,
     extract_criteria_from_tender_docs,
     criteria_apply_requires_confirm,
     criteria_editor_payload,
@@ -95,6 +97,7 @@ from src.m15_evaluation import (
     merge_price_structure_for_bidder,
     normalize_chunk_size,
     official_score,
+    parse_export_report_mode,
     price_offers_status,
     recommended_chunk_size,
     project_evaluation_started,
@@ -1618,7 +1621,7 @@ async def evaluation_delete_criterion(
 # ── Preisblatt (TCO) ────────────────────────────────────────────────────────
 
 @router.get("/evaluation/price", response_class=HTMLResponse)
-async def evaluation_price_page(request: Request, project_key: str, bidder_id: int = 0):
+async def evaluation_price_page(request: Request, project_key: str, bidder_id: int = 0, edit: int = 0):
     who = _username(request)
     bidders = list_bidders(project_key)
     if not bidder_id and bidders:
@@ -1652,6 +1655,7 @@ async def evaluation_price_page(request: Request, project_key: str, bidder_id: i
             "eval_config": eval_config,
             "price_years": eval_config.get("price_years", []),
             "price_offers_status": price_status,
+            "price_edit_mode": bool(edit) and can_evaluate(who),
     }
     price_page_ctx.update(_llm_picker_context())
     return templates.TemplateResponse("evaluation/_price.html", price_page_ctx)
@@ -1671,6 +1675,7 @@ async def evaluation_save_price_item(
     einheit: str = Form(""),
     referenz: str = Form(""),
     bemerkung: str = Form(""),
+    return_edit: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -1690,8 +1695,40 @@ async def evaluation_save_price_item(
     extra = ""
     if not sync_result.get("synced"):
         extra = "&price_msg=offers_incomplete"
+    stay_edit = return_edit in ("1", "true", "on", "yes") or bool(item_id.strip())
     return RedirectResponse(
-        url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}{extra}",
+        url=_price_page_url(project_key, bidder_id, edit=stay_edit, extra=extra),
+        status_code=303,
+    )
+
+
+def _price_page_url(project_key: str, bidder_id: int, *, edit: bool = False, extra: str = "") -> str:
+    url = f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}{extra}"
+    if edit:
+        url += "&edit=1"
+    return url
+
+
+@router.post("/evaluation/price-item/move", response_class=HTMLResponse)
+async def evaluation_move_price_item(
+    request: Request,
+    project_key: str = Form(...),
+    bidder_id: int = Form(...),
+    item_id: int = Form(...),
+    direction: str = Form(...),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    try:
+        move_price_item(bidder_id, item_id, direction)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    sync_result = sync_price_criterion_scores(project_key)
+    extra = ""
+    if not sync_result.get("synced"):
+        extra = "&price_msg=offers_incomplete"
+    return RedirectResponse(
+        url=_price_page_url(project_key, bidder_id, edit=True, extra=extra),
         status_code=303,
     )
 
@@ -1708,7 +1745,7 @@ async def evaluation_delete_price_item(
     if not sync_result.get("synced"):
         extra = "&price_msg=offers_incomplete"
     return RedirectResponse(
-        url=f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}{extra}",
+        url=_price_page_url(project_key, bidder_id, edit=True, extra=extra),
         status_code=303,
     )
 
@@ -1835,8 +1872,12 @@ def _build_filtered_export_context(
     source: str,
     evaluator_id: int | None,
     may_see: bool,
+    *,
+    report: str = "",
+    top_n: int | None = None,
 ):
     source_key = _resolve_export_source_key(source, evaluator_id)
+    report_mode, top_n_val = parse_export_report_mode(report, top_n)
     try:
         return build_evaluation_export_context(
             project_key,
@@ -1844,6 +1885,8 @@ def _build_filtered_export_context(
             source_key,
             project_title=_project_title(project_key),
             may_see_evaluators=may_see,
+            report_mode=report_mode,
+            top_n=top_n_val,
         )
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from exc
@@ -1853,6 +1896,8 @@ def _build_filtered_export_context(
 
 def _filtered_export_filename(ctx, ext: str) -> str:
     stem = _safe_export_stem("bewertung", ctx.project_key, ctx.bidder_name, ctx.source_label)
+    if ctx.report_mode == "small":
+        stem += "_kurz"
     return f"{stem}.{ext}"
 
 
@@ -1877,6 +1922,8 @@ async def evaluation_export_csv(
     bidder_id: int | None = None,
     source: str = "",
     evaluator_id: int | None = None,
+    report: str = "",
+    top_n: int | None = None,
 ):
     who = _username(request)
     if not who:
@@ -1886,14 +1933,12 @@ async def evaluation_export_csv(
     if bidder_id is not None:
         if not source:
             raise HTTPException(400, "source erforderlich (ai oder user)")
-        ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
-        headers, rows = context_to_tabular_sheets(ctx)["Bewertungen"]
+        ctx = _build_filtered_export_context(
+            project_key, bidder_id, source, evaluator_id, may_see,
+            report=report, top_n=top_n,
+        )
+        csv_payload = build_filtered_csv_bytes(ctx).decode("utf-8-sig")
         filename = _filtered_export_filename(ctx, "csv")
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(headers)
-        writer.writerows(rows)
-        csv_payload = buf.getvalue()
     else:
         headers, rows = _export_rows(project_key, may_see)
         filename = f"bewertung_{project_key[:24]}.csv"
@@ -1917,6 +1962,8 @@ async def evaluation_export_xlsx(
     bidder_id: int | None = None,
     source: str = "",
     evaluator_id: int | None = None,
+    report: str = "",
+    top_n: int | None = None,
 ):
     who = _username(request)
     if not who:
@@ -1931,7 +1978,10 @@ async def evaluation_export_xlsx(
     if bidder_id is not None:
         if not source:
             raise HTTPException(400, "source erforderlich (ai oder user)")
-        ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
+        ctx = _build_filtered_export_context(
+            project_key, bidder_id, source, evaluator_id, may_see,
+            report=report, top_n=top_n,
+        )
         out = _write_filtered_xlsx(ctx)
         filename = _filtered_export_filename(ctx, "xlsx")
         return StreamingResponse(
@@ -2034,12 +2084,17 @@ async def evaluation_export_html(
     source: str,
     evaluator_id: int | None = None,
     download: int = 0,
+    report: str = "",
+    top_n: int | None = None,
 ):
     who = _username(request)
     if not who:
         raise HTTPException(401)
     may_see = can_view_evaluator_details(who)
-    ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
+    ctx = _build_filtered_export_context(
+        project_key, bidder_id, source, evaluator_id, may_see,
+        report=report, top_n=top_n,
+    )
     filename = _filtered_export_filename(ctx, "html")
     image_mode = "url"
     if download:
@@ -2065,12 +2120,17 @@ async def evaluation_export_docx(
     bidder_id: int,
     source: str,
     evaluator_id: int | None = None,
+    report: str = "",
+    top_n: int | None = None,
 ):
     who = _username(request)
     if not who:
         raise HTTPException(401)
     may_see = can_view_evaluator_details(who)
-    ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
+    ctx = _build_filtered_export_context(
+        project_key, bidder_id, source, evaluator_id, may_see,
+        report=report, top_n=top_n,
+    )
     try:
         data = build_evaluation_docx_bytes(ctx)
     except ImportError:
@@ -2090,12 +2150,17 @@ async def evaluation_export_pdf(
     bidder_id: int,
     source: str,
     evaluator_id: int | None = None,
+    report: str = "",
+    top_n: int | None = None,
 ):
     who = _username(request)
     if not who:
         raise HTTPException(401)
     may_see = can_view_evaluator_details(who)
-    ctx = _build_filtered_export_context(project_key, bidder_id, source, evaluator_id, may_see)
+    ctx = _build_filtered_export_context(
+        project_key, bidder_id, source, evaluator_id, may_see,
+        report=report, top_n=top_n,
+    )
     html = render_evaluation_export_html(ctx, image_mode="file")
     try:
         data = build_evaluation_pdf_bytes(html)
@@ -2119,6 +2184,8 @@ async def evaluation_export_zip(
     request: Request,
     project_key: str,
     format: str = "xlsx",
+    report: str = "",
+    top_n: int | None = None,
 ):
     who = _username(request)
     if not who:
@@ -2129,11 +2196,14 @@ async def evaluation_export_zip(
         raise HTTPException(400, f"Unbekanntes Format: {format}")
 
     try:
+        report_mode_val, top_n_val = parse_export_report_mode(report, top_n)
         data = build_evaluation_export_zip_bytes(
             project_key,
             fmt,
             project_title=_project_title(project_key),
             may_see_evaluators=may_see,
+            report_mode=report_mode_val,
+            top_n=top_n_val,
             render_html=(
                 (lambda ctx, image_mode=("file" if fmt == "pdf" else "embed"): render_evaluation_export_html(ctx, image_mode=image_mode))
                 if fmt in ("html", "pdf")

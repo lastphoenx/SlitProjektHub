@@ -719,6 +719,17 @@
     </div>
     {% endif %}
   </div>
+  <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-end;margin-top:.65rem">
+    <label class="form-check" style="display:flex;align-items:center;gap:.4rem;margin:0;cursor:pointer">
+      <input type="checkbox" class="form-check-input" id="export-report-small" />
+      <span class="form-label" style="margin:0;font-weight:500">Kurzbericht</span>
+    </label>
+    <div id="export-top-n-wrap" hidden>
+      <label class="form-label" for="export-top-n">Top-N Nachweise</label>
+      <input type="number" class="form-control" id="export-top-n" min="1" max="50" value="5" style="width:5rem" title="Global höchste Match-% (nur KI-Quelle)" />
+    </div>
+  </div>
+  <p class="text-muted" style="font-size:.72rem;margin:.35rem 0 .65rem">Kurzbericht: Matrix wie Dashboard (Ref + Unterfragen) und global Top-N RAG-Treffer mit Begründung und Screenshots. Top-N nur bei Quelle «KI-Vorschlag».</p>
   <div style="display:flex;flex-wrap:wrap;gap:.5rem">
     <a class="btn btn-secondary" id="export-filtered-csv" href="#">CSV</a>
     <a class="btn btn-secondary" id="export-filtered-xlsx" href="#">Excel</a>
@@ -1132,11 +1143,28 @@ function startEvalDocUpload(form) {
   const sourceEl = document.getElementById('export-source');
   const evaluatorEl = document.getElementById('export-evaluator-id');
   const evaluatorWrap = document.getElementById('export-evaluator-wrap');
+  const reportSmallEl = document.getElementById('export-report-small');
+  const topNEl = document.getElementById('export-top-n');
+  const topNWrap = document.getElementById('export-top-n-wrap');
   if (!bidderEl || !sourceEl) return;
 
   function syncEvaluatorVisibility() {
     if (!evaluatorWrap) return;
     evaluatorWrap.style.display = sourceEl.value === 'user' ? '' : 'none';
+  }
+
+  function syncReportOptions() {
+    if (topNWrap && reportSmallEl) {
+      topNWrap.hidden = !reportSmallEl.checked;
+    }
+  }
+
+  function appendReportParams(params) {
+    if (reportSmallEl && reportSmallEl.checked) {
+      params.set('report', 'small');
+      const n = topNEl && topNEl.value ? parseInt(topNEl.value, 10) : 5;
+      if (n >= 1 && n <= 50) params.set('top_n', String(n));
+    }
   }
 
   function buildFilteredExportUrl(format, opts) {
@@ -1148,6 +1176,7 @@ function startEvalDocUpload(form) {
     if (sourceEl.value === 'user' && evaluatorEl) {
       params.set('evaluator_id', evaluatorEl.value);
     }
+    appendReportParams(params);
     if (opts && opts.download) {
       params.set('download', '1');
     }
@@ -1262,6 +1291,10 @@ function startEvalDocUpload(form) {
 
   sourceEl.addEventListener('change', syncEvaluatorVisibility);
   syncEvaluatorVisibility();
+  if (reportSmallEl) {
+    reportSmallEl.addEventListener('change', syncReportOptions);
+    syncReportOptions();
+  }
   wireExportLink('export-filtered-csv', 'csv', 'CSV', { download: true });
   wireExportLink('export-filtered-xlsx', 'xlsx', 'Excel', { download: true });
   wireExportLink('export-filtered-html', 'html', 'HTML speichern', { download: true });
@@ -1279,6 +1312,7 @@ function startEvalDocUpload(form) {
         project_key: projectKey,
         format: zipFmt.value,
       });
+      appendReportParams(params);
       const url = '/evaluation/export.zip?' + params.toString();
       const label = zipBtn.textContent;
       zipBtn.dataset.exporting = '1';

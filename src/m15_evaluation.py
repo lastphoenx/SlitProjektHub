@@ -2368,6 +2368,43 @@ def delete_price_item(item_id: int) -> None:
             session.commit()
 
 
+def _price_item_siblings(items: list[PriceItem], item: PriceItem) -> list[PriceItem]:
+    siblings = [
+        i for i in items
+        if i.category == item.category and i.year == item.year
+    ]
+    siblings.sort(key=lambda i: (i.sort_order, i.id))
+    return siblings
+
+
+def move_price_item(bidder_id: int, item_id: int, direction: str) -> None:
+    """Verschiebt eine Zeile innerhalb derselben Kategorie/Jahr-Gruppe."""
+    direction = (direction or "").strip().lower()
+    if direction not in ("up", "down"):
+        raise ValueError("direction muss up oder down sein")
+    items = list_price_items(bidder_id)
+    item = next((i for i in items if i.id == item_id), None)
+    if not item:
+        raise ValueError("Preisposition nicht gefunden")
+    siblings = _price_item_siblings(items, item)
+    idx = next((i for i, s in enumerate(siblings) if s.id == item_id), None)
+    if idx is None:
+        raise ValueError("Preisposition nicht gefunden")
+    if direction == "up" and idx <= 0:
+        return
+    if direction == "down" and idx >= len(siblings) - 1:
+        return
+    swap_idx = idx - 1 if direction == "up" else idx + 1
+    siblings[idx], siblings[swap_idx] = siblings[swap_idx], siblings[idx]
+    with get_session() as session:
+        for order, sib in enumerate(siblings, start=1):
+            row = session.get(PriceItem, sib.id)
+            if row:
+                row.sort_order = order
+                session.add(row)
+        session.commit()
+
+
 def compute_bidder_tco(bidder_id: int) -> dict[str, Any]:
     """4-Jahres-TCO: einmalig + wiederkehrend (alle Jahre), je exkl./inkl. MwSt."""
     items = list_price_items(bidder_id)
@@ -3637,6 +3674,18 @@ def embed_offline_images_in_export_context(ctx: EvaluationExportContext) -> None
     for row in ctx.top_rows + ctx.child_rows:
         if row.rag_basis:
             row.rag_basis = embed_rag_basis_offline_images(row.rag_basis)
+    for highlight in ctx.rag_highlights:
+        other_key = "offer" if highlight.section_key == "tender" else "tender"
+        basis = {
+            highlight.section_key: [highlight.rag_item],
+            other_key: [],
+        }
+        embedded = embed_rag_basis_offline_images(basis)
+        if not embedded:
+            continue
+        items = embedded.get(highlight.section_key) or []
+        if items:
+            highlight.rag_item = items[0]
 
 
 def _load_export_embed_image(path: str, *, max_width: int = 130, jpeg_quality: int = 72) -> io.BytesIO | None:
@@ -5380,16 +5429,46 @@ def merge_price_structure_for_bidder(bidder_id: int, structure: dict[str, Any]) 
 
 @dataclass
 class EvaluationExportRow:
+    criterion_id: int = 0
+    criterion_referenz: str = ""
+    parent_id: int | None = None
+    criterion_name: str = ""
+    criterion_kind: str = ""
+    parent_name: str = ""
+    weight_pct: float | None = None
+    scale_max: int = 10
+    value: float | None = None
+    value_display: str = ""
+    justification: str = ""
+    source_chunk_ref: str = ""
+    rag_basis: dict[str, Any] | None = None
+
+
+@dataclass
+class EvaluationMatrixExportRow:
+    referenz: str
     criterion_name: str
     criterion_kind: str
-    parent_name: str
+    parent_referenz: str
+    depth: int
     weight_pct: float | None
     scale_max: int
-    value: float | None
     value_display: str
+
+
+@dataclass
+class EvaluationRagHighlight:
+    rank: int
+    score_pct: float
+    section_key: str
+    section_title: str
+    criterion_referenz: str
+    criterion_name: str
+    parent_name: str
     justification: str
     source_chunk_ref: str
-    rag_basis: dict[str, Any] | None = None
+    rag_item: dict[str, Any]
+    export_row: EvaluationExportRow
 
 
 @dataclass
@@ -5404,6 +5483,10 @@ class EvaluationExportContext:
     top_rows: list[EvaluationExportRow] = field(default_factory=list)
     child_rows: list[EvaluationExportRow] = field(default_factory=list)
     ranking: dict[str, Any] | None = None
+    report_mode: str = "full"
+    top_n: int = 5
+    matrix_rows: list[EvaluationMatrixExportRow] = field(default_factory=list)
+    rag_highlights: list[EvaluationRagHighlight] = field(default_factory=list)
 
 
 def list_evaluator_ids_for_project(project_key: str) -> list[int]:
@@ -5417,6 +5500,132 @@ def list_evaluator_ids_for_project(project_key: str) -> list[int]:
                 out.append(s.evaluator_user_id)
     out.sort()
     return out
+
+
+def _rag_item_score_pct(item: dict[str, Any]) -> float | None:
+    score = item.get("score")
+    if score is None:
+        return None
+    try:
+        sf = float(score)
+    except (TypeError, ValueError):
+        return None
+    return sf * 100.0 if sf <= 1.0 else sf
+
+
+def build_export_matrix_rows(
+    all_criteria: list[Criterion],
+    top_rows: list[EvaluationExportRow],
+    child_rows: list[EvaluationExportRow],
+) -> list[EvaluationMatrixExportRow]:
+    """Hierarchische Matrix-Übersicht: Top-Level + Kinder (nur Werte, keine Begründungen)."""
+    top_map = {r.criterion_id: r for r in top_rows}
+    child_map = {r.criterion_id: r for r in child_rows}
+    top_crits = [
+        c for c in all_criteria if c.parent_id is None and not c.is_deleted
+    ]
+    top_crits.sort(key=lambda c: (c.sort_order or 0, c.id))
+    matrix: list[EvaluationMatrixExportRow] = []
+    for crit in top_crits:
+        row = top_map.get(crit.id)
+        if not row:
+            continue
+        matrix.append(
+            EvaluationMatrixExportRow(
+                referenz=crit.referenz or "",
+                criterion_name=crit.name,
+                criterion_kind=crit.kind,
+                parent_referenz="",
+                depth=0,
+                weight_pct=row.weight_pct,
+                scale_max=row.scale_max,
+                value_display=row.value_display or "—",
+            )
+        )
+        children = [
+            c for c in all_criteria if c.parent_id == crit.id and not c.is_deleted
+        ]
+        children.sort(key=lambda c: (c.sort_order or 0, c.id))
+        for ch in children:
+            cr = child_map.get(ch.id)
+            if not cr:
+                continue
+            matrix.append(
+                EvaluationMatrixExportRow(
+                    referenz=ch.referenz or "",
+                    criterion_name=ch.name,
+                    criterion_kind=ch.kind,
+                    parent_referenz=crit.referenz or crit.name,
+                    depth=1,
+                    weight_pct=None,
+                    scale_max=cr.scale_max,
+                    value_display=cr.value_display or "—",
+                )
+            )
+    return matrix
+
+
+def collect_global_top_rag_highlights(
+    rows: list[EvaluationExportRow],
+    *,
+    top_n: int = 5,
+    source_key: str,
+) -> list[EvaluationRagHighlight]:
+    """Global Top-N RAG-Treffer nach Match-% (nur KI-Quelle mit rag_basis)."""
+    if source_key != "ai" or top_n <= 0:
+        return []
+    candidates: list[tuple[float, EvaluationExportRow, str, str, dict[str, Any]]] = []
+    for row in rows:
+        if not row.rag_basis:
+            continue
+        for section_key, section_title in (("tender", "Vorgaben"), ("offer", "Angebot")):
+            for item in row.rag_basis.get(section_key) or []:
+                if not isinstance(item, dict):
+                    continue
+                pct = _rag_item_score_pct(item)
+                if pct is None:
+                    continue
+                candidates.append((pct, row, section_key, section_title, item))
+    candidates.sort(key=lambda t: (-t[0], t[1].criterion_referenz, t[3]))
+    seen: set[tuple[Any, ...]] = set()
+    highlights: list[EvaluationRagHighlight] = []
+    for pct, row, section_key, section_title, item in candidates:
+        dedupe_key = (
+            row.criterion_id,
+            section_key,
+            item.get("document_id"),
+            item.get("page_number"),
+            item.get("chunk_id"),
+            (item.get("preview") or "")[:80],
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        highlights.append(
+            EvaluationRagHighlight(
+                rank=len(highlights) + 1,
+                score_pct=round(pct, 1),
+                section_key=section_key,
+                section_title=section_title,
+                criterion_referenz=row.criterion_referenz,
+                criterion_name=row.criterion_name,
+                parent_name=row.parent_name,
+                justification=row.justification,
+                source_chunk_ref=row.source_chunk_ref,
+                rag_item=item,
+                export_row=row,
+            )
+        )
+        if len(highlights) >= top_n:
+            break
+    return highlights
+
+
+def parse_export_report_mode(report: str | None, top_n: int | None = None) -> tuple[str, int]:
+    mode = (report or "").strip().lower()
+    report_mode = "small" if mode in ("small", "compact", "kurz", "short") else "full"
+    n = 5 if top_n is None else max(1, min(50, int(top_n)))
+    return report_mode, n
 
 
 def export_source_label(source_key: str) -> str:
@@ -5465,6 +5674,9 @@ def _export_row_from_score(
 ) -> EvaluationExportRow:
     value = sc.value if sc else None
     return EvaluationExportRow(
+        criterion_id=crit.id,
+        criterion_referenz=crit.referenz or "",
+        parent_id=crit.parent_id,
         criterion_name=crit.name,
         criterion_kind=crit.kind,
         parent_name=parent_name,
@@ -5485,6 +5697,8 @@ def build_evaluation_export_context(
     *,
     project_title: str = "",
     may_see_evaluators: bool = True,
+    report_mode: str = "full",
+    top_n: int = 5,
 ) -> EvaluationExportContext:
     """
     Export-Kontext für einen Bieter und eine Bewertungsquelle (ai, system, user:<id>).
@@ -5544,6 +5758,15 @@ def build_evaluation_export_context(
     rankings = compute_rankings(project_key)
     ranking = next((r for r in rankings if r.get("bidder_id") == bidder_id), None)
 
+    report_mode, top_n = parse_export_report_mode(report_mode, top_n)
+    all_export_rows = top_rows + child_rows
+    matrix_rows = build_export_matrix_rows(all_criteria, top_rows, child_rows)
+    rag_highlights = (
+        collect_global_top_rag_highlights(all_export_rows, top_n=top_n, source_key=source_key)
+        if report_mode == "small"
+        else []
+    )
+
     return EvaluationExportContext(
         project_key=project_key,
         project_title=project_title or project_key,
@@ -5555,6 +5778,10 @@ def build_evaluation_export_context(
         top_rows=top_rows,
         child_rows=child_rows,
         ranking=ranking,
+        report_mode=report_mode,
+        top_n=top_n,
+        matrix_rows=matrix_rows,
+        rag_highlights=rag_highlights,
     )
 
 
@@ -5562,6 +5789,63 @@ def context_to_tabular_sheets(
     ctx: EvaluationExportContext,
 ) -> dict[str, tuple[list[str], list[list[Any]]]]:
     """Schmale Tabellen für CSV/XLSX (pro Bieter + Quelle)."""
+    if ctx.report_mode == "small":
+        return _context_to_small_tabular_sheets(ctx)
+    return _context_to_full_tabular_sheets(ctx)
+
+
+def _context_to_small_tabular_sheets(
+    ctx: EvaluationExportContext,
+) -> dict[str, tuple[list[str], list[list[Any]]]]:
+    meta = [ctx.project_title, ctx.bidder_name, ctx.source_label]
+    matrix_headers = [
+        "Projekt", "Bieter", "Quelle", "Ref", "Kriterium", "Art",
+        "Gewicht %", "Skala", "Wert", "Ebene",
+    ]
+    matrix_rows: list[list[Any]] = []
+    for m in ctx.matrix_rows:
+        matrix_rows.append(
+            meta
+            + [
+                m.referenz,
+                m.criterion_name,
+                m.criterion_kind,
+                m.weight_pct if m.weight_pct is not None else "",
+                m.scale_max,
+                m.value_display,
+                "Unterfrage" if m.depth else "Top",
+            ]
+        )
+    top_headers = [
+        "Projekt", "Bieter", "Quelle", "Rang", "Match %", "Ref", "Kriterium",
+        "RAG-Bereich", "Begründung", "Quellenreferenz", "Auszug", "Seitenvorschau",
+    ]
+    top_rows: list[list[Any]] = []
+    for h in ctx.rag_highlights:
+        preview = (h.rag_item.get("preview") or "").strip()
+        top_rows.append(
+            meta
+            + [
+                h.rank,
+                h.score_pct,
+                h.criterion_referenz or h.criterion_name,
+                h.criterion_name,
+                h.section_title,
+                h.justification,
+                h.source_chunk_ref,
+                preview,
+                "",
+            ]
+        )
+    return {
+        "Matrix": (matrix_headers, matrix_rows),
+        "Top Nachweise": (top_headers, top_rows),
+    }
+
+
+def _context_to_full_tabular_sheets(
+    ctx: EvaluationExportContext,
+) -> dict[str, tuple[list[str], list[list[Any]]]]:
     meta = [ctx.project_title, ctx.bidder_name, ctx.source_label]
 
     main_headers = [
@@ -5628,11 +5912,22 @@ def safe_export_basename(ctx: EvaluationExportContext) -> str:
 def build_filtered_csv_bytes(ctx: EvaluationExportContext) -> bytes:
     import csv
 
-    headers, rows = context_to_tabular_sheets(ctx)["Bewertungen"]
+    sheets = context_to_tabular_sheets(ctx)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(headers)
-    writer.writerows(rows)
+    if ctx.report_mode == "small":
+        for sheet_name in ("Matrix", "Top Nachweise"):
+            headers, rows = sheets.get(sheet_name, ([], []))
+            if not headers:
+                continue
+            writer.writerow([f"=== {sheet_name} ==="])
+            writer.writerow(headers)
+            writer.writerows(rows)
+            writer.writerow([])
+    else:
+        headers, rows = sheets["Bewertungen"]
+        writer.writerow(headers)
+        writer.writerows(rows)
     return buf.getvalue().encode("utf-8-sig")
 
 
@@ -5673,6 +5968,53 @@ def build_filtered_xlsx_bytes(ctx: EvaluationExportContext) -> bytes:
 
     sheets = context_to_tabular_sheets(ctx)
     wb = openpyxl.Workbook()
+    if ctx.report_mode == "small":
+        ws = wb.active
+        ws.title = "Matrix"
+        headers, rows = sheets["Matrix"]
+        ws.append(headers)
+        for row in rows:
+            ws.append(row)
+        top_headers, top_rows = sheets.get("Top Nachweise", ([], []))
+        if top_rows:
+            ws_top = wb.create_sheet("Top Nachweise")
+            ws_top.append(top_headers)
+            highlight_rows = ctx.rag_highlights
+            for row_idx, (values, highlight) in enumerate(
+                zip(top_rows, highlight_rows), start=2
+            ):
+                ws_top.append(values)
+                if ctx.source_key == "ai" and "Seitenvorschau" in top_headers:
+                    thumb_col = top_headers.index("Seitenvorschau") + 1
+                    fake_row = EvaluationExportRow(
+                        criterion_name=highlight.criterion_name,
+                        rag_basis={
+                            highlight.section_key: [highlight.rag_item],
+                            "tender" if highlight.section_key == "offer" else "offer": [],
+                        },
+                    )
+                    paths = collect_rag_basis_page_image_paths(fake_row.rag_basis)
+                    if paths:
+                        height_px = _xlsx_embed_stacked_thumbnails(
+                            ws_top, row_idx, thumb_col, paths
+                        )
+                        ws_top.row_dimensions[row_idx].height = max(
+                            15, min(height_px * 0.75, 409)
+                        )
+        if ctx.ranking:
+            ws_rank = wb.create_sheet("Rangfolge")
+            ws_rank.append(["Rang", "Bieter", "Erreichte Werte", "KO"])
+            ts = ctx.ranking.get("total_score")
+            ws_rank.append([
+                ctx.ranking.get("rank"),
+                ctx.bidder_name,
+                round(ts / 10.0, 4) if ts is not None else None,
+                ctx.ranking.get("ko"),
+            ])
+        out = io.BytesIO()
+        wb.save(out)
+        return out.getvalue()
+
     ws = wb.active
     ws.title = "Bewertungen"
     headers, rows = sheets["Bewertungen"]
@@ -5750,6 +6092,8 @@ def build_evaluation_export_zip_bytes(
     project_title: str = "",
     may_see_evaluators: bool = True,
     render_html: Optional[Any] = None,
+    report_mode: str = "full",
+    top_n: int = 5,
 ) -> bytes:
     """
     ZIP mit je einer Datei pro Bieter × Quelle.
@@ -5778,6 +6122,8 @@ def build_evaluation_export_zip_bytes(
                 source_key,
                 project_title=project_title,
                 may_see_evaluators=may_see_evaluators,
+                report_mode=report_mode,
+                top_n=top_n,
             )
             base = safe_export_basename(ctx)
             if fmt == "csv":
@@ -5859,14 +6205,61 @@ def build_evaluation_docx_bytes(ctx: EvaluationExportContext) -> bytes:
     doc.add_paragraph(f"Projekt: {ctx.project_title}")
     doc.add_paragraph(f"Quelle: {ctx.source_label}")
     doc.add_paragraph(f"Exportiert: {ctx.exported_at.strftime('%Y-%m-%d %H:%M UTC')}")
+    if ctx.report_mode == "small":
+        doc.add_paragraph(f"Bericht: Kurz (Matrix + Top {ctx.top_n} Nachweise)")
 
     if ctx.ranking:
         rank = ctx.ranking.get("rank")
         total = ctx.ranking.get("total_score")
         ko = ctx.ranking.get("ko")
         rank_txt = "K.O." if ko else (str(rank) if rank else "offen")
-        total_txt = f"{total:.2f}%" if total is not None else "—"
+        total_txt = (
+            f"{total / 10.0:.2f} / 10"
+            if total is not None
+            else "—"
+        )
         doc.add_paragraph(f"Rangfolge (offiziell): Rang {rank_txt}, Gesamt {total_txt}")
+
+    if ctx.report_mode == "small":
+        doc.add_heading("Matrix-Übersicht", level=1)
+        headers = ["Ref", "Kriterium", "Art", "Gewicht %", "Skala", "Wert"]
+        table = doc.add_table(rows=1, cols=len(headers))
+        table.style = "Table Grid"
+        for i, h in enumerate(headers):
+            table.rows[0].cells[i].text = h
+        for m in ctx.matrix_rows:
+            cells = table.add_row().cells
+            prefix = "  ↳ " if m.depth else ""
+            cells[0].text = m.referenz or "—"
+            cells[1].text = prefix + m.criterion_name
+            cells[2].text = m.criterion_kind
+            cells[3].text = str(m.weight_pct) if m.weight_pct is not None else ""
+            cells[4].text = str(m.scale_max)
+            cells[5].text = m.value_display or "—"
+
+        doc.add_heading(f"Top {ctx.top_n} Nachweise (global, Match %)", level=1)
+        for h in ctx.rag_highlights:
+            ref = h.criterion_referenz or h.criterion_name
+            doc.add_heading(f"#{h.rank} · {ref} · {h.score_pct:.0f}%", level=2)
+            doc.add_paragraph(f"{h.section_title} — {h.criterion_name}")
+            if h.justification:
+                doc.add_paragraph(h.justification)
+            if h.source_chunk_ref:
+                doc.add_paragraph(h.source_chunk_ref, style="Intense Quote")
+            fake_row = EvaluationExportRow(
+                criterion_name=h.criterion_name,
+                rag_basis={
+                    h.section_key: [h.rag_item],
+                    "tender" if h.section_key == "offer" else "offer": [],
+                },
+            )
+            _docx_append_score_evidence(doc, fake_row, ctx)
+
+        doc.add_paragraph("")
+        doc.add_paragraph("SlitProjektHub — Offertbeurteilung (Export, Kurz)")
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
 
     def _add_criteria_table(title: str, rows: list[EvaluationExportRow], *, child: bool = False) -> None:
         if not rows:

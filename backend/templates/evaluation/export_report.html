@@ -104,6 +104,14 @@
     table.export-table .col-scale { width: 5%; }
     table.export-table .col-value { width: 5%; }
     table.export-table .col-evidence { width: 64%; }
+    table.matrix-table .col-ref { width: 10%; }
+    table.matrix-table .col-crit { width: 34%; }
+    table.matrix-table .col-kind { width: 10%; }
+    table.matrix-table .col-weight { width: 10%; }
+    table.matrix-table .col-scale { width: 8%; }
+    table.matrix-table .col-value { width: 8%; }
+    tr.matrix-child td.col-crit { padding-left: 1.25rem; }
+    .highlight-block h3 { font-size: 1rem; }
 
     @media (max-width: 899px) {
       table.export-table { min-width: 640px; table-layout: auto; }
@@ -199,10 +207,101 @@
     {% if ctx.ranking %}
     <p><strong>Rangfolge (offiziell):</strong>
       Rang {{ 'K.O.' if ctx.ranking.get('ko') else (ctx.ranking.get('rank') or 'offen') }},
-      Gesamt {{ '%.2f'|format(ctx.ranking.get('total_score')) ~ '%' if ctx.ranking.get('total_score') is not none else '—' }}
+      Gesamt {{ '%.2f'|format(ctx.ranking.get('total_score') / 10.0) if ctx.ranking.get('total_score') is not none else '—' }} / 10
     </p>
     {% endif %}
+    {% if ctx.report_mode == 'small' %}
+    <p><strong>Bericht:</strong> Kurz (Matrix + Top {{ ctx.top_n }} Nachweise nach Match %)</p>
+    {% endif %}
   </div>
+
+  {% macro rag_single_item(item, section_title) %}
+  <div class="rag">
+    <div><strong>{{ section_title }}</strong></div>
+    <div class="rag-item">
+      <strong>{{ item.get('filename') or '—' }}</strong>
+      {% if item.get('page_number') %} · S. {{ item.page_number }}{% endif %}
+      {% if item.get('method') %} · {{ item.method }}{% endif %}
+      {% if item.get('score') is not none %}
+        {% set sc = item.get('score') %}
+        {% if sc <= 1 %} · {{ (sc * 100)|round(0)|int }}%{% else %} · {{ sc }}{% endif %}
+      {% endif %}
+      {% if item.get('preview') %}<div>{{ item.preview }}</div>{% endif %}
+      {% if export_image_mode|default('file') == 'url' and item.get('page_image_url') %}
+      <a class="rag-thumb-link" href="{{ item.page_image_url }}" target="_blank" rel="noopener"
+         title="Seite {{ item.page_number or '?' }} vergrössern (Klick) · Strg+Klick = neuer Tab">
+        <img class="rag-thumb" src="{{ item.page_image_url }}" alt="S. {{ item.page_number or '?' }}" loading="lazy" />
+        <span class="rag-thumb-hint">Seite vergrössern</span>
+      </a>
+      {% elif export_image_mode == 'embed' and item.get('page_image_data_uri') %}
+      <img class="rag-thumb" src="{{ item.page_image_data_uri }}" alt="S. {{ item.page_number or '?' }}" />
+      {% elif export_image_mode|default('file') == 'file' and item.get('page_image_file_uri') %}
+      <img class="rag-thumb" src="{{ item.page_image_file_uri }}" alt="S. {{ item.page_number or '?' }}" />
+      {% elif item.get('page_image_data_uri') %}
+      <img class="rag-thumb" src="{{ item.page_image_data_uri }}" alt="S. {{ item.page_number or '?' }}" />
+      {% endif %}
+    </div>
+  </div>
+  {% endmacro %}
+
+  {% if ctx.report_mode == 'small' %}
+  <h2>Matrix-Übersicht</h2>
+  {% if ctx.matrix_rows %}
+  <div class="export-table-wrap">
+  <table class="export-table matrix-table">
+    <thead>
+      <tr>
+        <th class="col-ref">Ref</th>
+        <th class="col-crit">Kriterium</th>
+        <th class="col-kind">Art</th>
+        <th class="col-weight">Gewicht %</th>
+        <th class="col-scale">Skala</th>
+        <th class="col-value">Wert</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in ctx.matrix_rows %}
+      <tr class="{% if m.depth %}matrix-child{% endif %}">
+        <td class="col-ref">{{ m.referenz or '—' }}</td>
+        <td class="col-crit">{% if m.depth %}↳ {% endif %}{{ m.criterion_name }}</td>
+        <td class="col-kind">{{ m.criterion_kind }}</td>
+        <td class="col-weight">{{ m.weight_pct if m.weight_pct is not none else '—' }}</td>
+        <td class="col-scale">0–{{ m.scale_max }}</td>
+        <td class="col-value">{{ m.value_display or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>Keine Matrix-Daten.</p>
+  {% endif %}
+
+  <h2>Top {{ ctx.top_n }} Nachweise (global, Match %)</h2>
+  {% if ctx.rag_highlights %}
+    {% for h in ctx.rag_highlights %}
+    <article class="criterion-block highlight-block">
+      <h3>#{{ h.rank }} · {{ h.score_pct|int }}% Match · {{ h.criterion_referenz or h.criterion_name }}</h3>
+      <div class="criterion-meta">
+        <span><strong>Kriterium:</strong> {% if h.parent_name %}{{ h.parent_name }} → {% endif %}{{ h.criterion_name }}</span>
+        <span><strong>Bereich:</strong> {{ h.section_title }}</span>
+      </div>
+      <div class="criterion-evidence">
+        {% if h.justification %}<div class="justification">{{ h.justification }}</div>{% endif %}
+        {% if h.source_chunk_ref %}<div class="chunk-ref">{{ h.source_chunk_ref }}</div>{% endif %}
+        {{ rag_single_item(h.rag_item, h.section_title) }}
+      </div>
+    </article>
+    {% endfor %}
+  {% elif ctx.source_key == 'ai' %}
+  <p class="text-muted">Keine RAG-Nachweise mit Match-% vorhanden.</p>
+  {% else %}
+  <p class="text-muted">Top-Nachweise nur bei Quelle «KI-Vorschlag» (RAG-Basis).</p>
+  {% endif %}
+
+  <p class="footer">SlitProjektHub — Offertbeurteilung (Export, Kurz)</p>
+
+  {% else %}
 
   {% macro justification_cell(row) %}
     {% if row.justification %}<div class="justification">{{ row.justification }}</div>{% endif %}
@@ -308,6 +407,7 @@
   {% endif %}
 
   <p class="footer">SlitProjektHub — Offertbeurteilung (Export)</p>
+  {% endif %}
 
   {% if export_image_mode == 'url' %}
   <div class="export-lightbox" id="export-lightbox" hidden aria-hidden="true">

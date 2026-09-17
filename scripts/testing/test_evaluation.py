@@ -954,6 +954,54 @@ def test_seed_and_merge_price_structure():
     ev.engine = old_engine
 
 
+def test_price_item_edit_and_move():
+    engine, _ = _setup_db()
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import list_price_items, move_price_item, upsert_price_item
+
+    bidder = create_bidder("p-price-edit", "Bieter A")
+    a = upsert_price_item(
+        None, bidder.id, "einmalig", "Zeile A",
+        anzahl=1, kosten_pro_einheit=100, referenz="F-01",
+    )
+    b = upsert_price_item(
+        None, bidder.id, "einmalig", "Zeile B",
+        anzahl=2, kosten_pro_einheit=50, referenz="F-02",
+    )
+    c = upsert_price_item(
+        None, bidder.id, "einmalig", "Zeile C",
+        anzahl=1, kosten_pro_einheit=10, referenz="F-03",
+    )
+
+    updated = upsert_price_item(
+        a.id, bidder.id, "einmalig", "Zeile A geändert",
+        anzahl=3, kosten_pro_einheit=100, referenz="F-01", bemerkung="neu",
+    )
+    assert updated.leistungsbeschreibung == "Zeile A geändert"
+    assert updated.chf == 300.0
+    assert updated.bemerkung == "neu"
+
+    move_price_item(bidder.id, c.id, "up")
+    assert [i.referenz for i in list_price_items(bidder.id) if i.category == "einmalig"] == [
+        "F-01", "F-03", "F-02"
+    ]
+
+    move_price_item(bidder.id, c.id, "down")
+    assert [i.referenz for i in list_price_items(bidder.id) if i.category == "einmalig"] == [
+        "F-01", "F-02", "F-03"
+    ]
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
 def test_validate_tender_cloud_gate():
     from unittest.mock import patch
     from src.m15_evaluation import validate_tender_cloud_gate
@@ -1467,6 +1515,112 @@ def test_build_evaluation_export_context_filtered():
     assert docx[:2] == b"PK"
 
     assert export_source_label("ai") == "KI-Vorschlag"
+
+    db.engine = old_engine
+    ev.engine = old_engine
+
+
+def test_small_export_matrix_and_top_rag():
+    engine, evaluator_id = _setup_db()
+    project_key = "p-export-small"
+    with _test_session(engine) as session:
+        b = Bidder(project_key=project_key, name="Bieter Kurz")
+        session.add(b)
+        session.commit()
+        session.refresh(b)
+        parent = Criterion(
+            project_key=project_key,
+            kind="zuschlag",
+            name="W-01 Qualität",
+            referenz="W-01",
+            scale_max=10,
+            weight_pct=50,
+        )
+        child = Criterion(
+            project_key=project_key,
+            kind="zuschlag",
+            name="W-01a Detail",
+            referenz="W-01a",
+            parent_id=None,
+            scale_max=10,
+        )
+        session.add(parent)
+        session.commit()
+        session.refresh(parent)
+        child.parent_id = parent.id
+        session.add(child)
+        session.commit()
+        session.refresh(child)
+
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=parent.id,
+                source_key="ai",
+                value=7.0,
+                justification="Parent Begründung",
+                rag_basis_json='{"tender":[{"score":0.55,"preview":"parent"}],"offer":[]}',
+            )
+        )
+        session.add(
+            Score(
+                bidder_id=b.id,
+                criterion_id=child.id,
+                source_key="ai",
+                value=8.0,
+                justification="Child Begründung",
+                rag_basis_json=(
+                    '{"tender":[{"score":0.92,"preview":"top tender","filename":"b.pdf","page_number":2}],'
+                    '"offer":[{"score":0.88,"preview":"top offer","filename":"c.pdf","page_number":3}]}'
+                ),
+            )
+        )
+        session.commit()
+        bidder_id = b.id
+
+    import src.m15_evaluation as ev
+    import src.m03_db as db
+
+    old_engine = db.engine
+    db.engine = engine
+    ev.engine = engine
+    ev.get_session = lambda: _test_session(engine)
+
+    from src.m15_evaluation import (
+        build_evaluation_export_context,
+        context_to_tabular_sheets,
+        parse_export_report_mode,
+    )
+
+    assert parse_export_report_mode("kurz", 3) == ("small", 3)
+    assert parse_export_report_mode("", None)[1] == 5
+
+    ctx = build_evaluation_export_context(
+        project_key,
+        bidder_id,
+        "ai",
+        project_title="Test",
+        may_see_evaluators=True,
+        report_mode="small",
+        top_n=2,
+    )
+    assert ctx.report_mode == "small"
+    assert ctx.top_n == 2
+    assert len(ctx.matrix_rows) == 2
+    assert ctx.matrix_rows[0].referenz == "W-01"
+    assert ctx.matrix_rows[1].depth == 1
+    assert ctx.matrix_rows[1].referenz == "W-01a"
+
+    assert len(ctx.rag_highlights) == 2
+    assert ctx.rag_highlights[0].score_pct == 92.0
+    assert ctx.rag_highlights[1].score_pct == 88.0
+
+    sheets = context_to_tabular_sheets(ctx)
+    assert "Matrix" in sheets
+    assert "Top Nachweise" in sheets
+    assert "Bewertungen" not in sheets
+    matrix_rows = sheets["Matrix"][1]
+    assert matrix_rows and matrix_rows[0][3] == "W-01"
 
     db.engine = old_engine
     ev.engine = old_engine
@@ -2302,6 +2456,7 @@ if __name__ == "__main__":
     test_tender_doc_link_and_roles()
     test_import_criteria_payload_skip_existing()
     test_seed_and_merge_price_structure()
+    test_price_item_edit_and_move()
     test_validate_tender_cloud_gate()
     test_suggest_tender_role_and_validate_criteria()
     test_evaluation_config_roundtrip()
@@ -2318,6 +2473,7 @@ if __name__ == "__main__":
     test_sync_price_criterion_scores_reciprocal_gate()
     test_build_evaluation_export_includes_justifications()
     test_build_evaluation_export_context_filtered()
+    test_small_export_matrix_and_top_rag()
     test_build_evaluation_export_context_permission()
     test_list_export_combinations_and_zip()
     test_bidder_doc_subtypes_multi()
