@@ -122,7 +122,9 @@ voller Punktzahl in Phase 2 nicht mehr aufholen können, als «keine Einladung»
 - Kriterium anlegen / Liste: Phase-Dropdown; KI-Extraktion: `ranking_phase` im JSON
 
 **Akzeptanz:** A-01 als Phase 2 markieren → Zwischenrang nur über ZK; Einladungsspalte «nein» wenn
-`max_score < führender interim_score`.
+`max_score` (Phase 1 + volle A-01) **<** `interim_score` des Phase-1-Führenden (Matrix/KI wenn Bewerter unvollständig).
+
+Details Formel, Rundung, Excel-Abweichung: `docs/OFFERTBEURTEILUNG_OPS.md` §8.
 
 ---
 

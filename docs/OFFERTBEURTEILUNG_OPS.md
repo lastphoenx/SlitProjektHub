@@ -1,6 +1,6 @@
 # Offertbeurteilung — Betrieb, Reports, CLI
 
-> Stand: 2026-09-16  
+> Stand: 2026-09-17  
 > UI: FastAPI `/evaluation` (Haupt-UI in Produktion)  
 > Code: `backend/app/routes/evaluation.py`, `src/m15_evaluation.py`
 
@@ -154,6 +154,7 @@ Alle Skripte vom **Repo-Root** ausführen (`PYTHONPATH` setzen die Skripte selbs
 | `list_projects.py` | `project_key` aller aktiven Projekte (für CLI-Argumente) |
 | `backfill_document_page_images.py` | Fehlende PDF-Seitenvorschauen (WebP) nachziehen — poppler nötig |
 | `backfill_document_chunk_page_numbers.py` | `page_number` an Chunks — Voraussetzung für Thumbnails in RAG-Nachweis |
+| `check_evaluation_rankings.py` | Rangfolge vs. DB, «Erreichte Werte» (Ph.1 / 9, Ges. / 10) |
 
 Beispiel Kriterien-Import (JSON **nicht** committen — nur lokal):
 
@@ -242,10 +243,66 @@ Nach **Python- oder Template-Änderungen** Backend neu starten (kein Hot-Reload 
 | `evaluation_batch_log fehlt` | DB-Migration nicht gelaufen | `systemctl restart projekthub-backend` |
 | Cloud-KI blockiert | Gate ohne Bestätigung | Checkbox in Zelle; PII prüfen unter `/sanitize` |
 | 403 «Keine Berechtigung» | Rolle `auftraggeber` / unassigned | `set_user_role.py` — nur `super_user`, `projektleiter_intern`, `product_owner` dürfen bewerten |
+| Rangfolge weicht von Excel ab (~0,01) | Parent-Zelle vs. Rollup Unterfragen | §8.3 in dieser Datei |
+| «Begründung identisch mit KI» + leeres Modal | Session/HTMX ohne Fix | Deploy ≥ `cb134ed`; Fehler bleibt im Modal |
 
 ---
 
-## 8. Weitere Docs
+## 8. Rangfolge — «Erreichte Werte», Einladung, Rundung
+
+Entspricht der **Bewertungsmatrix** der Ausschreibung (Zeile «Erreichte Werte», Maximum **10,00**).
+
+### 8.1 Formel
+
+Pro Top-Level-Zuschlagskriterium:
+
+```text
+Beitrag = (Punktwert ÷ Skala_max) × Gewicht_%
+Gesamt  = Summe aller Beiträge
+```
+
+Anzeige in der UI: **÷ 10** gegenüber der internen Summe (Gewichtssumme 100 → **10,00** in der Matrix).
+
+| Phase | Max. «Erreichte Werte» |
+|-------|-------------------------|
+| Phase 1 (ZK ohne A-01) | **9,0** |
+| Gesamt (inkl. A-01 Präsentation) | **10,0** |
+
+Fehlende Bewertung = **0 Beitrag** (keine Normierung auf 90 % oder 100 %).
+
+Code: `_zuschlag_weighted_score()` in `src/m15_evaluation.py`.
+
+### 8.2 Einladung? (zweistufig, A-01)
+
+| Spalte | Bedeutung |
+|--------|-----------|
+| **Erreichte Werte** (Bewerter) | Offizielle Werte (`user:*` + Preis `system`) — solange nur Preis bewertet ist, steht dort nur der Preisanteil (z. B. 2,50 / 9,0). |
+| **Max. bei Präsentation voll** | **Volle Phase-1-Summe (Matrix/KI) + volle A-01** — nicht «Preis + 1». Entspricht der gelben Spalte in einer manuellen Excel (Summe ohne Präsi + 1,0). |
+| **Einladung?** | **ja**, wenn «Max. bei Präsentation voll» ≥ Phase-1-Führender (Matrix/KI). Beispiel: Apptiva 8,34 < Cando 8,38 → **nein**; YOO 8,75 ≥ 8,38 → **ja**. |
+
+Solange qualitative ZK noch keinen Bewerter-Wert haben, kommen **Einladung?** und **Max. …** aus der **KI-Matrix** (Preis weiter aus TCO/system). Hinweis steht unter der Phase-1-Tabelle.
+
+Diagnose: `scripts/maintenance/check_evaluation_rankings.py --project-key …`
+
+### 8.3 Rundung und Abweichung zur Handrechnung
+
+| Ebene | Genauigkeit |
+|-------|-------------|
+| Intern (Summe) | **4 Dezimalstellen** auf der Gewichtssumme (0–100) |
+| Anzeige Rangfolge | **2 Dezimalstellen** («Erreichte Werte» ÷ 10) |
+| Einzelwert `official_score` / Rollup | **3 Dezimalstellen** |
+
+**Hand-Excel vs. System:** In der Matrix-Zelle steht oft der **KI-Parent-Punktwert** (z. B. F-01 → 9,2). Für die Rangfolge rechnet das System bei Kriterien **mit Unterfragen** den **Mittelwert der einzeln bewerteten Anforderungen** (`rolled_up_score()` — Ausschreibungsvorgabe «Punkte = erreichte Punktzahl / Anzahl Einzelanforderungen»). Dadurch kann die Summe um **ca. 0,01–0,02** von einer Excel abweichen, die nur Parent-Zellen einträgt (z. B. YOO 7,75 statt 7,7475).
+
+Preis (W-01): Punkte aus TCO-Formel, typisch **3 Dezimalstellen** vor Gewichtung.
+
+### 8.4 Validierung «Begründung = KI-Vorschlag»
+
+Bei Punktabzug oder Eignung «Nein» darf die Bewerter-Begründung **nicht 1:1** der KI-Begründung entsprechen (Rekursfähigkeit). Speichern wird abgelehnt; die **Fehlermeldung erscheint im Modal**, Formularfelder bleiben erhalten (HTMX, kein Sprung auf JSON-Fehlerseite).
+
+---
+
+## 9. Weitere Docs
 
 | Thema | Datei |
 |-------|--------|
