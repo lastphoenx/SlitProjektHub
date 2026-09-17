@@ -772,9 +772,10 @@
 {% block extra_scripts %}
 <script>
 function evalCellNavigateBack(fromParentId, bidderId, projectKey) {
-  if (fromParentId && window.htmx) {
+  const pid = parseInt(fromParentId, 10);
+  if (pid && window.htmx) {
     const url = '/evaluation/cell?bidder_id=' + encodeURIComponent(bidderId)
-      + '&criterion_id=' + encodeURIComponent(fromParentId)
+      + '&criterion_id=' + encodeURIComponent(pid)
       + '&project_key=' + encodeURIComponent(projectKey || '');
     htmx.ajax('GET', url, { target: '#modal-slot', swap: 'innerHTML' });
     return;
@@ -784,6 +785,15 @@ function evalCellNavigateBack(fromParentId, bidderId, projectKey) {
 
 function evalCellClose(fromParentId, bidderId, projectKey) {
   evalCellNavigateBack(fromParentId, bidderId, projectKey);
+}
+
+function evalCellHandleModalAction(el) {
+  if (!el) return;
+  evalCellNavigateBack(
+    el.dataset.fromParentId || '',
+    el.dataset.bidderId || '',
+    el.dataset.projectKey || ''
+  );
 }
 
 function openEvaluationCell(td) {
@@ -810,11 +820,18 @@ window.addEventListener('load', () => {
 });
 
 document.getElementById('modal-slot').addEventListener('click', e => {
+  const actionEl = e.target.closest('[data-eval-cell-close], [data-eval-cell-back]');
+  if (actionEl) {
+    e.preventDefault();
+    e.stopPropagation();
+    evalCellHandleModalAction(actionEl);
+    return;
+  }
   if (!e.target.classList.contains('modal-backdrop')) return;
   const backdrop = e.target;
   const fromParentId = backdrop.dataset.fromParentId;
   if (fromParentId) {
-    evalCellNavigateBack(parseInt(fromParentId, 10), parseInt(backdrop.dataset.bidderId, 10), backdrop.dataset.projectKey || '');
+    evalCellNavigateBack(fromParentId, backdrop.dataset.bidderId, backdrop.dataset.projectKey || '');
     return;
   }
   document.getElementById('modal-slot').innerHTML = '';

@@ -5,7 +5,10 @@
         {% if from_parent_id %}
         <p style="margin:0 0 .25rem">
           <button type="button" class="btn btn-ghost btn-sm" style="padding:.15rem .35rem;font-size:.75rem"
-                  onclick="evalCellNavigateBack({{ from_parent_id }}, {{ bidder.id }}, {{ project_key|tojson }})">← {{ from_parent_name }}</button>
+                  data-eval-cell-back
+                  data-from-parent-id="{{ from_parent_id }}"
+                  data-bidder-id="{{ bidder.id }}"
+                  data-project-key="{{ project_key }}">← {{ from_parent_name }}</button>
         </p>
         {% endif %}
         <h2 class="modal-title" style="font-size:.95rem">{{ bidder.name }} — {{ criterion.name }}</h2>
@@ -14,7 +17,12 @@
         <p style="font-size:.8rem;margin-top:.4rem;white-space:pre-wrap">{{ criterion.description }}</p>
         {% endif %}
       </div>
-      <button class="btn btn-ghost btn-icon" onclick="evalCellClose({{ from_parent_id or 'null' }}, {{ bidder.id }}, {{ project_key|tojson }})" title="Schließen">
+      <button type="button" class="btn btn-ghost btn-icon"
+              data-eval-cell-close
+              data-from-parent-id="{{ from_parent_id or '' }}"
+              data-bidder-id="{{ bidder.id }}"
+              data-project-key="{{ project_key }}"
+              title="Schließen">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
