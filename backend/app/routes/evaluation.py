@@ -352,6 +352,8 @@ def _empty_rankings_panel_context() -> dict:
         "ai_coverage_label": "",
         "phase1_max_points": 0,
         "total_max_points": 0,
+        "phase1_max_display": 0.0,
+        "total_max_display": 0.0,
     }
 
 
@@ -397,6 +399,8 @@ def _rankings_panel_context(project_key: str) -> dict:
         "price_rankings": _price_ranking_rows(rankings),
         "phase1_max_points": phase1_max_points,
         "total_max_points": total_max_points,
+        "phase1_max_display": phase1_max_points / 10.0,
+        "total_max_display": total_max_points / 10.0,
     }
 
 
@@ -1917,15 +1921,26 @@ async def evaluation_export_xlsx(
             ws_detail.append(row)
 
     ws2 = wb.create_sheet("Rangfolge")
-    ws2.append(["Rang", "Bieter", "Gesamt", "KO"])
+    ws2.append(["Rang", "Bieter", "Erreichte Werte (max. 10)", "KO"])
     rankings = compute_rankings(project_key)
     for r in rankings:
-        ws2.append([r.get("rank"), r.get("bidder_name"), r.get("total_score"), r.get("ko")])
+        ts = r.get("total_score")
+        ws2.append([
+            r.get("rank"),
+            r.get("bidder_name"),
+            round(ts / 10.0, 4) if ts is not None else None,
+            r.get("ko"),
+        ])
 
     if any(r.get("has_phase2") for r in rankings):
         ws3 = wb.create_sheet("Rangfolge Phase 1")
         ws3.append([
-            "Rang Phase 1", "Bieter", "Phase 1", "Max. bei Präsentation voll", "Einladung?", "KO",
+            "Rang Phase 1",
+            "Bieter",
+            "Erreichte Werte Phase 1 (max. 9)",
+            "Max. bei Präsentation voll (max. 10)",
+            "Einladung?",
+            "KO",
         ])
         for r in rankings:
             invite = ""
@@ -1933,11 +1948,13 @@ async def evaluation_export_xlsx(
                 invite = "ja"
             elif r.get("can_still_win") is False:
                 invite = "nein"
+            interim = r.get("interim_score")
+            mx = r.get("max_score")
             ws3.append([
                 r.get("interim_rank"),
                 r.get("bidder_name"),
-                r.get("interim_score"),
-                r.get("max_score"),
+                round(interim / 10.0, 4) if interim is not None else None,
+                round(mx / 10.0, 4) if mx is not None else None,
                 invite,
                 r.get("ko"),
             ])

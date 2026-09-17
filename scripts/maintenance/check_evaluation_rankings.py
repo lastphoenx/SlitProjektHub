@@ -42,6 +42,12 @@ from src.m15_evaluation import (
 )
 
 
+def _erreichte_werte(score: float | None) -> str:
+    if score is None:
+        return "—"
+    return f"{score / 10:.2f}"
+
+
 def _resolve_project_key(arg: str | None) -> str | None:
     if arg:
         return arg.strip()
@@ -201,20 +207,20 @@ def _print_rankings(project_key: str, *, show_scores: bool) -> int:
     rankings = compute_rankings(project_key)
     print("=== compute_rankings() (wie UI) ===")
     if has_phase2:
-        print(f"{'Rang':>4}  {'Bieter':20}  {'Phase1':>8}  {'Gesamt':>9}  {'K.O.':>4}")
+        print(f"{'Rang':>4}  {'Bieter':20}  {'Ph.1/9':>8}  {'Ges./10':>9}  {'K.O.':>4}")
         print("-" * 52)
         for r in rankings:
             ir = r.get("interim_rank") if r.get("interim_rank") else "—"
-            ts = r.get("total_score") if r.get("total_score") is not None else "—"
-            is_ = r.get("interim_score") if r.get("interim_score") is not None else "—"
+            ts = _erreichte_werte(r.get("total_score"))
+            is_ = _erreichte_werte(r.get("interim_score"))
             ko = "ja" if r.get("ko") else "nein"
-            print(f"{str(ir):>4}  {r['bidder_name']:20}  {str(is_):>7}  {str(ts):>9}  {ko:>4}")
+            print(f"{str(ir):>4}  {r['bidder_name']:20}  {is_:>8}  {ts:>9}  {ko:>4}")
     else:
-        print(f"{'Rang':>4}  {'Bieter':20}  {'Gesamt %':>9}  {'K.O.':>4}")
+        print(f"{'Rang':>4}  {'Bieter':20}  {'Ges./10':>9}  {'K.O.':>4}")
         print("-" * 42)
         for r in rankings:
             rk = r.get("rank") if r.get("rank") else "—"
-            ts = r.get("total_score") if r.get("total_score") is not None else "—"
+            ts = _erreichte_werte(r.get("total_score"))
             ko = "ja" if r.get("ko") else "nein"
             print(f"{str(rk):>4}  {r['bidder_name']:20}  {str(ts):>9}  {ko:>4}")
 
