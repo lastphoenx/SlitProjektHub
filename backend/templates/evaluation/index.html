@@ -771,6 +771,21 @@
 
 {% block extra_scripts %}
 <script>
+function evalCellNavigateBack(fromParentId, bidderId, projectKey) {
+  if (fromParentId && window.htmx) {
+    const url = '/evaluation/cell?bidder_id=' + encodeURIComponent(bidderId)
+      + '&criterion_id=' + encodeURIComponent(fromParentId)
+      + '&project_key=' + encodeURIComponent(projectKey || '');
+    htmx.ajax('GET', url, { target: '#modal-slot', swap: 'innerHTML' });
+    return;
+  }
+  document.getElementById('modal-slot').innerHTML = '';
+}
+
+function evalCellClose(fromParentId, bidderId, projectKey) {
+  evalCellNavigateBack(fromParentId, bidderId, projectKey);
+}
+
 function openEvaluationCell(td) {
   const url = td && td.dataset ? td.dataset.cellUrl : '';
   if (!url) return;
@@ -795,13 +810,30 @@ window.addEventListener('load', () => {
 });
 
 document.getElementById('modal-slot').addEventListener('click', e => {
-  if (e.target.classList.contains('modal-backdrop')) document.getElementById('modal-slot').innerHTML = '';
+  if (!e.target.classList.contains('modal-backdrop')) return;
+  const backdrop = e.target;
+  const fromParentId = backdrop.dataset.fromParentId;
+  if (fromParentId) {
+    evalCellNavigateBack(parseInt(fromParentId, 10), parseInt(backdrop.dataset.bidderId, 10), backdrop.dataset.projectKey || '');
+    return;
+  }
+  document.getElementById('modal-slot').innerHTML = '';
 });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   const lb = document.getElementById('eval-page-lightbox');
   if (lb && !lb.hidden) return;
-  document.getElementById('modal-slot').innerHTML = '';
+  const slot = document.getElementById('modal-slot');
+  const backdrop = slot.querySelector('.modal-backdrop[data-from-parent-id]');
+  if (backdrop) {
+    evalCellNavigateBack(
+      parseInt(backdrop.dataset.fromParentId, 10),
+      parseInt(backdrop.dataset.bidderId, 10),
+      backdrop.dataset.projectKey || ''
+    );
+    return;
+  }
+  slot.innerHTML = '';
 });
 
 function toggleCritFields() {

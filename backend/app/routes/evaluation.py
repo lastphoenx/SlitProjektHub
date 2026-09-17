@@ -53,6 +53,7 @@ from src.m15_evaluation import (
     restore_bidder,
     embed_offline_images_in_export_context,
     build_evaluation_export_context,
+    batch_upsert_price_items,
     build_evaluation_docx_bytes,
     build_evaluation_export_zip_bytes,
     build_evaluation_pdf_bytes,
@@ -796,6 +797,7 @@ async def evaluation_save_score(
     source_chunk_ref: str = Form(""),
     ai_reference_justification: str = Form(""),
     target_user_id: str = Form(""),
+    from_parent: str = Form(""),
 ):
     who = _username(request)
     if not can_evaluate(who):
@@ -860,12 +862,17 @@ async def evaluation_save_score(
                 score_error=err_msg,
                 form_draft=form_draft,
                 adopt_draft=adopt_draft,
+                from_parent=int(from_parent) if from_parent.strip() else 0,
             )
             return resp
         raise HTTPException(400, err_msg) from exc
     if request.headers.get("hx-request"):
         resp = await evaluation_cell(
-            request, bidder_id=bidder_id, criterion_id=criterion_id, project_key=project_key
+            request,
+            bidder_id=bidder_id,
+            criterion_id=criterion_id,
+            project_key=project_key,
+            from_parent=int(from_parent) if from_parent.strip() else 0,
         )
         _trigger_eval_refresh(resp)
         return resp
@@ -916,9 +923,11 @@ async def evaluation_cell(
     score_error: str = "",
     form_draft: dict | None = None,
     adopt_draft: dict | None = None,
+    from_parent: int = 0,
 ):
     """Detail-Panel einer Matrix-Zelle: KI-Vorschlag + jede Bewerter-Zeile einzeln,
     plus Formular fuer die eigene Bewertung. Das ist die 'mehrere Spalten'-Ansicht."""
+    from_parent_id = from_parent or int(request.query_params.get("from_parent") or 0)
     from src.m15_evaluation import Criterion, Bidder, parse_rag_basis_json
     from src.m03_db import get_session
 
@@ -995,6 +1004,11 @@ async def evaluation_cell(
     ai_row = next((s for s in cell_scores if s.source_key == "ai"), None)
     user_rows = [s for s in cell_scores if s.source_key.startswith("user:")]
     uid = get_user_id(who) if who else None
+    from_parent_crit = (
+        next((c for c in all_criteria if c.id == from_parent_id), None)
+        if from_parent_id
+        else None
+    )
     ctx = {
         "request": request,
         "project_key": project_key,
@@ -1013,6 +1027,8 @@ async def evaluation_cell(
         "form_draft": form_draft,
         "adopt_draft": adopt_draft,
         "requires_justification": score_requires_justification,
+        "from_parent_id": from_parent_id or None,
+        "from_parent_name": from_parent_crit.name if from_parent_crit else "",
     }
     ctx.update(_llm_picker_context())
     if project_key:
@@ -1676,6 +1692,7 @@ async def evaluation_save_price_item(
     referenz: str = Form(""),
     bemerkung: str = Form(""),
     return_edit: str = Form(""),
+    scroll_to: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -1697,15 +1714,77 @@ async def evaluation_save_price_item(
         extra = "&price_msg=offers_incomplete"
     stay_edit = return_edit in ("1", "true", "on", "yes") or bool(item_id.strip())
     return RedirectResponse(
-        url=_price_page_url(project_key, bidder_id, edit=stay_edit, extra=extra),
+        url=_price_page_url(
+            project_key, bidder_id, edit=stay_edit, extra=extra, scroll_to=scroll_to.strip(),
+        ),
         status_code=303,
     )
 
 
-def _price_page_url(project_key: str, bidder_id: int, *, edit: bool = False, extra: str = "") -> str:
+@router.post("/evaluation/price-items/batch", response_class=HTMLResponse)
+async def evaluation_batch_save_price_items(
+    request: Request,
+    project_key: str = Form(...),
+    bidder_id: int = Form(...),
+    category: str = Form(...),
+    item_ids: str = Form(""),
+    year: str = Form(""),
+    return_edit: str = Form(""),
+    scroll_to: str = Form(""),
+):
+    if not can_evaluate(_username(request)):
+        raise HTTPException(403, "Keine Berechtigung")
+    ids = [int(x.strip()) for x in item_ids.split(",") if x.strip()]
+    form = await request.form()
+    fields_by_id: dict[int, dict[str, str]] = {}
+    for item_id in ids:
+        suffix = f"_{item_id}"
+        fields_by_id[item_id] = {
+            "referenz": str(form.get(f"referenz{suffix}", "") or ""),
+            "leistungsbeschreibung": str(form.get(f"leistungsbeschreibung{suffix}", "") or ""),
+            "anzahl": str(form.get(f"anzahl{suffix}", "0") or "0"),
+            "einheit": str(form.get(f"einheit{suffix}", "") or ""),
+            "kosten_pro_einheit": str(form.get(f"kosten_pro_einheit{suffix}", "0") or "0"),
+            "bemerkung": str(form.get(f"bemerkung{suffix}", "") or ""),
+        }
+    year_val = int(year) if year.strip() else None
+    try:
+        batch_upsert_price_items(
+            bidder_id,
+            category,
+            ids,
+            fields_by_id,
+            year=year_val,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    sync_result = sync_price_criterion_scores(project_key)
+    extra = ""
+    if not sync_result.get("synced"):
+        extra = "&price_msg=offers_incomplete"
+    stay_edit = return_edit in ("1", "true", "on", "yes")
+    return RedirectResponse(
+        url=_price_page_url(
+            project_key, bidder_id, edit=stay_edit, extra=extra, scroll_to=scroll_to.strip(),
+        ),
+        status_code=303,
+    )
+
+
+def _price_page_url(
+    project_key: str,
+    bidder_id: int,
+    *,
+    edit: bool = False,
+    extra: str = "",
+    scroll_to: str = "",
+) -> str:
     url = f"/evaluation/price?project_key={project_key}&bidder_id={bidder_id}{extra}"
     if edit:
         url += "&edit=1"
+    anchor = (scroll_to or "").strip()
+    if anchor:
+        url += f"#{anchor}"
     return url
 
 
@@ -1716,6 +1795,7 @@ async def evaluation_move_price_item(
     bidder_id: int = Form(...),
     item_id: int = Form(...),
     direction: str = Form(...),
+    scroll_to: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -1728,14 +1808,20 @@ async def evaluation_move_price_item(
     if not sync_result.get("synced"):
         extra = "&price_msg=offers_incomplete"
     return RedirectResponse(
-        url=_price_page_url(project_key, bidder_id, edit=True, extra=extra),
+        url=_price_page_url(
+            project_key, bidder_id, edit=True, extra=extra, scroll_to=scroll_to.strip(),
+        ),
         status_code=303,
     )
 
 
 @router.post("/evaluation/price-item/delete", response_class=HTMLResponse)
 async def evaluation_delete_price_item(
-    request: Request, project_key: str = Form(...), bidder_id: int = Form(...), item_id: int = Form(...)
+    request: Request,
+    project_key: str = Form(...),
+    bidder_id: int = Form(...),
+    item_id: int = Form(...),
+    scroll_to: str = Form(""),
 ):
     if not can_evaluate(_username(request)):
         raise HTTPException(403, "Keine Berechtigung")
@@ -1745,7 +1831,9 @@ async def evaluation_delete_price_item(
     if not sync_result.get("synced"):
         extra = "&price_msg=offers_incomplete"
     return RedirectResponse(
-        url=_price_page_url(project_key, bidder_id, edit=True, extra=extra),
+        url=_price_page_url(
+            project_key, bidder_id, edit=True, extra=extra, scroll_to=scroll_to.strip(),
+        ),
         status_code=303,
     )
 

@@ -998,6 +998,35 @@ def test_price_item_edit_and_move():
         "F-01", "F-02", "F-03"
     ]
 
+    from src.m15_evaluation import batch_upsert_price_items
+    batch_upsert_price_items(
+        bidder.id,
+        "einmalig",
+        [a.id, b.id],
+        {
+            a.id: {
+                "referenz": "F-01",
+                "leistungsbeschreibung": "Batch A",
+                "anzahl": "2",
+                "einheit": "Tage",
+                "kosten_pro_einheit": "150",
+                "bemerkung": "",
+            },
+            b.id: {
+                "referenz": "F-02",
+                "leistungsbeschreibung": "Batch B",
+                "anzahl": "1",
+                "einheit": "Std.",
+                "kosten_pro_einheit": "200",
+                "bemerkung": "x",
+            },
+        },
+    )
+    items = list_price_items(bidder.id)
+    a_row = next(i for i in items if i.id == a.id)
+    assert a_row.leistungsbeschreibung == "Batch A"
+    assert a_row.chf == 300.0
+
     db.engine = old_engine
     ev.engine = old_engine
 

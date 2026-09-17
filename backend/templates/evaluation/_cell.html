@@ -1,14 +1,20 @@
-<div class="modal-backdrop">
+<div class="modal-backdrop"{% if from_parent_id %} data-from-parent-id="{{ from_parent_id }}" data-bidder-id="{{ bidder.id }}" data-project-key="{{ project_key }}"{% endif %}>
   <div class="modal eval-cell-modal" role="dialog" aria-modal="true">
     <div class="modal-header" style="flex-shrink:0">
       <div style="min-width:0">
+        {% if from_parent_id %}
+        <p style="margin:0 0 .25rem">
+          <button type="button" class="btn btn-ghost btn-sm" style="padding:.15rem .35rem;font-size:.75rem"
+                  onclick="evalCellNavigateBack({{ from_parent_id }}, {{ bidder.id }}, {{ project_key|tojson }})">← {{ from_parent_name }}</button>
+        </p>
+        {% endif %}
         <h2 class="modal-title" style="font-size:.95rem">{{ bidder.name }} — {{ criterion.name }}</h2>
         <p class="text-muted" style="font-size:.75rem;margin-top:.2rem">Skala 0–{{ criterion.scale_max }}{% if criterion.kind == 'zuschlag' and criterion.weight_pct %} · Gewicht {{ criterion.weight_pct }}%{% endif %}</p>
         {% if criterion.description %}
         <p style="font-size:.8rem;margin-top:.4rem;white-space:pre-wrap">{{ criterion.description }}</p>
         {% endif %}
       </div>
-      <button class="btn btn-ghost btn-icon" onclick="document.getElementById('modal-slot').innerHTML=''" title="Schließen">
+      <button class="btn btn-ghost btn-icon" onclick="evalCellClose({{ from_parent_id or 'null' }}, {{ bidder.id }}, {{ project_key|tojson }})" title="Schließen">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
@@ -71,6 +77,7 @@
         <input type="hidden" name="project_key" value="{{ project_key }}" />
         <input type="hidden" name="bidder_id" value="{{ bidder.id }}" />
         <input type="hidden" name="criterion_id" value="{{ criterion.id }}" />
+        {% if from_parent_id %}<input type="hidden" name="from_parent" value="{{ from_parent_id }}" />{% endif %}
         <label class="form-label">{{ "Deine Bewertung ändern" if my_user_id in user_rows|map(attribute='evaluator_user_id')|list else "Deine Bewertung" }}</label>
         {% if criterion.scale_max == 1 %}
         <select class="form-select" name="value" id="eval-score-value" required onchange="syncJustificationRequired()">
@@ -126,7 +133,7 @@
                     adopt_source_chunk_ref=adopt_draft.adopt_source_chunk_ref,
                     ai_reference_justification=adopt_draft.ai_reference_justification,
                     adopt_requires_justification=adopt_draft.adopt_requires_justification,
-                    score_error=score_error %}
+                    score_error=score_error, from_parent_id=from_parent_id %}
           {% include "evaluation/_adopt_score_form.html" %}
           {% endwith %}
         </div>

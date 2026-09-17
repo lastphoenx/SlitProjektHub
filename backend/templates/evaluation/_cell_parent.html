@@ -79,7 +79,7 @@
             <tr style="cursor:pointer"
                 data-criterion-id="{{ row.criterion.id }}"
                 data-criterion-label="{{ row.display_name }}"
-                hx-get="/evaluation/cell?bidder_id={{ bidder.id }}&criterion_id={{ row.criterion.id }}&project_key={{ project_key }}"
+                hx-get="/evaluation/cell?bidder_id={{ bidder.id }}&criterion_id={{ row.criterion.id }}&project_key={{ project_key }}&from_parent={{ criterion.id }}"
                 hx-target="#modal-slot" hx-swap="innerHTML">
               <td>{{ row.display_name }}</td>
               <td>

@@ -2359,6 +2359,36 @@ def upsert_price_item(
         return item
 
 
+def batch_upsert_price_items(
+    bidder_id: int,
+    category: str,
+    item_ids: list[int],
+    fields_by_id: dict[int, dict[str, Any]],
+    *,
+    year: int | None = None,
+) -> int:
+    """Speichert mehrere Preiszeilen in einem Schritt (Bearbeiten-Modus)."""
+    if not item_ids:
+        return 0
+    saved = 0
+    for item_id in item_ids:
+        payload = fields_by_id.get(item_id) or {}
+        upsert_price_item(
+            item_id,
+            bidder_id,
+            category,
+            payload.get("leistungsbeschreibung", ""),
+            anzahl=float(payload.get("anzahl", 0) or 0),
+            kosten_pro_einheit=float(payload.get("kosten_pro_einheit", 0) or 0),
+            year=year if category == "wiederkehrend" else None,
+            einheit=payload.get("einheit"),
+            referenz=payload.get("referenz"),
+            bemerkung=payload.get("bemerkung"),
+        )
+        saved += 1
+    return saved
+
+
 def delete_price_item(item_id: int) -> None:
     with get_session() as session:
         item = session.get(PriceItem, item_id)

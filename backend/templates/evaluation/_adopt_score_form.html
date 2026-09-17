@@ -3,6 +3,7 @@
   <input type="hidden" name="project_key" value="{{ project_key }}" />
   <input type="hidden" name="bidder_id" value="{{ bidder_id }}" />
   <input type="hidden" name="criterion_id" value="{{ criterion_id }}" />
+  {% if from_parent_id %}<input type="hidden" name="from_parent" value="{{ from_parent_id }}" />{% endif %}
   <input type="hidden" name="value" value="{{ adopt_value }}" />
   <input type="hidden" name="ai_reference_justification" value="{{ ai_reference_justification or '' }}" />
 
