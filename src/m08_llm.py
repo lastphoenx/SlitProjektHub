@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 ANTHROPIC_MODEL_DEFAULT = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 OLLAMA_DEFAULT_MODEL = "qwen3.8:27b"
+PLATFORM_DEFAULT_MODEL = "Qwen3.8-Flash-Next-FP8"
 OLLAMA_LEGACY_MODEL_MAP = {
     "qwen3:32b": OLLAMA_DEFAULT_MODEL,
     "qwen3.6:27b": OLLAMA_DEFAULT_MODEL,
@@ -63,6 +64,9 @@ AVAILABLE_MODELS = {
         "qwen3:8b": "qwen3:8b",
         "llama3.2": "llama3.2",
     },
+    "platform": {
+        PLATFORM_DEFAULT_MODEL: PLATFORM_DEFAULT_MODEL,
+    },
 }
 
 DEFAULT_MODELS = {
@@ -70,7 +74,10 @@ DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
     "mistral": "mistral-large-latest",
     "ollama": OLLAMA_DEFAULT_MODEL,
+    "platform": PLATFORM_DEFAULT_MODEL,
 }
+
+KI_PROVIDER_IDS = ("openai", "anthropic", "mistral", "ollama", "platform")
 
 
 def normalize_ollama_model(name: str | None) -> str:
@@ -181,6 +188,27 @@ def _ollama_base_url() -> str:
     if not raw:
         return ""
     return raw if raw.endswith("/v1") else f"{raw}/v1"
+
+
+def _llm_platform_base_url() -> str:
+    """OpenAI-kompatible Firmen-LLM-Plattform (Env: LLM_PLATFORM_BASE_URL)."""
+    raw = (os.getenv("LLM_PLATFORM_BASE_URL") or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    return raw if raw.endswith("/v1") else f"{raw}/v1"
+
+
+def _llm_platform_credential() -> str:
+    """Credential aus Prozess-Env (systemd EnvironmentFile=.env). os.getenv ist hier korrekt."""
+    return (os.getenv("LLM_PLATFORM_API_KEY") or "").strip()
+
+
+def _platform_model_api_id(model_name: str | None) -> str:
+    """API-Modell-ID (optional LLM_PLATFORM_MODEL_ID überschreibt Default)."""
+    override = (os.getenv("LLM_PLATFORM_MODEL_ID") or "").strip()
+    if override:
+        return override
+    return get_model_id("platform", model_name) or PLATFORM_DEFAULT_MODEL
 
 
 def _fetch_ollama_model_names(timeout: float = 4.0) -> list[str]:
@@ -302,6 +330,9 @@ def _openai_client(provider: str = "openai", timeout: float | None = None):
             api_key=os.getenv("OLLAMA_API_KEY", "ollama"),
             **kw,
         )
+    if provider == "platform":
+        base = _llm_platform_base_url()
+        return OpenAI(base_url=base, **{**kw, "api_key": _llm_platform_credential()})
     return OpenAI(**kw)
 
 def get_available_models(provider: str) -> list[str]:
@@ -314,6 +345,13 @@ def get_available_models(provider: str) -> list[str]:
 
 def get_model_id(provider: str, model_name: str | None) -> str:
     """Resolves model name to actual API model ID. Falls back to default if not found."""
+    if provider == "platform":
+        raw = (model_name or "").strip()
+        if raw and raw in AVAILABLE_MODELS.get("platform", {}):
+            return AVAILABLE_MODELS["platform"][raw]
+        if raw:
+            return raw
+        return DEFAULT_MODELS.get("platform", PLATFORM_DEFAULT_MODEL)
     if provider == "ollama":
         return _resolve_ollama_model(model_name)
     if not model_name:
@@ -648,6 +686,22 @@ def try_models_with_messages(provider: str, system: str, messages: list[dict], *
                 except Exception as e2:
                     raise LLMError(f"OpenAI (gpt-4o-mini Fallback): {e2}") from e2
             raise LLMError(f"OpenAI ({model_id}): {e}") from e
+
+    if provider == "platform" and have_key("platform"):
+        client = _openai_client("platform", timeout=600)
+        model_id = _platform_model_api_id(model)
+        all_messages = [{"role": "system", "content": system}] + msgs
+        kwargs: dict = dict(model=model_id, messages=all_messages, temperature=temperature)
+        kwargs["max_tokens"] = max_tokens
+        try:
+            resp = client.chat.completions.create(**kwargs)
+            text = strip_llm_reasoning_wrappers(resp.choices[0].message.content or "")
+            if _used_model is not None:
+                _used_model.clear()
+                _used_model += [model_id, ""]
+            return text.strip() if text else ""
+        except Exception as e:
+            raise LLMError(f"platform ({model_id}): {e}") from e
     
     if provider == "anthropic" and have_key("anthropic"):
         model_id = get_model_id("anthropic", model) or DEFAULT_MODELS["anthropic"]
@@ -678,6 +732,8 @@ class LLMError(Exception): ...
 def have_key(provider: str) -> bool:
     if provider == "ollama":
         return bool(_ollama_base_url())
+    if provider == "platform":
+        return bool(_llm_platform_base_url() and _llm_platform_credential())
     env = {
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
@@ -731,6 +787,23 @@ def test_connection(provider: str, timeout: float = 10.0, model: str | None = No
             return (True, "")
         except Exception as e:
             return (False, str(e))
+
+    if provider == "platform":
+        try:
+            if not have_key("platform"):
+                return (False, "LLM_PLATFORM_BASE_URL / LLM_PLATFORM_API_KEY nicht in .env")
+            client = _openai_client("platform", timeout=timeout)
+            model_id = _platform_model_api_id(model)
+            resp = client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=10,
+            )
+            if resp and resp.choices:
+                return (True, "")
+            return (False, "Leere Antwort")
+        except Exception as e:
+            return (False, str(e)[:160])
     
     if provider == "mistral":
         try:
@@ -775,7 +848,7 @@ def test_connection(provider: str, timeout: float = 10.0, model: str | None = No
 
 def providers_available() -> list[str]:
     out = []
-    for p in ["openai", "anthropic", "mistral", "ollama"]:
+    for p in KI_PROVIDER_IDS:
         if have_key(p):
             out.append(p)
     return out or ["none"]

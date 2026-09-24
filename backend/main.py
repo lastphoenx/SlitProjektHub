@@ -2824,8 +2824,10 @@ def _ki_global_json() -> str:
     """Returns all KI settings + providers + allModels as single JSON string for window.KI."""
     ctx = _load_settings_ctx()
     ctx["providers"] = providers_available() or ["openai"]
-    ctx["allModels"] = {p: get_available_models(p) for p in AVAILABLE_MODELS}
-    ctx["keyStatus"] = {p: have_key(p) for p in ["openai", "anthropic", "mistral", "ollama"]}
+    from src.m08_llm import KI_PROVIDER_IDS
+
+    ctx["allModels"] = {p: get_available_models(p) for p in KI_PROVIDER_IDS}
+    ctx["keyStatus"] = {p: have_key(p) for p in KI_PROVIDER_IDS}
     return json.dumps(ctx)
 
 templates.env.globals["_ki_global_json"] = _ki_global_json

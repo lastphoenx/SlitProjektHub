@@ -39,6 +39,9 @@
         {% if 'openai' in visual_llm_providers %}
         <option value="openai" {% if sel_provider == 'openai' %}selected{% endif %}>OpenAI (Cloud)</option>
         {% endif %}
+        {% if 'platform' in visual_llm_providers %}
+        <option value="platform" {% if sel_provider == 'platform' %}selected{% endif %}>Firmen-LLM</option>
+        {% endif %}
       </select>
     </div>
     <div>

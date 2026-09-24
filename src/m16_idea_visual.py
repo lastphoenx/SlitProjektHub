@@ -47,10 +47,11 @@ OPENAI_IMAGE_MODELS: dict[str, str] = {
 DEFAULT_OPENAI_IMAGE_MODEL = "dall-e-3"
 
 # Provider für Visualisierung (Prompt/Folienstruktur) — optional getrennt von KI-Einstellungen
-VISUAL_TEXT_PROVIDERS: tuple[str, ...] = ("anthropic", "ollama", "openai")
+VISUAL_TEXT_PROVIDERS: tuple[str, ...] = ("anthropic", "ollama", "openai", "platform")
 VISUAL_TEXT_MODELS: dict[str, list[str]] = {
     "openai": ["gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"],
     "anthropic": ["sonnet-4.6", "opus-4.6", "haiku-4.5"],
+    "platform": ["Qwen3.8-Flash-Next-FP8"],
     "ollama": [
         OLLAMA_DEFAULT_MODEL,
         "qwen2.5vl:7b",
@@ -66,6 +67,7 @@ VISUAL_TEXT_DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-5.4",
     "anthropic": "sonnet-4.6",
     "ollama": OLLAMA_DEFAULT_MODEL,
+    "platform": "Qwen3.8-Flash-Next-FP8",
 }
 
 IDEA_VISUAL_OUTPUT_FORMATS: dict[str, str] = {
