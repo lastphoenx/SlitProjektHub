@@ -1,11 +1,11 @@
-﻿# Backend-spezifische Dependencies
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-pydantic>=2.10.3
-python-multipart>=0.0.31
+# Backend-spezifische Dependencies
+fastapi>=0.141.1
+uvicorn[standard]>=0.53.0
+pydantic>=2.13.5
+python-multipart>=0.0.32
 openpyxl>=3.1.5
-python-pptx>=1.0.0
-weasyprint>=62.0
+python-pptx>=1.0.2
+weasyprint>=70.0
 
 # Bereits in main requirements.txt vorhanden:
 # sqlmodel
