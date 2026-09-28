@@ -1,11 +1,11 @@
 streamlit>=1.64.0
 streamlit-aggrid>=0.3.4.post3
-sqlmodel>=0.0.46
+sqlmodel>=0.0.47
 pydantic>=2.13.5
-SQLAlchemy>=2.0.54
+SQLAlchemy>=2.1.0
 python-dotenv>=1.2.3
 pyyaml>=6.0.3
-openai>=3.19.0
+openai>=3.19.2
 anthropic>=1.8.0
 mistralai>=2.10.1
 streamlit-elements==0.1.*
