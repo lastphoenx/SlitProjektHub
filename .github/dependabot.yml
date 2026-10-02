@@ -12,6 +12,5 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-      # sqlmodel caps SQLAlchemy at <2.1; 2.0.x → 2.1.x is semver-minor for Dependabot
+      # sqlmodel 0.0.47: SQLAlchemy<2.1.0 — keine Bot-PRs (semver-minor reichte nicht, siehe PR #9/#10)
       - dependency-name: "SQLAlchemy"
-        update-types: ["version-update:semver-minor"]
