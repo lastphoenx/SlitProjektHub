@@ -1,13 +1,13 @@
-streamlit>=1.65.0
+streamlit>=1.66.1
 streamlit-aggrid>=0.3.4.post3
 sqlmodel>=0.0.48
-pydantic>=2.14.0
+pydantic>=2.14.1
 # sqlmodel 0.0.47 requires SQLAlchemy>=2.0.14,<2.1.0 — nicht auf 2.1.x anheben (Dependabot-PR #9)
 SQLAlchemy>=2.0.54,<2.1.0
 python-dotenv>=1.2.4
 pyyaml>=6.0.3
-openai>=3.26.1
-anthropic>=1.12.1
+openai>=3.37.0
+anthropic>=1.17.0
 mistralai>=2.10.1
 streamlit-elements==0.1.*
 chromadb>=0.6.3
